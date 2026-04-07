@@ -14,6 +14,7 @@ from Channel.pinduoduo.utils.API.Set_up_online import AccountMonitor
 import threading
 from typing import Dict, Optional
 import requests
+import os
 
 
 class LogoLoaderThread(QThread):
@@ -60,14 +61,60 @@ class LogoLoaderThread(QThread):
 
 
 class AutoReplyManager:
-    """自动回复管理器 - 管理所有账号的自动回复连接"""
+    """自动回复管理器 - 管理所有账号的自动回复连接
+    
+    增强功能：
+    - 重连状态跟踪：实时记录每个账号的重连状态
+    - 自动恢复标记：支持崩溃后自动恢复连接
+    - 智能重连调度：指数退避算法，避免频繁重连
+    """
+    
+    # 重连配置
+    MAX_RECONNECT_ATTEMPTS = 3  # 最大重连次数
+    RECONNECT_DELAY_BASE = 5    # 基础重连延迟（秒）
+    RECONNECT_DELAY_MAX = 60    # 最大重连延迟（秒）
+    
+    # 重连状态枚举
+    class ReconnectStatus:
+        IDLE = "idle"                    # 空闲状态
+        CONNECTING = "connecting"        # 首次连接中
+        CONNECTED = "connected"          # 已连接
+        RECONNECTING = "reconnecting"    # 正在重连
+        RECONNECT_SCHEDULED = "reconnect_scheduled"  # 已调度重连（等待中）
+        FAILED = "failed"                # 重连失败
+        STOPPED = "stopped"              # 已停止
     
     def __init__(self):
         self.running_accounts: Dict[str, 'AutoReplyThread'] = {}  # 正在运行的账号线程
+        
+        # 重连状态跟踪
+        self.reconnect_attempts: Dict[str, int] = {}  # 重连尝试次数记录
+        self.should_auto_reconnect: Dict[str, bool] = {}  # 是否应自动重连标记
+        self.reconnect_timers: Dict[str, QTimer] = {}  # 重连定时器
+        self.reconnect_status: Dict[str, str] = {}  # 当前重连状态
+        self.reconnect_history: Dict[str, list] = {}  # 重连历史记录
+        self.last_disconnect_time: Dict[str, float] = {}  # 上次断开时间
+        self.last_reconnect_time: Dict[str, float] = {}  # 上次重连时间
+        
+        # 自动恢复标记
+        self.auto_recovery_enabled: Dict[str, bool] = {}  # 是否启用自动恢复
+        self.scheduled_reconnects: Dict[str, dict] = {}  # 计划的重连任务
+        
         self.logger = get_logger()
+        
+        # UI回调信号（将在AutoReplyPage中连接）
+        self.on_reconnecting_callback = None  # 正在重连回调
+        self.on_reconnect_failed_callback = None  # 重连失败回调
+        self.on_reconnect_success_callback = None  # 重连成功回调
+        self.on_status_changed_callback = None  # 状态变更回调（新增）
     
-    def start_auto_reply(self, account_data: dict) -> bool:
-        """启动账号自动回复"""
+    def start_auto_reply(self, account_data: dict, is_reconnect: bool = False) -> bool:
+        """启动账号自动回复
+        
+        Args:
+            account_data: 账号数据
+            is_reconnect: 是否是重连（用于区分首次连接和重连）
+        """
         try:
             account_key = f"{account_data['channel_name']}_{account_data['shop_id']}_{account_data['username']}"
             
@@ -76,13 +123,19 @@ class AutoReplyManager:
                 self.logger.warning(f"账号 {account_data['username']} 自动回复已在运行")
                 return False
             
+            # 重置重连标记（首次连接时）
+            if not is_reconnect:
+                self.should_auto_reconnect[account_key] = True
+                self.reconnect_attempts[account_key] = 0
+            
             # 创建并启动自动回复线程
             thread = AutoReplyThread(account_data)
             self.running_accounts[account_key] = thread
             
             # 连接信号
-            thread.connection_success.connect(lambda: self._on_connection_success(account_key))
-            thread.connection_failed.connect(lambda error: self._on_connection_failed(account_key, error))
+            thread.connection_success.connect(lambda: self._on_connection_success(account_key, account_data, is_reconnect))
+            thread.connection_failed.connect(lambda error: self._on_connection_failed(account_key, account_data, error))
+            thread.connection_closed_unexpectedly.connect(lambda error: self._on_connection_closed_unexpectedly(account_key, account_data, error))
             thread.finished.connect(lambda: self._on_thread_finished(account_key))
             
             # 启动线程
@@ -102,6 +155,12 @@ class AutoReplyManager:
                 self.logger.warning(f"账号 {account_data['username']} 自动回复未在运行")
                 return False
             
+            # 清除自动重连标记（用户主动停止）
+            self.should_auto_reconnect[account_key] = False
+            
+            # 取消任何待执行的重连
+            self._cancel_reconnect_timer(account_key)
+            
             # 停止线程
             thread = self.running_accounts[account_key]
             thread.stop()
@@ -113,6 +172,10 @@ class AutoReplyManager:
             # 从运行列表中移除
             if account_key in self.running_accounts:
                 del self.running_accounts[account_key]
+            
+            # 清理重连相关状态
+            self._cleanup_reconnect_state(account_key)
+            
             return True
             
         except Exception as e:
@@ -124,23 +187,163 @@ class AutoReplyManager:
         account_key = f"{account_data['channel_name']}_{account_data['shop_id']}_{account_data['username']}"
         return account_key in self.running_accounts and self.running_accounts[account_key].is_running()
     
-    def _on_connection_success(self, account_key: str):
+    def _on_connection_success(self, account_key: str, account_data: dict, is_reconnect: bool):
         """连接成功回调"""
-        self.logger.debug(f"账号 {account_key} 自动回复连接成功")
+        try:
+            self.logger.debug(f"账号 {account_key} 自动回复连接成功")
+            
+            # 重置重连计数
+            self.reconnect_attempts[account_key] = 0
+            
+            # 如果是重连成功，通知UI
+            if is_reconnect and self.on_reconnect_success_callback:
+                self.on_reconnect_success_callback(account_data)
+                
+        except Exception as e:
+            self.logger.error(f"处理连接成功回调失败: {e}")
     
-    def _on_connection_failed(self, account_key: str, error: str):
-        """连接失败回调"""
-        self.logger.error(f"账号 {account_key} 自动回复连接失败: {error}")
-        # 清理失败的线程
-        if account_key in self.running_accounts:
-            del self.running_accounts[account_key]
+    def _on_connection_failed(self, account_key: str, account_data: dict, error: str):
+        """连接失败回调（首次连接失败）"""
+        try:
+            self.logger.error(f"账号 {account_key} 自动回复连接失败: {error}")
+            # 清理失败的线程
+            if account_key in self.running_accounts:
+                del self.running_accounts[account_key]
+            
+            # 首次连接失败不重连
+            self.should_auto_reconnect[account_key] = False
+            self._cleanup_reconnect_state(account_key)
+            
+        except Exception as e:
+            self.logger.error(f"处理连接失败回调失败: {e}")
+    
+    def _on_connection_closed_unexpectedly(self, account_key: str, account_data: dict, error: str):
+        """连接异常关闭回调（触发重连）"""
+        try:
+            self.logger.warning(f"账号 {account_key} WebSocket异常关闭: {error}")
+            
+            # 从运行列表中移除（线程已经结束）
+            if account_key in self.running_accounts:
+                del self.running_accounts[account_key]
+            
+            # 检查是否应该自动重连
+            if not self.should_auto_reconnect.get(account_key, False):
+                self.logger.info(f"账号 {account_key} 自动重连已禁用，不重连")
+                self._cleanup_reconnect_state(account_key)
+                return
+            
+            # 检查重连次数
+            current_attempts = self.reconnect_attempts.get(account_key, 0)
+            if current_attempts >= self.MAX_RECONNECT_ATTEMPTS:
+                self.logger.error(f"账号 {account_key} 重连次数已达上限({self.MAX_RECONNECT_ATTEMPTS})，放弃重连")
+                self.should_auto_reconnect[account_key] = False
+                if self.on_reconnect_failed_callback:
+                    self.on_reconnect_failed_callback(account_data, f"重连失败，已达到最大重试次数({self.MAX_RECONNECT_ATTEMPTS})")
+                self._cleanup_reconnect_state(account_key)
+                return
+            
+            # 增加重连计数
+            self.reconnect_attempts[account_key] = current_attempts + 1
+            attempt = self.reconnect_attempts[account_key]
+            
+            # 计算延迟（指数退避）
+            import random
+            delay = min(self.RECONNECT_DELAY_BASE * (2 ** (attempt - 1)) + random.uniform(0, 2), self.RECONNECT_DELAY_MAX)
+            
+            self.logger.info(f"账号 {account_key} 将在 {delay:.1f} 秒后进行第 {attempt} 次重连")
+            
+            # 通知UI正在重连
+            if self.on_reconnecting_callback:
+                self.on_reconnecting_callback(account_data, attempt, self.MAX_RECONNECT_ATTEMPTS, delay)
+            
+            # 创建定时器进行延迟重连
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: self._do_reconnect(account_key, account_data))
+            timer.start(int(delay * 1000))
+            
+            self.reconnect_timers[account_key] = timer
+            
+        except Exception as e:
+            self.logger.error(f"处理连接异常关闭回调失败: {e}")
+    
+    def _do_reconnect(self, account_key: str, account_data: dict):
+        """执行重连"""
+        try:
+            # 清理定时器引用
+            if account_key in self.reconnect_timers:
+                del self.reconnect_timers[account_key]
+            
+            # 检查是否仍需要重连
+            if not self.should_auto_reconnect.get(account_key, False):
+                self.logger.info(f"账号 {account_key} 重连已取消")
+                return
+            
+            self.logger.info(f"账号 {account_key} 开始重连...")
+            
+            # 尝试重新登录（刷新cookies）
+            relogin_success = self._try_relogin(account_data)
+            if not relogin_success:
+                self.logger.warning(f"账号 {account_key} 重新登录失败，继续尝试重连WebSocket")
+                # 继续尝试重连WebSocket，即使重新登录失败
+            
+            # 启动自动回复（标记为重连）
+            success = self.start_auto_reply(account_data, is_reconnect=True)
+            if not success:
+                self.logger.error(f"账号 {account_key} 重连启动失败")
+                # 触发下一次重连尝试
+                self._on_connection_closed_unexpectedly(account_key, account_data, "重连启动失败")
+                
+        except Exception as e:
+            self.logger.error(f"执行重连失败: {e}")
+            # 触发下一次重连尝试
+            self._on_connection_closed_unexpectedly(account_key, account_data, f"重连异常: {e}")
+    
+    def _try_relogin(self, account_data: dict) -> bool:
+        """尝试重新登录以刷新cookies"""
+        try:
+            from Channel.pinduoduo.utils.API.base_request import BaseRequest
+            
+            shop_id = account_data.get('shop_id')
+            user_id = account_data.get('user_id')
+            
+            if not shop_id or not user_id:
+                self.logger.error(f"账号数据缺少shop_id或user_id，无法重新登录")
+                return False
+            
+            # 创建BaseRequest实例并强制重新登录
+            base_request = BaseRequest(shop_id, user_id)
+            success = base_request.force_relogin()
+            
+            if success:
+                self.logger.info(f"账号 {account_data.get('username')} 重新登录成功")
+            else:
+                self.logger.error(f"账号 {account_data.get('username')} 重新登录失败")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"尝试重新登录时发生错误: {e}")
+            return False
+    
+    def _cancel_reconnect_timer(self, account_key: str):
+        """取消重连定时器"""
+        if account_key in self.reconnect_timers:
+            timer = self.reconnect_timers[account_key]
+            timer.stop()
+            del self.reconnect_timers[account_key]
+    
+    def _cleanup_reconnect_state(self, account_key: str):
+        """清理重连相关状态"""
+        self._cancel_reconnect_timer(account_key)
+        if account_key in self.reconnect_attempts:
+            del self.reconnect_attempts[account_key]
+        if account_key in self.should_auto_reconnect:
+            del self.should_auto_reconnect[account_key]
     
     def _on_thread_finished(self, account_key: str):
         """线程结束回调"""
         self.logger.debug(f"账号 {account_key} 自动回复线程已结束")
-        # 清理线程引用
-        if account_key in self.running_accounts:
-            del self.running_accounts[account_key]
     
     def get_running_count(self) -> int:
         """获取正在运行的账号数量"""
@@ -170,16 +373,21 @@ class AutoReplyThread(QThread):
     
     connection_success = pyqtSignal()  # 连接成功信号
     connection_failed = pyqtSignal(str)  # 连接失败信号
+    connection_closed_unexpectedly = pyqtSignal(str)  # 连接异常关闭信号（触发重连）
     
     def __init__(self, account_data: dict):
         super().__init__()
         self.account_data = account_data
         self.channel = None
         self.logger = get_logger("AutoReplyThread")
+        self._is_stopped_by_user = False  # 标记是否被用户主动停止
         
     def run(self):
         """启动后端 PDDChannel 引擎"""
         from Channel.pinduoduo.pdd_chnnel import PDDChannel
+        
+        # 重置停止标记
+        self._is_stopped_by_user = False
         
         try:
             # 为当前线程创建并设置新的事件循环
@@ -193,8 +401,19 @@ class AutoReplyThread(QThread):
             def on_success():
                 self.connection_success.emit()
 
-            def on_failure(error_msg):
-                self.connection_failed.emit(error_msg)
+            def on_failure(error_msg, is_connection_closed=False):
+                """连接失败回调
+                
+                Args:
+                    error_msg: 错误信息
+                    is_connection_closed: 是否是连接异常关闭（需要重连）
+                """
+                if is_connection_closed and not self._is_stopped_by_user:
+                    # 异常关闭且不是用户主动停止，触发重连
+                    self.connection_closed_unexpectedly.emit(error_msg)
+                else:
+                    # 正常失败或用户主动停止
+                    self.connection_failed.emit(error_msg)
 
             # 启动引擎，并传递回调
             task = self.loop.create_task(
@@ -211,15 +430,23 @@ class AutoReplyThread(QThread):
 
         except Exception as e:
             self.logger.error(f"自动回复线程启动失败: {e}")
-            self.connection_failed.emit(str(e))
+            # 检查是否是连接异常关闭
+            if not self._is_stopped_by_user:
+                self.connection_closed_unexpectedly.emit(str(e))
+            else:
+                self.connection_failed.emit(str(e))
         finally:
-            if self.loop.is_running():
-                self.loop.stop()
-            self.loop.close()
+            if hasattr(self, 'loop') and self.loop:
+                if self.loop.is_running():
+                    self.loop.stop()
+                self.loop.close()
 
     def stop(self):
         """停止后端引擎"""
         try:
+            # 标记为用户主动停止
+            self._is_stopped_by_user = True
+            
             if self.channel:
                 self.channel.request_stop()
 
@@ -250,8 +477,18 @@ class SetStatusThread(QThread):
     def run(self):
         """在后台线程中执行状态更新"""
         try:
-            # 1. 调用API设置平台状态
-            cookies = self.account_data.get("cookies")
+            # 1. 从数据库获取最新的账号信息（包括最新的cookies）
+            fresh_account = db_manager.get_account(
+                self.account_data["channel_name"],
+                self.account_data["shop_id"],
+                self.account_data["user_id"]
+            )
+            
+            if fresh_account:
+                cookies = fresh_account.get("cookies")
+            else:
+                cookies = self.account_data.get("cookies")
+            
             if not cookies:
                 raise ValueError("账号缺少cookies，无法设置状态")
 
@@ -294,6 +531,7 @@ class AutoReplyCard(CardWidget):
     online_clicked = pyqtSignal(dict)  # 上线按钮点击信号
     offline_clicked = pyqtSignal(dict)  # 离线按钮点击信号
     auto_reply_clicked = pyqtSignal(dict)  # 开始自动回复按钮点击信号
+    open_backend_clicked = pyqtSignal(dict)  # 打开后台按钮点击信号
     
     def __init__(self, account_data: dict, parent=None):
         super().__init__(parent)
@@ -445,9 +683,15 @@ class AutoReplyCard(CardWidget):
         self.auto_reply_btn.setIcon(FIF.ROBOT)
         self.auto_reply_btn.setFixedSize(110, 32)
 
+        # 打开后台按钮
+        self.open_backend_btn = PushButton("打开后台")
+        self.open_backend_btn.setIcon(FIF.LINK)
+        self.open_backend_btn.setFixedSize(100, 32)
+
         buttons_layout.addWidget(self.online_btn)
         buttons_layout.addWidget(self.offline_btn)
         buttons_layout.addWidget(self.auto_reply_btn)
+        buttons_layout.addWidget(self.open_backend_btn)
         
         # 添加到操作布局
         action_layout.addWidget(status_badge, 0, Qt.AlignmentFlag.AlignRight)
@@ -477,6 +721,7 @@ class AutoReplyCard(CardWidget):
         self.online_btn.clicked.connect(lambda: self.online_clicked.emit(self.account_data))
         self.offline_btn.clicked.connect(lambda: self.offline_clicked.emit(self.account_data))
         self.auto_reply_btn.clicked.connect(lambda: self.auto_reply_clicked.emit(self.account_data))
+        self.open_backend_btn.clicked.connect(lambda: self.open_backend_clicked.emit(self.account_data))
     
     def setButtonsEnabled(self, enabled: bool):
         """设置按钮是否可用"""
@@ -555,6 +800,12 @@ class AutoReplyUI(QFrame):
         self.stats_timer.timeout.connect(self.updateStats)
         self.stats_timer.start(5000)  # 每5秒更新一次
         self.logger = get_logger()
+        
+        # 设置自动回复管理器的重连回调
+        self._setup_reconnect_callbacks()
+        
+        # 启动后自动开始回复（延迟1秒，等待界面完全加载）
+        QTimer.singleShot(1000, self._auto_start_all_auto_reply)
     def setupUI(self):
         """设置主界面UI"""
         # 主布局
@@ -570,6 +821,8 @@ class AutoReplyUI(QFrame):
         
         # 连接按钮信号
         self.refresh_btn.clicked.connect(self.reloadAccounts)
+        self.online_all_btn.clicked.connect(self.onOnlineAll)
+        self.offline_all_btn.clicked.connect(self.onOfflineAll)
         self.start_all_btn.clicked.connect(self.onStartAllAutoReply)
         self.stop_all_btn.clicked.connect(self.stopAllAutoReply)
         
@@ -579,6 +832,9 @@ class AutoReplyUI(QFrame):
         
         # 设置对象名
         self.setObjectName("自动回复")
+
+        # 持有线程引用，防止被垃圾回收
+        self._status_threads: list[SetStatusThread] = []
     
     def createHeaderWidget(self):
         """创建头部区域"""
@@ -607,26 +863,51 @@ class AutoReplyUI(QFrame):
         # 刷新按钮
         self.refresh_btn = PushButton("刷新")
         self.refresh_btn.setIcon(FIF.UPDATE)
-        self.refresh_btn.setFixedSize(80, 40)
+        self.refresh_btn.setFixedHeight(34)
 
+        # 上线所有按钮
+        self.online_all_btn = PushButton("上线所有")
+        self.online_all_btn.setIcon(FIF.PLAY)
+        self.online_all_btn.setFixedHeight(34)
+        
+        # 下线所有按钮
+        self.offline_all_btn = PushButton("下线所有")
+        self.offline_all_btn.setIcon(FIF.PAUSE)
+        self.offline_all_btn.setFixedHeight(34)
+        
         # 开始所有按钮
         self.start_all_btn = PrimaryPushButton("开始所有")
         self.start_all_btn.setIcon(FIF.PLAY_SOLID)
-        self.start_all_btn.setFixedSize(120, 40)
+        self.start_all_btn.setFixedHeight(34)
         
         # 停止所有按钮
         self.stop_all_btn = PushButton("停止所有")
         self.stop_all_btn.setIcon(FIF.CANCEL)
-        self.stop_all_btn.setFixedSize(120, 40)
+        self.stop_all_btn.setFixedHeight(34)
         
-        # 按钮容器
+        # 按钮容器（两行排列）
         buttons_widget = QWidget()
-        buttons_layout = QHBoxLayout(buttons_widget)
+        buttons_layout = QVBoxLayout(buttons_widget)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.setSpacing(10)
-        buttons_layout.addWidget(self.refresh_btn)
-        buttons_layout.addWidget(self.start_all_btn)
-        buttons_layout.addWidget(self.stop_all_btn)
+        buttons_layout.setSpacing(6)
+
+        # 第一行：上线/下线
+        row1 = QHBoxLayout()
+        row1.setContentsMargins(0, 0, 0, 0)
+        row1.setSpacing(10)
+        row1.addWidget(self.online_all_btn)
+        row1.addWidget(self.offline_all_btn)
+
+        # 第二行：开始/停止/刷新
+        row2 = QHBoxLayout()
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.setSpacing(10)
+        row2.addWidget(self.start_all_btn)
+        row2.addWidget(self.stop_all_btn)
+        row2.addWidget(self.refresh_btn)
+
+        buttons_layout.addLayout(row1)
+        buttons_layout.addLayout(row2)
         
         # 添加到头部布局
         header_layout.addWidget(title_area)
@@ -730,6 +1011,7 @@ class AutoReplyUI(QFrame):
             account_card.online_clicked.connect(self.onAccountOnline)
             account_card.offline_clicked.connect(self.onAccountOffline)
             account_card.auto_reply_clicked.connect(self.onAutoReplyToggle)
+            account_card.open_backend_clicked.connect(self.onOpenBackend)
             
             # 检查并设置自动回复状态
             if auto_reply_manager.is_running(account_data):
@@ -761,25 +1043,87 @@ class AutoReplyUI(QFrame):
         """重新加载账号"""
         self.loadAccountsFromDB()
     
-    def onStartAllAutoReply(self):
-        """开始所有符合条件的账号的自动回复"""
+    def onOpenBackend(self, account_data: dict):
+        """打开商家后台 - 使用已保存的用户数据目录"""
         try:
-            # 1. 筛选出可以启动的账号
+            username = account_data.get("username", "")
+            user_data_dir = os.path.abspath(f"./user_data/{username}")
+            
+            if not os.path.exists(user_data_dir):
+                QMessageBox.warning(self, "提示", f"未找到账号 '{username}' 的登录数据\n请先通过程序登录一次")
+                return
+            
+            # 在后台线程中启动浏览器，避免阻塞UI
+            threading.Thread(
+                target=self._open_backend_browser,
+                args=(user_data_dir,),
+                daemon=True
+            ).start()
+            
+        except Exception as e:
+            self.logger.error(f"打开后台失败: {e}")
+            QMessageBox.critical(self, "错误", f"打开后台失败: {e}")
+    
+    def _open_backend_browser(self, user_data_dir: str):
+        """在后台线程中用 Playwright 打开浏览器"""
+        import subprocess
+        import sys
+        
+        # 用独立进程打开浏览器，避免阻塞主程序
+        # 注意：user_data_dir 通过参数传入，不在 f-string 中拼接路径，避免 \U 转义问题
+        script = '''
+import asyncio
+import sys
+from playwright.async_api import async_playwright
+
+async def main():
+    user_data_dir = sys.argv[1]
+    async with async_playwright() as p:
+        context = await p.chromium.launch_persistent_context(
+            user_data_dir,
+            headless=False,
+            args=[
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-notifications",
+            ]
+        )
+        page = context.pages[0] if context.pages else await context.new_page()
+        await page.goto("https://mms.pinduoduo.com/home/")
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await context.close()
+
+asyncio.run(main())
+'''
+        subprocess.Popen(
+            [sys.executable, "-c", script, user_data_dir],
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    
+    def onOnlineAll(self):
+        """上线所有符合条件的账号"""
+        try:
+            # 筛选出可以上线的账号（当前非在线状态）
             eligible_accounts = [
                 acc_data for acc_data in self.accounts_data
-                if acc_data.get("status") == 1 and not auto_reply_manager.is_running(acc_data)
+                if acc_data.get("status") != 1
             ]
 
-            # 2. 如果没有可启动的账号，提示用户
             if not eligible_accounts:
-                QMessageBox.information(self, "提示", "没有符合条件的账号可以启动自动回复。\n\n(需要账号状态为'在线'且当前未在回复中)")
+                QMessageBox.information(self, "提示", "没有需要上线的账号")
                 return
 
-            # 3. 确认对话框
             reply = QMessageBox.question(
                 self,
-                "确认开始",
-                f"找到 {len(eligible_accounts)} 个可启动的账号。确定要全部开始自动回复吗？",
+                "确认上线",
+                f"找到 {len(eligible_accounts)} 个非在线账号。确定要全部上线吗？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
@@ -787,24 +1131,352 @@ class AutoReplyUI(QFrame):
             if reply == QMessageBox.StandardButton.No:
                 return
 
-            # 4. 循环启动
-            started_count = 0
+            # 设置按钮为加载状态
+            self.online_all_btn.setText("上线中...")
+            self.online_all_btn.setEnabled(False)
+
+            # 统计结果
+            self._batch_status_results = {"total": len(eligible_accounts), "success": 0, "failed": 0}
+            self._batch_status_pending = len(eligible_accounts)
+
             for account_data in eligible_accounts:
-                success = auto_reply_manager.start_auto_reply(account_data)
-                if success:
-                    started_count += 1
-                    # 连接信号以处理连接成功/失败的回调
-                    self._connect_auto_reply_signals(account_data)
+                thread = SetStatusThread(account_data, 1)  # 1表示在线
+                self._status_threads.append(thread)
+                thread.finished.connect(lambda: self._status_threads.remove(thread) if thread in self._status_threads else None)
+                thread.status_set_success.connect(self._on_batch_status_success)
+                thread.status_set_failed.connect(self._on_batch_status_failed)
+                thread.start()
 
-            # 5. 更新UI并显示结果
-            self._update_all_cards_auto_reply_status()
-            self.updateStats()
+        except Exception as e:
+            self.logger.error(f"上线所有失败: {str(e)}")
+            self.online_all_btn.setText("上线所有")
+            self.online_all_btn.setEnabled(True)
+            QMessageBox.critical(self, "错误", f"上线所有失败：{str(e)}")
 
-            QMessageBox.information(self, "操作完成", f"已成功为 {started_count} / {len(eligible_accounts)} 个账号启动自动回复。")
+    def onOfflineAll(self):
+        """下线所有符合条件的账号"""
+        try:
+            # 筛选出可以下线的账号（当前非离线状态）
+            eligible_accounts = [
+                acc_data for acc_data in self.accounts_data
+                if acc_data.get("status") != 3
+            ]
+
+            if not eligible_accounts:
+                QMessageBox.information(self, "提示", "没有需要下线的账号")
+                return
+
+            reply = QMessageBox.question(
+                self,
+                "确认下线",
+                f"找到 {len(eligible_accounts)} 个非离线账号。确定要全部下线吗？\n\n注意：下线后自动回复也会停止。建议先停止自动回复再下线。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.No:
+                return
+
+            # 设置按钮为加载状态
+            self.offline_all_btn.setText("下线中...")
+            self.offline_all_btn.setEnabled(False)
+
+            # 统计结果
+            self._batch_status_results = {"total": len(eligible_accounts), "success": 0, "failed": 0}
+            self._batch_status_pending = len(eligible_accounts)
+
+            for account_data in eligible_accounts:
+                thread = SetStatusThread(account_data, 3)  # 3表示离线
+                self._status_threads.append(thread)
+                thread.finished.connect(lambda: self._status_threads.remove(thread) if thread in self._status_threads else None)
+                thread.status_set_success.connect(self._on_batch_status_success)
+                thread.status_set_failed.connect(self._on_batch_status_failed)
+                thread.start()
+
+        except Exception as e:
+            self.logger.error(f"下线所有失败: {str(e)}")
+            self.offline_all_btn.setText("下线所有")
+            self.offline_all_btn.setEnabled(True)
+            QMessageBox.critical(self, "错误", f"下线所有失败：{str(e)}")
+
+    def _on_batch_status_success(self, account_data: dict, new_status: int):
+        """批量状态设置 - 单个成功回调"""
+        try:
+            self._batch_status_results["success"] += 1
+            self._batch_status_pending -= 1
+
+            # 更新单个卡片状态
+            self.updateCardStatus(account_data, new_status)
+
+            # 检查是否全部完成
+            self._check_batch_status_complete(new_status)
+        except Exception as e:
+            self.logger.error(f"批量状态设置成功回调失败: {e}")
+
+    def _on_batch_status_failed(self, account_data: dict, error_message: str):
+        """批量状态设置 - 单个失败回调"""
+        try:
+            self._batch_status_results["failed"] += 1
+            self._batch_status_pending -= 1
+            self.logger.error(f"账号 '{account_data.get('username')}' 状态设置失败：{error_message}")
+
+            # 检查是否全部完成
+            target_status = 1 if self.online_all_btn.text() == "上线中..." else 3
+            self._check_batch_status_complete(target_status)
+        except Exception as e:
+            self.logger.error(f"批量状态设置失败回调失败: {e}")
+
+    def _check_batch_status_complete(self, target_status: int):
+        """检查批量状态设置是否全部完成"""
+        if self._batch_status_pending <= 0:
+            results = self._batch_status_results
+            status_text = "上线" if target_status == 1 else "下线"
+
+            # 恢复按钮状态
+            if target_status == 1:
+                self.online_all_btn.setText("上线所有")
+                self.online_all_btn.setEnabled(True)
+            else:
+                self.offline_all_btn.setText("下线所有")
+                self.offline_all_btn.setEnabled(True)
+
+            # 从数据库重新加载账号数据以同步最新状态
+            self.loadAccountsFromDB()
+
+            # 显示结果
+            msg = f"{status_text}完成：成功 {results['success']} 个"
+            if results["failed"] > 0:
+                msg += f"，失败 {results['failed']} 个"
+            self.logger.info(msg)
+
+            if results["failed"] == 0:
+                QMessageBox.information(self, "操作完成", msg)
+            else:
+                QMessageBox.warning(self, "操作完成", msg + "\n\n失败的账号可能因cookies过期导致，请检查后重试。")
+
+    def _auto_start_all_auto_reply(self):
+        """启动后自动开始所有账号的自动回复（无需用户确认）"""
+        try:
+            # 1. 筛选出可以启动的账号（未在运行中的）
+            non_running_accounts = [
+                acc_data for acc_data in self.accounts_data
+                if not auto_reply_manager.is_running(acc_data)
+            ]
+
+            # 2. 如果没有可启动的账号，直接返回
+            if not non_running_accounts:
+                self.logger.info("没有需要自动启动的账号")
+                return
+
+            self.logger.info(f"自动启动：找到 {len(non_running_accounts)} 个账号")
+
+            # 3. 先把非在线的账号上线
+            need_online = [
+                acc_data for acc_data in non_running_accounts
+                if acc_data.get("status") != 1
+            ]
+
+            if need_online:
+                # 有需要上线的账号，先批量上线
+                self.logger.info(f"自动启动：需要先上线 {len(need_online)} 个账号")
+                self._auto_start_accounts_to_start = non_running_accounts
+                self._auto_start_online_pending = len(need_online)
+                self._auto_start_online_results = {"total": len(need_online), "success": 0, "failed": 0}
+
+                for account_data in need_online:
+                    thread = SetStatusThread(account_data, 1)  # 1表示在线
+                    self._status_threads.append(thread)
+                    thread.finished.connect(lambda t=thread: self._status_threads.remove(t) if t in self._status_threads else None)
+                    thread.status_set_success.connect(self._on_auto_start_online_success)
+                    thread.status_set_failed.connect(self._on_auto_start_online_failed)
+                    thread.start()
+            else:
+                # 所有账号都已在线，直接启动自动回复
+                self.logger.info("自动启动：所有账号已在线，直接启动自动回复")
+                self._do_auto_start_all_auto_reply(non_running_accounts)
+
+        except Exception as e:
+            self.logger.error(f"自动启动所有自动回复失败: {str(e)}")
+
+    def _on_auto_start_online_success(self, account_data: dict, new_status: int):
+        """自动启动 - 单个账号上线成功回调"""
+        try:
+            self._auto_start_online_results["success"] += 1
+            self._auto_start_online_pending -= 1
+            self.updateCardStatus(account_data, new_status)
+            self._check_auto_start_online_complete()
+        except Exception as e:
+            self.logger.error(f"自动启动-上线成功回调失败: {e}")
+
+    def _on_auto_start_online_failed(self, account_data: dict, error_message: str):
+        """自动启动 - 单个账号上线失败回调"""
+        try:
+            self._auto_start_online_results["failed"] += 1
+            self._auto_start_online_pending -= 1
+            self.logger.error(f"自动启动：账号 '{account_data.get('username')}' 上线失败：{error_message}")
+            self._check_auto_start_online_complete()
+        except Exception as e:
+            self.logger.error(f"自动启动-上线失败回调失败: {e}")
+
+    def _check_auto_start_online_complete(self):
+        """检查自动启动的上线是否全部完成，完成后启动自动回复"""
+        if self._auto_start_online_pending <= 0:
+            results = self._auto_start_online_results
+            self.logger.info(f"自动启动：上线完成，成功 {results['success']} 个，失败 {results['failed']} 个")
+
+            # 从数据库重新加载以获取最新状态
+            self.loadAccountsFromDB()
+
+            # 筛选出已成功上线的账号来启动自动回复
+            accounts_to_start = [
+                acc_data for acc_data in self._auto_start_accounts_to_start
+                if acc_data.get("status") == 1 and not auto_reply_manager.is_running(acc_data)
+            ]
+
+            self._do_auto_start_all_auto_reply(accounts_to_start)
+
+    def _do_auto_start_all_auto_reply(self, accounts: list):
+        """自动启动 - 实际执行启动自动回复"""
+        if not accounts:
+            self.logger.info("自动启动：没有可启动的账号")
+            return
+
+        started_count = 0
+        for account_data in accounts:
+            success = auto_reply_manager.start_auto_reply(account_data)
+            if success:
+                started_count += 1
+                self._connect_auto_reply_signals(account_data)
+
+        # 更新UI
+        self._update_all_cards_auto_reply_status()
+        self.updateStats()
+
+        self.logger.info(f"自动启动完成：成功启动 {started_count} / {len(accounts)} 个账号的自动回复")
+
+    def onStartAllAutoReply(self):
+        """开始所有账号的自动回复（自动上线非在线账号）"""
+        try:
+            # 1. 筛选出可以启动的账号（未在运行中的）
+            non_running_accounts = [
+                acc_data for acc_data in self.accounts_data
+                if not auto_reply_manager.is_running(acc_data)
+            ]
+
+            # 2. 如果没有可启动的账号，提示用户
+            if not non_running_accounts:
+                QMessageBox.information(self, "提示", "没有需要启动的账号。\n\n所有账号已在自动回复中。")
+                return
+
+            # 3. 确认对话框
+            reply = QMessageBox.question(
+                self,
+                "确认开始",
+                f"找到 {len(non_running_accounts)} 个未运行的账号，将自动上线非在线账号后开始自动回复。\n确定要继续吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.No:
+                return
+
+            # 4. 设置按钮为加载状态
+            self.start_all_btn.setText("启动中...")
+            self.start_all_btn.setEnabled(False)
+
+            # 5. 先把非在线的账号上线
+            need_online = [
+                acc_data for acc_data in non_running_accounts
+                if acc_data.get("status") != 1
+            ]
+
+            if need_online:
+                # 有需要上线的账号，先批量上线
+                self._start_all_accounts_to_start = non_running_accounts
+                self._start_all_online_pending = len(need_online)
+                self._start_all_online_results = {"total": len(need_online), "success": 0, "failed": 0}
+
+                for account_data in need_online:
+                    thread = SetStatusThread(account_data, 1)  # 1表示在线
+                    self._status_threads.append(thread)
+                    thread.finished.connect(lambda: self._status_threads.remove(thread) if thread in self._status_threads else None)
+                    thread.status_set_success.connect(self._on_start_all_online_success)
+                    thread.status_set_failed.connect(self._on_start_all_online_failed)
+                    thread.start()
+            else:
+                # 所有账号都已在线，直接启动自动回复
+                self._do_start_all_auto_reply(non_running_accounts)
 
         except Exception as e:
             self.logger.error(f"开始所有自动回复失败: {str(e)}")
+            self.start_all_btn.setText("开始所有")
+            self.start_all_btn.setEnabled(True)
             QMessageBox.critical(self, "错误", f"开始所有自动回复失败：{str(e)}")
+
+    def _on_start_all_online_success(self, account_data: dict, new_status: int):
+        """开始所有 - 单个账号上线成功回调"""
+        try:
+            self._start_all_online_results["success"] += 1
+            self._start_all_online_pending -= 1
+            self.updateCardStatus(account_data, new_status)
+            self._check_start_all_online_complete()
+        except Exception as e:
+            self.logger.error(f"开始所有-上线成功回调失败: {e}")
+
+    def _on_start_all_online_failed(self, account_data: dict, error_message: str):
+        """开始所有 - 单个账号上线失败回调"""
+        try:
+            self._start_all_online_results["failed"] += 1
+            self._start_all_online_pending -= 1
+            self.logger.error(f"账号 '{account_data.get('username')}' 上线失败：{error_message}")
+            self._check_start_all_online_complete()
+        except Exception as e:
+            self.logger.error(f"开始所有-上线失败回调失败: {e}")
+
+    def _check_start_all_online_complete(self):
+        """检查上线是否全部完成，完成后启动自动回复"""
+        if self._start_all_online_pending <= 0:
+            results = self._start_all_online_results
+            self.logger.info(f"上线完成：成功 {results['success']} 个，失败 {results['failed']} 个")
+
+            if results["failed"] > 0:
+                QMessageBox.warning(self, "部分上线失败",
+                    f"有 {results['failed']} 个账号上线失败（可能cookies过期）。\n\n将继续为已成功的账号启动自动回复。")
+
+            # 从数据库重新加载以获取最新状态
+            self.loadAccountsFromDB()
+
+            # 筛选出已成功上线的账号来启动自动回复
+            accounts_to_start = [
+                acc_data for acc_data in self._start_all_accounts_to_start
+                if acc_data.get("status") == 1 and not auto_reply_manager.is_running(acc_data)
+            ]
+
+            self._do_start_all_auto_reply(accounts_to_start)
+
+    def _do_start_all_auto_reply(self, accounts: list):
+        """实际执行启动自动回复"""
+        if not accounts:
+            self.start_all_btn.setText("开始所有")
+            self.start_all_btn.setEnabled(True)
+            QMessageBox.information(self, "提示", "没有可启动的账号。")
+            return
+
+        started_count = 0
+        for account_data in accounts:
+            success = auto_reply_manager.start_auto_reply(account_data)
+            if success:
+                started_count += 1
+                self._connect_auto_reply_signals(account_data)
+
+        # 恢复按钮并更新UI
+        self.start_all_btn.setText("开始所有")
+        self.start_all_btn.setEnabled(True)
+        self._update_all_cards_auto_reply_status()
+        self.updateStats()
+
+        QMessageBox.information(self, "操作完成",
+            f"已成功为 {started_count} / {len(accounts)} 个账号启动自动回复。")
 
     def stopAllAutoReply(self):
         """停止所有自动回复"""
@@ -862,14 +1534,16 @@ class AutoReplyUI(QFrame):
                 account_card.setButtonLoading("online", True)
             
             # 创建设置状态线程
-            self.status_thread = SetStatusThread(account_data, 1)  # 1表示在线
+            thread = SetStatusThread(account_data, 1)  # 1表示在线
+            self._status_threads.append(thread)
+            thread.finished.connect(lambda: self._status_threads.remove(thread) if thread in self._status_threads else None)
             
             # 连接信号
-            self.status_thread.status_set_success.connect(self.onStatusSetSuccess)
-            self.status_thread.status_set_failed.connect(self.onStatusSetFailed)
+            thread.status_set_success.connect(self.onStatusSetSuccess)
+            thread.status_set_failed.connect(self.onStatusSetFailed)
             
             # 启动线程
-            self.status_thread.start()
+            thread.start()
             
         except Exception as e:
             self.logger.error(f"启动上线操作失败: {str(e)}")
@@ -884,14 +1558,16 @@ class AutoReplyUI(QFrame):
                 account_card.setButtonLoading("offline", True)
             
             # 创建设置状态线程
-            self.status_thread = SetStatusThread(account_data, 3)  # 3表示离线
+            thread = SetStatusThread(account_data, 3)  # 3表示离线
+            self._status_threads.append(thread)
+            thread.finished.connect(lambda: self._status_threads.remove(thread) if thread in self._status_threads else None)
             
             # 连接信号
-            self.status_thread.status_set_success.connect(self.onStatusSetSuccess)
-            self.status_thread.status_set_failed.connect(self.onStatusSetFailed)
+            thread.status_set_success.connect(self.onStatusSetSuccess)
+            thread.status_set_failed.connect(self.onStatusSetFailed)
             
             # 启动线程
-            self.status_thread.start()
+            thread.start()
             
         except Exception as e:
             self.logger.error(f"启动离线操作失败: {str(e)}")
@@ -1088,4 +1764,64 @@ class AutoReplyUI(QFrame):
             widget = self.accounts_layout.itemAt(i).widget()
             if isinstance(widget, AutoReplyCard) and widget.account_data == account_data:
                 widget.updateStatus(new_status)
-                break 
+                break
+    
+    def _setup_reconnect_callbacks(self):
+        """设置自动重连回调"""
+        try:
+            auto_reply_manager.on_reconnecting_callback = self._on_reconnecting
+            auto_reply_manager.on_reconnect_failed_callback = self._on_reconnect_failed
+            auto_reply_manager.on_reconnect_success_callback = self._on_reconnect_success
+            self.logger.debug("已设置自动重连回调")
+        except Exception as e:
+            self.logger.error(f"设置重连回调失败: {e}")
+    
+    def _on_reconnecting(self, account_data: dict, attempt: int, max_attempts: int, delay: float):
+        """正在重连回调"""
+        try:
+            account_card = self.findAccountCard(account_data)
+            if account_card:
+                # 显示重连状态
+                account_card.auto_reply_btn.setText(f"重连中({attempt}/{max_attempts})...")
+                account_card.auto_reply_btn.setEnabled(False)
+            
+            self.logger.info(f"账号 '{account_data['username']}' WebSocket连接断开，{delay:.1f}秒后进行第{attempt}次重连")
+            
+        except Exception as e:
+            self.logger.error(f"处理重连中回调失败: {e}")
+    
+    def _on_reconnect_failed(self, account_data: dict, error: str):
+        """重连失败回调"""
+        try:
+            account_card = self.findAccountCard(account_data)
+            if account_card:
+                # 恢复按钮状态
+                account_card.setAutoReplyStatus(False)
+                account_card.auto_reply_btn.setText("开始回复")
+                account_card.auto_reply_btn.setEnabled(True)
+            
+            self.logger.error(f"账号 '{account_data['username']}' 自动回复重连失败: {error}")
+            QMessageBox.warning(self, "重连失败", f"账号 '{account_data['username']}' 自动回复重连失败：{error}\n请检查网络连接或手动重新启动自动回复。")
+            
+            # 更新统计信息
+            self.updateStats()
+            
+        except Exception as e:
+            self.logger.error(f"处理重连失败回调失败: {e}")
+    
+    def _on_reconnect_success(self, account_data: dict):
+        """重连成功回调"""
+        try:
+            account_card = self.findAccountCard(account_data)
+            if account_card:
+                # 更新按钮状态
+                account_card.auto_reply_btn.setText("停止回复")
+                account_card.auto_reply_btn.setEnabled(True)
+            
+            self.logger.info(f"账号 '{account_data['username']}' 自动回复重连成功")
+            
+            # 更新统计信息
+            self.updateStats()
+            
+        except Exception as e:
+            self.logger.error(f"处理重连成功回调失败: {e}") 

@@ -22,29 +22,48 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# PyInstaller
+*.manifest
+*.spec
+
 # 测试文件夹
 test/
+tests/
+
+# 用户数据目录（包含敏感信息和运行时数据）
 /user_data/
+user_data/
 # 配置文件（可能包含敏感信息）
 config.json
 cookies.json
 conversations.db
+settings.json
+
 # 日志文件
 *.log
+logs/
 
 # 数据库文件
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 
 # 环境文件
 .env
+.env.local
+.env.*.local
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Python 虚拟环境（uv）
+.uv/
 
 # IDE 配置
 .vscode/
@@ -62,7 +81,46 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
+# WorkBuddy / AI 助手相关
+.workbuddy/
 CLAUDE.md
 .claude/
 .spec-workflow/
 .serena/
+
+# PyQt6 / Qt 相关
+*.qrc
+tmp/
+temp/
+
+# 运行时生成的文件
+*.pid
+*.seed
+*.pid.lock
+
+# 其他
+*.bak
+*.tmp
+*.temp
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+
+# 本地开发配置（不同开发者环境不同）
+local_settings.py
+local_config.py
+
+# 截图和临时媒体文件
+screenshots/
+*.screenshot.png
+
+# 打包/分发相关
+*.exe
+*.msi
+*.dmg
+*.app
+out/
+release/
+installer/

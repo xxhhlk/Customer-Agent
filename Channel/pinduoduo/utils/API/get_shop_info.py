@@ -22,4 +22,4 @@ class GetShopInfo(BaseRequest):
         else:
             error_msg = result.get('errorMsg') if result else "获取店铺信息失败"
             self.logger.error(f"获取店铺信息失败: {error_msg}")
-            return False
+            return None, None, None

@@ -58,12 +58,33 @@ class Account(Base):
         return f"<Account(username='{self.username}', password='{self.password}', shop='{self.shop.shop_name if self.shop else None}')>"
 
     
+class KeywordGroup(Base):
+    """关键词分组表，多个关键词可对应同一个回复"""
+    __tablename__ = 'keyword_groups'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_name = Column(String(100), nullable=False, comment='分组名称')
+    reply = Column(Text, nullable=True, comment='自动回复内容，为空则转人工')
+    is_transfer = Column(Integer, default=0, comment='是否转人工: 0-仅回复, 1-转人工')
+    pass_to_ai = Column(Integer, default=0, comment='是否传递给AI: 0-不传递, 1-匹配后剩余内容传给AI处理')
+
+    # 关联关系 - 一个分组包含多个关键词
+    keywords = relationship('Keyword', back_populates='group', cascade='all, delete-orphan')
+
+    def __repr__(self):
+        return f"<KeywordGroup(group_name='{self.group_name}', reply='{self.reply[:20] if self.reply else None}')>"
+
+
 class Keyword(Base):
     """关键词表，存储关键词信息"""
     __tablename__ = 'keywords'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     keyword = Column(String(100), nullable=False, comment='关键词')
+    group_id = Column(Integer, ForeignKey('keyword_groups.id'), nullable=False, comment='所属分组ID')
+
+    # 关联关系
+    group = relationship('KeywordGroup', back_populates='keywords')
 
     def __repr__(self):
-        return f"<Keyword(keyword='{self.keyword}')>"
+        return f"<Keyword(keyword='{self.keyword}', group='{self.group.group_name if self.group else None}')>"

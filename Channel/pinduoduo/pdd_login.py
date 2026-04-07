@@ -5,7 +5,6 @@ from http import cookies
 import requests
 import json
 import os
-import hashlib
 import asyncio
 from typing import Optional, Dict, Any, Tuple
 from utils.logger import get_logger
@@ -101,7 +100,7 @@ class PDDLogin():
             playwright = await async_playwright().start()
             
             # 使用相同的用户数据目录
-            user_data_dir = f"./user_data/{hash(self.name)}"
+            user_data_dir = f"./user_data/{self.name}"
             self.logger.debug(f"使用用户数据目录刷新cookies: {user_data_dir}")
             
             # 检查用户数据目录是否存在
@@ -230,6 +229,11 @@ async def refresh_pdd_cookies(name, password=None):
         # 获取用户信息和店铺信息
         user_id, user_name, mall_id = pdd_login.Set_user_info(cookies_json)
         shop_id, shop_name, mallLogo = pdd_login.Set_shop_info(cookies_json)
+        
+        # 检查是否获取成功
+        if not user_id or not shop_id:
+            pdd_login.logger.error(f"账号 '{name}' 获取用户/店铺信息失败，可能登录状态已失效")
+            return False
 
         pdd_login.logger.info(f"账号 '{name}' cookies刷新成功，店铺: {shop_name}({shop_id})")
 

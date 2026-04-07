@@ -15,6 +15,15 @@ config_base={
     "businessHours": {
         "start": "08:00",
         "end": "23:00"
+    },
+    "rate_limit": {
+        "window_hours": 4,
+        "max_requests": 10,
+        "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
+    },
+    "staff_reply_wait": {
+        "enable": True,
+        "wait_seconds": 30
     }
 }
 
@@ -97,6 +106,31 @@ class Config:
         if save:
             self.save()
         return self.config
+
+    def get_rate_limit_config(self) -> dict:
+        """获取限流配置（带默认值）"""
+        rate = self.config.get('rate_limit', {})
+        return {
+            'window_hours': rate.get('window_hours', 4),
+            'max_requests': rate.get('max_requests', 10),
+            'fallback_reply': rate.get('fallback_reply', '这个我不了解呢，帮你问下我们的技术人员'),
+        }
+    
+    def get_staff_reply_wait_config(self) -> dict:
+        """
+        获取人工回复等待配置（带默认值）
+        
+        Returns:
+            dict: {
+                'enable': bool - 是否启用人工客服优先回复
+                'wait_seconds': int - 等待秒数
+            }
+        """
+        staff_wait = self.config.get('staff_reply_wait', {})
+        return {
+            'enable': staff_wait.get('enable', True),
+            'wait_seconds': staff_wait.get('wait_seconds', 30),
+        }
 
 # 创建全局配置实例
 config = Config()

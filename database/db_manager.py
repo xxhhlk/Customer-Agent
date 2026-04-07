@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from typing import List, Dict, Any, Optional, Union
 from utils.logger import get_logger
 from utils.resource_manager import ThreadResourceManager
-from database.models import Base, Channel, Shop, Account, Keyword
+from database.models import Base, Channel, Shop, Account, Keyword, KeywordGroup
 
 class DatabaseManager:
     """数据库管理类，提供数据库操作的封装 - 优化版本支持连接池"""
@@ -79,11 +79,60 @@ class DatabaseManager:
                 self.logger.error(f"清理数据库资源失败: {e}")
 
     def init_db(self):
-        """初始化渠道信息"""
+        """初始化渠道信息 + 数据库迁移"""
         channel_name = "pinduoduo"
         description = "拼多多"
         self.add_channel(channel_name, description)
 
+        # 数据库迁移：为keywords表添加group_id列
+        self._migrate_keywords_table()
+
+
+    def _migrate_keywords_table(self):
+        """迁移keywords表：添加group_id列，将孤立关键词归入默认分组"""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self.engine.url.database)
+            cursor = conn.cursor()
+
+            # 检查keywords表是否存在group_id列
+            cursor.execute("PRAGMA table_info(keywords)")
+            columns = [col[1] for col in cursor.fetchall()]
+
+            if 'group_id' not in columns:
+                self.logger.info("正在迁移keywords表：添加group_id列...")
+
+                # 添加group_id列，默认值为0（临时值）
+                cursor.execute("ALTER TABLE keywords ADD COLUMN group_id INTEGER DEFAULT 0")
+                conn.commit()
+
+                # 创建默认的"转人工"分组
+                cursor.execute(
+                    "INSERT INTO keyword_groups (group_name, reply, is_transfer) "
+                    "VALUES ('转人工', '稍等，我帮您转接人工客服，请稍候~', 1)"
+                )
+                group_id = cursor.lastrowid
+
+                # 将所有孤立关键词归入该分组
+                cursor.execute("UPDATE keywords SET group_id = ? WHERE group_id = 0 OR group_id IS NULL",
+                             (group_id,))
+                affected = cursor.rowcount
+
+                conn.commit()
+                self.logger.info(f"keywords表迁移完成：{affected}个关键词已归入默认分组(ID={group_id})")
+
+            # 检查keyword_groups表是否有pass_to_ai列
+            cursor.execute("PRAGMA table_info(keyword_groups)")
+            kg_columns = [col[1] for col in cursor.fetchall()]
+            if 'pass_to_ai' not in kg_columns:
+                self.logger.info("正在迁移keyword_groups表：添加pass_to_ai列...")
+                cursor.execute("ALTER TABLE keyword_groups ADD COLUMN pass_to_ai INTEGER DEFAULT 0")
+                conn.commit()
+                self.logger.info("keyword_groups表迁移完成：已添加pass_to_ai列")
+
+            conn.close()
+        except Exception as e:
+            self.logger.error(f"迁移keywords表失败: {e}")
 
     def get_session(self):
         """获取数据库会话 - 线程安全版本"""
@@ -766,29 +815,152 @@ class DatabaseManager:
         finally:
             session.close()
 
-    # 关键词相关操作
-    def add_keyword(self, keyword: str) -> bool:
-        """添加关键词
-        
+    # ========== 关键词分组相关操作 ==========
+    def add_keyword_group(self, group_name: str, reply: str = None, is_transfer: int = 0, pass_to_ai: int = 0) -> bool:
+        """添加关键词分组
+
         Args:
-            keyword: 关键词
-            
+            group_name: 分组名称
+            reply: 自动回复内容，为空则仅匹配不回复
+            is_transfer: 是否转人工 (0-仅回复, 1-转人工)
+            pass_to_ai: 是否传递给AI (0-不传递, 1-匹配后剩余内容传给AI)
+
         Returns:
             bool: 是否添加成功
         """
         session = self.get_session()
         try:
-            # 检查关键词是否已存在
-            existing = session.query(Keyword).filter(Keyword.keyword == keyword).first()
-            if existing:
-                self.logger.warning(f"关键词 {keyword} 已存在")
+            group = KeywordGroup(group_name=group_name, reply=reply, is_transfer=is_transfer, pass_to_ai=pass_to_ai)
+            session.add(group)
+            session.commit()
+            self.logger.info(f"成功添加关键词分组: {group_name}")
+            return True
+        except SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"添加关键词分组失败: {str(e)}")
+            return False
+        finally:
+            session.close()
+
+    def get_keyword_group(self, group_id: int) -> Optional[Dict[str, Any]]:
+        """获取关键词分组（含关键词列表）"""
+        session = self.get_session()
+        try:
+            group = session.query(KeywordGroup).filter(KeywordGroup.id == group_id).first()
+            if not group:
+                return None
+            return {
+                'id': group.id,
+                'group_name': group.group_name,
+                'reply': group.reply,
+                'is_transfer': group.is_transfer,
+                'pass_to_ai': group.pass_to_ai,
+                'keywords': [kw.keyword for kw in group.keywords]
+            }
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取关键词分组失败: {str(e)}")
+            return None
+        finally:
+            session.close()
+
+    def get_all_keyword_groups(self) -> List[Dict[str, Any]]:
+        """获取所有关键词分组（含关键词列表）"""
+        session = self.get_session()
+        try:
+            groups = session.query(KeywordGroup).all()
+            return [
+                {
+                    'id': g.id,
+                    'group_name': g.group_name,
+                    'reply': g.reply,
+                    'is_transfer': g.is_transfer,
+                    'pass_to_ai': g.pass_to_ai,
+                    'keywords': [kw.keyword for kw in g.keywords]
+                }
+                for g in groups
+            ]
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取关键词分组列表失败: {str(e)}")
+            return []
+        finally:
+            session.close()
+
+    def update_keyword_group(self, group_id: int, group_name: str = None, reply: str = None, is_transfer: int = None, pass_to_ai: int = None) -> bool:
+        """更新关键词分组"""
+        session = self.get_session()
+        try:
+            group = session.query(KeywordGroup).filter(KeywordGroup.id == group_id).first()
+            if not group:
+                self.logger.warning(f"关键词分组 {group_id} 不存在")
                 return False
-                
-            # 创建新关键词
-            keyword_obj = Keyword(keyword=keyword)
+            if group_name is not None:
+                group.group_name = group_name
+            if reply is not None:
+                group.reply = reply
+            if is_transfer is not None:
+                group.is_transfer = is_transfer
+            if pass_to_ai is not None:
+                group.pass_to_ai = pass_to_ai
+            session.commit()
+            self.logger.info(f"成功更新关键词分组: {group_id}")
+            return True
+        except SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"更新关键词分组失败: {str(e)}")
+            return False
+        finally:
+            session.close()
+
+    def delete_keyword_group(self, group_id: int) -> bool:
+        """删除关键词分组（级联删除关键词）"""
+        session = self.get_session()
+        try:
+            group = session.query(KeywordGroup).filter(KeywordGroup.id == group_id).first()
+            if not group:
+                self.logger.warning(f"关键词分组 {group_id} 不存在")
+                return False
+            session.delete(group)
+            session.commit()
+            self.logger.info(f"成功删除关键词分组: {group_id}")
+            return True
+        except SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"删除关键词分组失败: {str(e)}")
+            return False
+        finally:
+            session.close()
+
+    # ========== 关键词相关操作（分组版） ==========
+    def add_keyword_to_group(self, keyword: str, group_id: int) -> bool:
+        """添加关键词到指定分组
+
+        Args:
+            keyword: 关键词
+            group_id: 分组ID
+
+        Returns:
+            bool: 是否添加成功
+        """
+        session = self.get_session()
+        try:
+            # 检查分组是否存在
+            group = session.query(KeywordGroup).filter(KeywordGroup.id == group_id).first()
+            if not group:
+                self.logger.warning(f"分组 {group_id} 不存在")
+                return False
+
+            # 检查关键词是否已在该分组中
+            existing = session.query(Keyword).filter(
+                Keyword.keyword == keyword, Keyword.group_id == group_id
+            ).first()
+            if existing:
+                self.logger.warning(f"关键词 '{keyword}' 已存在于分组 {group_id}")
+                return False
+
+            keyword_obj = Keyword(keyword=keyword, group_id=group_id)
             session.add(keyword_obj)
             session.commit()
-            self.logger.info(f"成功添加关键词: {keyword}")
+            self.logger.info(f"成功添加关键词 '{keyword}' 到分组 '{group.group_name}'")
             return True
         except SQLAlchemyError as e:
             session.rollback()
@@ -796,83 +968,61 @@ class DatabaseManager:
             return False
         finally:
             session.close()
-    
-    def get_keyword(self, keyword: str) -> Optional[Dict[str, Any]]:
-        """获取关键词信息
-        
-        Args:
-            keyword: 关键词
-            
-        Returns:
-            Optional[Dict]: 关键词信息或None
-        """
-        session = self.get_session()
-        try:
-            keyword_obj = session.query(Keyword).filter(Keyword.keyword == keyword).first()
-            if not keyword_obj:
-                return None
-                
-            return {
-                'id': keyword_obj.id,
-                'keyword': keyword_obj.keyword
-            }
-        except SQLAlchemyError as e:
-            self.logger.error(f"获取关键词失败: {str(e)}")
-            return None
-        finally:
-            session.close()
-    
+
     def get_all_keywords(self) -> List[Dict[str, Any]]:
-        """获取所有关键词
-        
-        Returns:
-            List[Dict]: 关键词列表
-        """
+        """获取所有关键词（含分组信息）"""
         session = self.get_session()
         try:
             keywords = session.query(Keyword).all()
             return [
                 {
-                    'id': keyword.id,
-                    'keyword': keyword.keyword
+                    'id': kw.id,
+                    'keyword': kw.keyword,
+                    'group_id': kw.group_id
                 }
-                for keyword in keywords
+                for kw in keywords
             ]
         except SQLAlchemyError as e:
             self.logger.error(f"获取关键词列表失败: {str(e)}")
             return []
         finally:
             session.close()
-    
-    def update_keyword(self, old_keyword: str, new_keyword: str) -> bool:
-        """更新关键词
-        
-        Args:
-            old_keyword: 原关键词
-            new_keyword: 新关键词
-            
-        Returns:
-            bool: 是否更新成功
-        """
+
+    def get_keywords_by_group(self, group_id: int) -> List[str]:
+        """获取指定分组的所有关键词"""
         session = self.get_session()
         try:
-            # 检查原关键词是否存在
-            keyword_obj = session.query(Keyword).filter(Keyword.keyword == old_keyword).first()
+            keywords = session.query(Keyword).filter(Keyword.group_id == group_id).all()
+            return [kw.keyword for kw in keywords]
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取分组关键词失败: {str(e)}")
+            return []
+        finally:
+            session.close()
+
+    def update_keyword(self, keyword_id: int, new_keyword: str = None, new_group_id: int = None) -> bool:
+        """更新关键词（按ID）"""
+        session = self.get_session()
+        try:
+            keyword_obj = session.query(Keyword).filter(Keyword.id == keyword_id).first()
             if not keyword_obj:
-                self.logger.warning(f"关键词 {old_keyword} 不存在")
+                self.logger.warning(f"关键词ID {keyword_id} 不存在")
                 return False
-            
-            # 检查新关键词是否已存在（如果不是同一个关键词）
-            if old_keyword != new_keyword:
-                existing = session.query(Keyword).filter(Keyword.keyword == new_keyword).first()
+            if new_keyword is not None:
+                # 检查同分组下是否已存在同名关键词
+                existing = session.query(Keyword).filter(
+                    Keyword.keyword == new_keyword,
+                    Keyword.group_id == keyword_obj.group_id,
+                    Keyword.id != keyword_id
+                ).first()
                 if existing:
-                    self.logger.warning(f"关键词 {new_keyword} 已存在")
+                    self.logger.warning(f"关键词 '{new_keyword}' 已存在于该分组")
                     return False
-                    
-            # 更新关键词
-            keyword_obj.keyword = new_keyword
+                keyword_obj.keyword = new_keyword
+            if new_group_id is not None:
+                keyword_obj.group_id = new_group_id
             session.commit()
-            self.logger.info(f"成功更新关键词: {old_keyword} -> {new_keyword}")
+            self.logger.info(f"成功更新关键词ID {keyword_id}")
             return True
         except SQLAlchemyError as e:
             session.rollback()
@@ -881,30 +1031,48 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def delete_keyword(self, keyword: str) -> bool:
-        """删除关键词
-        
-        Args:
-            keyword: 关键词
-            
-        Returns:
-            bool: 是否删除成功
-        """
+    def delete_keyword(self, keyword_id: int) -> bool:
+        """删除关键词（按ID）"""
         session = self.get_session()
         try:
-            keyword_obj = session.query(Keyword).filter(Keyword.keyword == keyword).first()
+            keyword_obj = session.query(Keyword).filter(Keyword.id == keyword_id).first()
             if not keyword_obj:
-                self.logger.warning(f"关键词 {keyword} 不存在")
+                self.logger.warning(f"关键词ID {keyword_id} 不存在")
                 return False
-                
             session.delete(keyword_obj)
             session.commit()
-            self.logger.info(f"成功删除关键词: {keyword}")
+            self.logger.info(f"成功删除关键词ID {keyword_id}")
             return True
         except SQLAlchemyError as e:
             session.rollback()
             self.logger.error(f"删除关键词失败: {str(e)}")
             return False
+        finally:
+            session.close()
+
+    def get_keyword_reply_rules(self) -> List[Dict[str, Any]]:
+        """获取所有关键词回复规则（供业务层使用）
+
+        Returns:
+            List[Dict]: [{'keywords': [...], 'reply': '...', 'is_transfer': 0/1, 'group_name': '...'}]
+        """
+        session = self.get_session()
+        try:
+            groups = session.query(KeywordGroup).all()
+            return [
+                {
+                    'group_id': g.id,
+                    'group_name': g.group_name,
+                    'keywords': [kw.keyword for kw in g.keywords],
+                    'reply': g.reply,
+                    'is_transfer': g.is_transfer,
+                    'pass_to_ai': g.pass_to_ai
+                }
+                for g in groups if g.keywords  # 只返回有关键词的分组
+            ]
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取关键词回复规则失败: {str(e)}")
+            return []
         finally:
             session.close()
 

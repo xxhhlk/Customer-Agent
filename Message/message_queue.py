@@ -32,8 +32,8 @@ class MessageQueue:
         self.ttl = ttl  # 消息生存时间
         self.cleanup_interval = cleanup_interval
         self._queue = deque(maxlen=max_size)
-        self._lock = asyncio.Lock()
-        self._condition = asyncio.Condition(self._lock)
+        self._lock = None  # 惰性初始化，绑定到实际使用的 event loop
+        self._condition = None  # 惰性初始化，绑定到实际使用的 event loop
         self._closed = False
         self.logger = get_logger()
 
@@ -43,6 +43,12 @@ class MessageQueue:
         # 启动清理任务
         self.cleanup_task = None
         self._start_cleanup_task()
+
+    def _ensure_locks(self):
+        """确保 asyncio 锁对象绑定到当前 event loop（惰性初始化）"""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+            self._condition = asyncio.Condition(self._lock)
 
     def _start_cleanup_task(self):
         """启动消息清理任务"""
@@ -57,6 +63,7 @@ class MessageQueue:
                 current_time = time.time()
                 cleaned_count = 0
 
+                self._ensure_locks()
                 async with self._lock:
                     original_size = len(self._queue)
 
@@ -103,7 +110,8 @@ class MessageQueue:
         """
         if not isinstance(context, Context):
             raise ValueError("消息必须是Context类型")
-            
+        
+        self._ensure_locks()
         async with self._condition:
             if self._closed:
                 raise RuntimeError("消息队列已关闭")
@@ -139,6 +147,7 @@ class MessageQueue:
         Returns:
             消息包装器字典或None
         """
+        self._ensure_locks()
         async with self._condition:
             if self._closed and not self._queue:
                 return None
@@ -172,12 +181,14 @@ class MessageQueue:
     async def get_expired_count(self) -> int:
         """获取过期消息数量"""
         current_time = time.time()
+        self._ensure_locks()
         async with self._lock:
             return sum(1 for msg in self._queue if current_time - msg['timestamp'] >= self.ttl)
 
     async def force_cleanup_expired(self) -> int:
         """强制清理所有过期消息"""
         current_time = time.time()
+        self._ensure_locks()
         async with self._lock:
             original_size = len(self._queue)
             filtered_queue = deque(
@@ -199,6 +210,7 @@ class MessageQueue:
         Returns:
             消息包装器字典或None
         """
+        self._ensure_locks()
         async with self._lock:
             if not self._queue:
                 return None
@@ -206,16 +218,19 @@ class MessageQueue:
     
     async def size(self) -> int:
         """获取队列当前大小"""
+        self._ensure_locks()
         async with self._lock:
             return len(self._queue)
     
     async def is_empty(self) -> bool:
         """检查队列是否为空"""
+        self._ensure_locks()
         async with self._lock:
             return len(self._queue) == 0
     
     async def is_full(self) -> bool:
         """检查队列是否已满"""
+        self._ensure_locks()
         async with self._lock:
             return len(self._queue) >= self.max_size
     
@@ -226,6 +241,7 @@ class MessageQueue:
         Returns:
             清除的消息数量
         """
+        self._ensure_locks()
         async with self._lock:
             count = len(self._queue)
             self._queue.clear()
@@ -234,6 +250,7 @@ class MessageQueue:
     
     async def close(self):
         """关闭队列，不再接受新消息 - 优化版本清理资源"""
+        self._ensure_locks()
         async with self._condition:
             self._closed = True
 
@@ -259,6 +276,7 @@ class MessageQueue:
             统计信息字典
         """
         current_time = time.time()
+        self._ensure_locks()
         async with self._lock:
             expired_count = sum(1 for msg in self._queue if current_time - msg['timestamp'] >= self.ttl)
             return {
@@ -350,10 +368,17 @@ class MessageQueueManager:
         """
         with self._lock:
             if name in self.queues:
-                # 异步关闭队列
-                asyncio.create_task(self.queues[name].close())
-                del self.queues[name]
+                # 获取队列引用后从字典中移除
+                queue = self.queues.pop(name)
                 self.logger.debug(f"移除消息队列: {name}")
+                # 标记关闭（非异步方式）
+                queue._closed = True
+                # 取消清理任务（如果存在且未完成）
+                if queue.cleanup_task and not queue.cleanup_task.done():
+                    try:
+                        queue.cleanup_task.cancel()
+                    except Exception:
+                        pass
                 return True
             return False
     

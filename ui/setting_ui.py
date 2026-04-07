@@ -10,7 +10,7 @@ from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel, 
                            LineEdit, ComboBox, ScrollArea, FluentIcon as FIF,
                            InfoBar, InfoBarPosition, TextEdit, PasswordLineEdit,
-                           TimePicker)
+                           TimePicker, SpinBox)
 from PyQt6.QtCore import QTime
 from utils.logger import get_logger
 from config import config
@@ -153,6 +153,152 @@ class BusinessHoursCard(CardWidget):
             self.end_time_picker.setTime(end_time)
 
 
+class RateLimitCard(CardWidget):
+    """限流配置卡片 - Coze API 请求频率限制"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self):
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("AI 请求限流")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 窗口时长（小时）
+        self.window_hours_spin = SpinBox()
+        self.window_hours_spin.setRange(1, 168)  # 1小时 ~ 7天
+        self.window_hours_spin.setValue(4)
+        self.window_hours_spin.setSuffix(" 小时")
+        form_layout.addRow("窗口时长:", self.window_hours_spin)
+
+        # 最大请求数
+        self.max_requests_spin = SpinBox()
+        self.max_requests_spin.setRange(1, 1000)
+        self.max_requests_spin.setValue(10)
+        self.max_requests_spin.setSuffix(" 次")
+        form_layout.addRow("最大请求数:", self.max_requests_spin)
+
+        # 兜底回复
+        self.fallback_reply_edit = TextEdit()
+        self.fallback_reply_edit.setPlaceholderText("输入限流后的兜底回复内容")
+        self.fallback_reply_edit.setFixedHeight(80)
+        self.fallback_reply_edit.setPlainText("这个我不了解呢，帮你问下我们的技术人员")
+        form_layout.addRow("兜底回复:", self.fallback_reply_edit)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "每个买家在指定时间窗口内最多发送指定次数的 AI 请求，\n"
+            "超出限制后将自动回复兜底内容。窗口从买家第一次请求开始计时，\n"
+            "到期后自动重置。按买家ID全局计数，跨店铺共享。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        return {
+            "rate_limit": {
+                "window_hours": self.window_hours_spin.value(),
+                "max_requests": self.max_requests_spin.value(),
+                "fallback_reply": self.fallback_reply_edit.toPlainText().strip() or "这个我不了解呢，帮你问下我们的技术人员",
+            }
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        rate_limit = config.get("rate_limit", {})
+        self.window_hours_spin.setValue(rate_limit.get("window_hours", 4))
+        self.max_requests_spin.setValue(rate_limit.get("max_requests", 10))
+        self.fallback_reply_edit.setPlainText(
+            rate_limit.get("fallback_reply", "这个我不了解呢，帮你问下我们的技术人员")
+        )
+
+
+class StaffReplyWaitCard(CardWidget):
+    """人工客服优先回复配置卡片"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self):
+        """设置UI"""
+        from qfluentwidgets import CheckBox
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("人工客服优先回复")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 启用开关
+        self.enable_checkbox = CheckBox("启用人工客服优先回复")
+        self.enable_checkbox.setChecked(True)
+        form_layout.addRow("功能开关:", self.enable_checkbox)
+
+        # 等待时间（秒）
+        self.wait_seconds_spin = SpinBox()
+        self.wait_seconds_spin.setRange(5, 300)  # 5秒 ~ 5分钟
+        self.wait_seconds_spin.setValue(30)
+        self.wait_seconds_spin.setSuffix(" 秒")
+        form_layout.addRow("等待时间:", self.wait_seconds_spin)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "在白天工作时间段，收到客户消息后先等待人工客服回复。\n"
+            "如果人工客服在指定时间内回复，则不触发AI自动回复。\n"
+            "如果超时未回复，则继续交给AI处理（AI超时时间会扣除等待时间）。\n"
+            "夜间时段不启用此功能。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        return {
+            "staff_reply_wait": {
+                "enable": self.enable_checkbox.isChecked(),
+                "wait_seconds": self.wait_seconds_spin.value(),
+            }
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        staff_wait = config.get("staff_reply_wait", {})
+        self.enable_checkbox.setChecked(staff_wait.get("enable", True))
+        self.wait_seconds_spin.setValue(staff_wait.get("wait_seconds", 30))
+
+
 class SettingUI(QFrame):
     """设置界面"""
     
@@ -260,10 +406,14 @@ class SettingUI(QFrame):
         
         # 创建配置卡片
         self.coze_config_card = CozeConfigCard()
+        self.rate_limit_card = RateLimitCard()
+        self.staff_reply_wait_card = StaffReplyWaitCard()
         self.business_hours_card = BusinessHoursCard()
         
         # 添加到布局
         content_layout.addWidget(self.coze_config_card)
+        content_layout.addWidget(self.rate_limit_card)
+        content_layout.addWidget(self.staff_reply_wait_card)
         content_layout.addWidget(self.business_hours_card)
         content_layout.addStretch()
         
@@ -286,7 +436,12 @@ class SettingUI(QFrame):
                 "coze_api_base": config.get("coze_api_base", "https://api.coze.cn"),
                 "coze_token": config.get("coze_token", ""),
                 "coze_bot_id": config.get("coze_bot_id", ""),
-                "businessHours": config.get("businessHours", {"start": "08:00", "end": "23:00"})
+                "businessHours": config.get("businessHours", {"start": "08:00", "end": "23:00"}),
+                "rate_limit": config.get("rate_limit", {
+                    "window_hours": 4,
+                    "max_requests": 10,
+                    "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
+                })
             }
             
             # 验证并设置配置
@@ -307,10 +462,17 @@ class SettingUI(QFrame):
             "businessHours": {
                 "start": "08:00",
                 "end": "23:00"
+            },
+            "rate_limit": {
+                "window_hours": 4,
+                "max_requests": 10,
+                "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
             }
         }
         
         self.coze_config_card.setConfig(default_config)
+        self.rate_limit_card.setConfig(default_config)
+        self.staff_reply_wait_card.setConfig(default_config)
         self.business_hours_card.setConfig(default_config)
         self.logger.info("已加载默认配置")
     
@@ -321,7 +483,12 @@ class SettingUI(QFrame):
             "coze_api_base": config_data.get("coze_api_base", "https://api.coze.cn"),
             "coze_token": config_data.get("coze_token", ""),
             "coze_bot_id": config_data.get("coze_bot_id", ""),
-            "businessHours": config_data.get("businessHours", {"start": "08:00", "end": "23:00"})
+            "businessHours": config_data.get("businessHours", {"start": "08:00", "end": "23:00"}),
+            "rate_limit": config_data.get("rate_limit", {
+                "window_hours": 4,
+                "max_requests": 10,
+                "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
+            })
         }
         
         # 验证businessHours格式
@@ -335,8 +502,20 @@ class SettingUI(QFrame):
         if "end" not in business_hours:
             business_hours["end"] = "23:00"
         
+        # 验证rate_limit格式
+        rate_limit = validated_config["rate_limit"]
+        if not isinstance(rate_limit, dict):
+            rate_limit = {"window_hours": 4, "max_requests": 10, "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"}
+            validated_config["rate_limit"] = rate_limit
+        
+        rate_limit.setdefault("window_hours", 4)
+        rate_limit.setdefault("max_requests", 10)
+        rate_limit.setdefault("fallback_reply", "这个我不了解呢，帮你问下我们的技术人员")
+        
         # 设置到界面
         self.coze_config_card.setConfig(validated_config)
+        self.rate_limit_card.setConfig(validated_config)
+        self.staff_reply_wait_card.setConfig(validated_config)
         self.business_hours_card.setConfig(validated_config)
     
     def onSaveConfig(self):
@@ -345,9 +524,11 @@ class SettingUI(QFrame):
             # 获取配置
             coze_config = self.coze_config_card.getConfig()
             business_config = self.business_hours_card.getConfig()
+            rate_limit_config = self.rate_limit_card.getConfig()
+            staff_wait_config = self.staff_reply_wait_card.getConfig()
             
             # 合并配置
-            new_config = {**coze_config, **business_config}
+            new_config = {**coze_config, **business_config, **rate_limit_config, **staff_wait_config}
             
             # 验证必填项
             if not new_config.get("coze_token"):
@@ -366,8 +547,25 @@ class SettingUI(QFrame):
                 QMessageBox.warning(self, "时间设置错误", "开始时间必须早于结束时间！")
                 return
             
+            # 验证限流配置
+            rate_limit = rate_limit_config.get("rate_limit", {})
+            if not rate_limit.get("fallback_reply"):
+                QMessageBox.warning(self, "配置错误", "请输入限流兜底回复内容！")
+                return
+            
             # 使用config模块保存配置
             config.update(new_config, save=True)
+            
+            # 热更新限流器配置
+            try:
+                from Message.rate_limiter import coze_rate_limiter
+                coze_rate_limiter.configure(
+                    window_size=rate_limit['window_hours'] * 3600,
+                    max_requests=rate_limit['max_requests']
+                )
+                self.logger.info("限流器配置已热更新")
+            except Exception as e:
+                self.logger.error(f"限流器热更新失败: {e}")
             
             self.logger.info("配置保存成功")
             

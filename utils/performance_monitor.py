@@ -139,13 +139,13 @@ class PerformanceMonitor:
             函数执行结果
         """
         start_time = time.time()
+        success = False  # 初始化，防止异常时未定义
+        error = None
         try:
             result = func(*args, **kwargs)
             success = True
-            error = None
         except Exception as e:
             result = None
-            success = False
             error = str(e)
             raise
         finally:
@@ -186,13 +186,13 @@ class PerformanceMonitor:
             函数执行结果
         """
         start_time = time.time()
+        success = False  # 初始化，防止 CancelledError 时未定义
+        error = None
         try:
             result = await func(*args, **kwargs)
             success = True
-            error = None
         except Exception as e:
             result = None
-            success = False
             error = str(e)
             raise
         finally:

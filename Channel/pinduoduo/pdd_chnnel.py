@@ -93,6 +93,9 @@ class PDDChannel(Channel):
         """
         初始化WebSocket连接和消息处理系统
         """
+        # 标记是否是正常停止
+        is_normal_stop = False
+        
         try:
             # 创建停止事件
             self._stop_event = asyncio.Event()
@@ -161,23 +164,35 @@ class PDDChannel(Channel):
 
                     if stop_task in done:
                         self.logger.debug(f"收到停止信号: {shop_id}-{username}")
+                        is_normal_stop = True
                     else:
-                        self.logger.debug(f"消息循环自然结束: {shop_id}-{username}")
+                        self.logger.debug(f"消息循环结束: {shop_id}-{username}")
+                        # 检查 message_task 的异常，防止 "Task exception was never retrieved"
+                        if message_task.exception():
+                            exc = message_task.exception()
+                            # 重新抛出，让外层 except 处理
+                            raise exc
 
                 except asyncio.CancelledError:
                     self.logger.debug(f"WebSocket任务被取消: {shop_id}-{username}")
+                    is_normal_stop = True
                     message_task.cancel()
                     try:
                         await message_task
                     except asyncio.CancelledError:
                         pass
+                except websockets.exceptions.ConnectionClosed as e:
+                    self.logger.warning(f"WebSocket消息循环连接关闭: {shop_id}-{username}, 错误: {e}")
+                    # 不设置 is_normal_stop，让外层触发重连
+                    raise
                     
         except websockets.exceptions.ConnectionClosed as e:
             self.logger.warning(f"WebSocket连接已关闭: {shop_id}-{username}, 错误: {str(e)}")
-            on_failure(f"WebSocket连接已关闭: {e}")
+            # 区分正常关闭和异常关闭
+            on_failure(f"WebSocket连接已关闭: {e}", is_connection_closed=not is_normal_stop)
         except Exception as e:
             self.logger.error(f"WebSocket连接错误: {shop_id}-{username}, 错误: {str(e)}")
-            on_failure(f"WebSocket连接错误: {e}")
+            on_failure(f"WebSocket连接错误: {e}", is_connection_closed=not is_normal_stop)
         finally:
             # 清理资源
             await self._cleanup_resources(f"pdd_{shop_id}")
@@ -201,10 +216,18 @@ class PDDChannel(Channel):
                 self.processing_tasks.add(task)
                 task.add_done_callback(self.processing_tasks.discard)
 
-        except websockets.exceptions.ConnectionClosed:
-            self.logger.warning(f"WebSocket连接在消息循环中关闭: {shop_id}-{username}")
+        except websockets.exceptions.ConnectionClosed as e:
+            # 检查是否是正常停止
+            if self._stop_event and self._stop_event.is_set():
+                self.logger.info(f"WebSocket连接正常关闭: {shop_id}-{username}")
+            else:
+                self.logger.warning(f"WebSocket连接在消息循环中异常关闭: {shop_id}-{username}, 错误: {e}")
+                # 重新抛出异常，让上层处理重连
+                raise
         except Exception as e:
             self.logger.error(f"消息循环错误: {shop_id}-{username}, 错误: {str(e)}")
+            # 重新抛出异常，让上层处理
+            raise
 
     async def _process_websocket_message_concurrent(
         self, message: str, shop_id: str, user_id: str, username: str, queue_name: str
@@ -389,6 +412,18 @@ class PDDChannel(Channel):
                 # 其他客服消息，通常不需要回复
                 self.logger.debug(f"收到客服消息: {context.content}")
                 
+                # 通知人工客服已回复（用于人工优先回复功能）
+                # 注意：客服发送消息时，from_uid 是客服ID，to_uid 是买家ID
+                # 我们需要用买家ID来通知等待的AI处理流程
+                from Message.staff_reply_event import staff_reply_event_manager
+                to_uid = context.kwargs.get('to_uid')  # 买家ID
+                if to_uid:
+                    notified = staff_reply_event_manager.notify_staff_reply(to_uid)
+                    if notified:
+                        self.logger.info(
+                            f"人工客服已回复买家 {to_uid}，已通知等待的AI处理流程"
+                        )
+                    
             elif context.type == ContextType.SYSTEM_BIZ:
                 # 系统业务消息
                 self.logger.info(f"系统业务消息: {context.content}")
@@ -420,6 +455,14 @@ class PDDChannel(Channel):
             from Message.message_consumer import message_consumer_manager
             await message_consumer_manager.stop_consumer(queue_name)
             self.logger.debug(f"已停止消息消费者: {queue_name}")
+
+            # 清理消息队列（释放绑定的旧 event loop 的 asyncio 原语）
+            try:
+                from Message.message_queue import message_queue_manager
+                message_queue_manager.remove_queue(queue_name)
+                self.logger.debug(f"已清理消息队列: {queue_name}")
+            except Exception as e:
+                self.logger.warning(f"清理消息队列失败（可忽略）: {e}")
 
             # 清理WebSocket连接引用
             self.ws = None
