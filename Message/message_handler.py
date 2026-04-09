@@ -501,6 +501,8 @@ class CustomerServiceTransferHandler(MessageHandler):
     _SEPARATOR_RE = re.compile(r'[,，.;；!！?？、\s]+')
     # 循环匹配最大次数（防止死循环）
     _MAX_LOOP = 10
+    # 回复分隔符（用于合并多个回复）
+    _REPLY_SEPARATOR = "\n"
 
     def __init__(self, keyword_rules: List[Dict[str, Any]] = None):
         """
@@ -549,7 +551,7 @@ class CustomerServiceTransferHandler(MessageHandler):
         return any(kw in message for kw in self._keyword_map)
 
     async def handle(self, context: Context, metadata: Dict[str, Any]) -> bool:
-        """根据匹配到的关键词规则进行处理，支持循环匹配和pass_to_ai"""
+        """根据匹配到的关键词规则进行处理，支持单条消息内循环匹配、去重和回复合并"""
         try:
             if not isinstance(context.content, str):
                 return False
@@ -565,6 +567,11 @@ class CustomerServiceTransferHandler(MessageHandler):
             remaining = context.content.lower()
             transferred = False  # 是否已执行转人工
             loop_count = 0
+            
+            # 收集所有回复内容，用于合并发送
+            collected_replies = []
+            # 记录本条消息内已匹配的分组（单条消息内不重复）
+            matched_groups_in_message = set()
 
             while remaining.strip() and loop_count < self._MAX_LOOP:
                 loop_count += 1
@@ -575,6 +582,11 @@ class CustomerServiceTransferHandler(MessageHandler):
                 max_len = 0
                 for kw_text, rule in self._keyword_map.items():
                     if kw_text in remaining and len(kw_text) > max_len:
+                        # 检查该分组是否在本条消息内已匹配过
+                        group_name = rule.get('group_name', '')
+                        if group_name in matched_groups_in_message:
+                            self.logger.debug(f"分组 '{group_name}' 在本条消息内已匹配过，跳过")
+                            continue
                         matched_rule = rule
                         matched_keyword = kw_text
                         max_len = len(kw_text)
@@ -583,14 +595,18 @@ class CustomerServiceTransferHandler(MessageHandler):
                     # 没有更多关键词匹配了
                     break
 
-                self.logger.info(f"关键词匹配(第{loop_count}轮): '{matched_keyword}' -> 分组 '{matched_rule.get('group_name')}'")
+                group_name = matched_rule.get('group_name', '')
+                self.logger.info(f"关键词匹配(第{loop_count}轮): '{matched_keyword}' -> 分组 '{group_name}'")
 
-                # 发送回复内容（如果有）
+                # 收集回复内容（如果有）
                 reply_text = matched_rule.get('reply')
                 if reply_text:
-                    sender = SendMessage(shop_id, user_id)
-                    sender.send_text(from_uid, reply_text)
-                    self.logger.info(f"关键词自动回复: 发送 '{reply_text[:50]}...' 给 {from_uid}")
+                    collected_replies.append(reply_text)
+                    self.logger.debug(f"收集回复: '{reply_text[:50]}...'")
+
+                # 记录本条消息内已匹配的分组
+                if group_name:
+                    matched_groups_in_message.add(group_name)
 
                 # 如果需要转人工
                 if matched_rule.get('is_transfer'):
@@ -601,6 +617,13 @@ class CustomerServiceTransferHandler(MessageHandler):
                 remaining = remaining.replace(matched_keyword, '', 1)
                 remaining = self._SEPARATOR_RE.sub('', remaining, count=1)
                 remaining = remaining.strip()
+
+            # 统一发送收集到的所有回复
+            if collected_replies:
+                merged_reply = self._REPLY_SEPARATOR.join(collected_replies)
+                sender = SendMessage(shop_id, user_id)
+                sender.send_text(from_uid, merged_reply)
+                self.logger.info(f"关键词自动回复: 合并发送 {len(collected_replies)} 条回复给 {from_uid}")
 
             # 所有循环结束后：
             if transferred:
