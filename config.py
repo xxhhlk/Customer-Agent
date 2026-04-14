@@ -19,7 +19,7 @@ config_base={
     "rate_limit": {
         "window_hours": 4,
         "max_requests": 10,
-        "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
+        "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]
     },
     "staff_reply_wait": {
         "enable": True,
@@ -110,10 +110,16 @@ class Config:
     def get_rate_limit_config(self) -> dict:
         """获取限流配置（带默认值）"""
         rate = self.config.get('rate_limit', {})
+        fallback = rate.get('fallback_reply', '这个我不了解呢，帮你问下我们的技术人员')
+        # 兼容旧格式（单个字符串）和新格式（数组）
+        if isinstance(fallback, str):
+            fallback = [fallback]
+        elif not isinstance(fallback, list) or not fallback:
+            fallback = ['这个我不了解呢，帮你问下我们的技术人员']
         return {
             'window_hours': rate.get('window_hours', 4),
             'max_requests': rate.get('max_requests', 10),
-            'fallback_reply': rate.get('fallback_reply', '这个我不了解呢，帮你问下我们的技术人员'),
+            'fallback_reply': fallback,
         }
     
     def get_staff_reply_wait_config(self) -> dict:

@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Set, Callable, Awaitable
 from datetime import datetime
 import asyncio
 import re
+import random
 from concurrent.futures import ThreadPoolExecutor
 
 from Message.message_consumer import MessageHandler
@@ -25,7 +26,7 @@ class AIAutoReplyHandler(MessageHandler):
     MIN_REPLY_TIMEOUT = 120.0      # 取消重发后的最低超时（秒）
 
     # 默认兜底回复（限流和AI无回复时使用）
-    DEFAULT_FALLBACK_REPLY = "这个我不了解呢，帮你问下我们的技术人员"
+    DEFAULT_FALLBACK_REPLY = ["这个我不了解呢，帮你问下我们的技术人员"]
     
     def __init__(self, bot=None, auto_reply_types: Set[ContextType] = None, enable_fallback: bool = True, max_workers: int = 5):
         """
@@ -77,6 +78,20 @@ class AIAutoReplyHandler(MessageHandler):
             self._fallback_reply = rc['fallback_reply']
         except Exception:
             self._fallback_reply = self.DEFAULT_FALLBACK_REPLY
+
+    def _get_random_fallback(self) -> str:
+        """
+        随机获取一个兜底回复
+        
+        Returns:
+            str: 随机选择的兜底回复
+        """
+        if isinstance(self._fallback_reply, list) and self._fallback_reply:
+            return random.choice(self._fallback_reply)
+        elif isinstance(self._fallback_reply, str):
+            return self._fallback_reply
+        else:
+            return self.DEFAULT_FALLBACK_REPLY[0]
 
         # 如果没有提供bot实例，尝试创建默认的CozeBot
         if not self.bot:
@@ -189,7 +204,7 @@ class AIAutoReplyHandler(MessageHandler):
             # 限流检查：仅对正常请求检查（取消重发也受限流影响）
             if self.rate_limiter.is_rate_limited(from_uid):
                 from bridge.reply import Reply, ReplyType
-                fallback = Reply(ReplyType.TEXT, self._fallback_reply)
+                fallback = Reply(ReplyType.TEXT, self._get_random_fallback())
                 await self._send_reply(fallback, shop_id, user_id, from_uid)
                 self.logger.warning(f"'{username}'用户'{nickname}'({from_uid})已触发限流，发送兜底回复")
                 return True
@@ -203,7 +218,7 @@ class AIAutoReplyHandler(MessageHandler):
                     self.logger.info(f"'{username}'取消重发回复用户'{nickname}': {reply.content[:100]}")
                 else:
                     from bridge.reply import Reply, ReplyType
-                    fallback = Reply(ReplyType.TEXT, self._fallback_reply)
+                    fallback = Reply(ReplyType.TEXT, self._get_random_fallback())
                     await self._send_reply(fallback, shop_id, user_id, from_uid)
                     self.logger.warning(f"'{username}'取消重发未能获取有效回复，发送兜底回复")
                 return True
@@ -227,7 +242,7 @@ class AIAutoReplyHandler(MessageHandler):
                     self.logger.info(f"'{username}'回复用户'{nickname}': {reply.content[:100]}")
                 else:
                     from bridge.reply import Reply, ReplyType
-                    fallback = Reply(ReplyType.TEXT, self._fallback_reply)
+                    fallback = Reply(ReplyType.TEXT, self._get_random_fallback())
                     await self._send_reply(fallback, shop_id, user_id, from_uid)
                     self.logger.warning(f"'{username}'未能获取AI回复给用户'{nickname}'，发送兜底回复")
             except Exception as e:
@@ -444,7 +459,7 @@ class AIAutoReplyHandler(MessageHandler):
                 max_requests=rc['max_requests']
             )
             self._fallback_reply = rc['fallback_reply']
-            self.logger.info(f"限流配置已热更新: 窗口={rc['window_hours']}h, 最大={rc['max_requests']}次")
+            self.logger.info(f"限流配置已热更新: 窗口={rc['window_hours']}h, 最大={rc['max_requests']}次, 兜底回复={len(self._fallback_reply) if isinstance(self._fallback_reply, list) else 1}条")
         except Exception as e:
             self.logger.error(f"热更新限流配置失败: {e}")
     

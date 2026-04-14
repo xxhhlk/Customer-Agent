@@ -194,8 +194,8 @@ class RateLimitCard(CardWidget):
 
         # 兜底回复
         self.fallback_reply_edit = TextEdit()
-        self.fallback_reply_edit.setPlaceholderText("输入限流后的兜底回复内容")
-        self.fallback_reply_edit.setFixedHeight(80)
+        self.fallback_reply_edit.setPlaceholderText("输入限流后的兜底回复内容，每行一个回复，发送时随机抽取")
+        self.fallback_reply_edit.setFixedHeight(120)
         self.fallback_reply_edit.setPlainText("这个我不了解呢，帮你问下我们的技术人员")
         form_layout.addRow("兜底回复:", self.fallback_reply_edit)
 
@@ -213,11 +213,16 @@ class RateLimitCard(CardWidget):
 
     def getConfig(self) -> dict:
         """获取配置"""
+        # 将多行文本按行分割，过滤空行
+        text = self.fallback_reply_edit.toPlainText().strip()
+        fallback_replies = [line.strip() for line in text.split('\n') if line.strip()]
+        if not fallback_replies:
+            fallback_replies = ["这个我不了解呢，帮你问下我们的技术人员"]
         return {
             "rate_limit": {
                 "window_hours": self.window_hours_spin.value(),
                 "max_requests": self.max_requests_spin.value(),
-                "fallback_reply": self.fallback_reply_edit.toPlainText().strip() or "这个我不了解呢，帮你问下我们的技术人员",
+                "fallback_reply": fallback_replies,
             }
         }
 
@@ -226,9 +231,15 @@ class RateLimitCard(CardWidget):
         rate_limit = config.get("rate_limit", {})
         self.window_hours_spin.setValue(rate_limit.get("window_hours", 4))
         self.max_requests_spin.setValue(rate_limit.get("max_requests", 10))
-        self.fallback_reply_edit.setPlainText(
-            rate_limit.get("fallback_reply", "这个我不了解呢，帮你问下我们的技术人员")
-        )
+        fallback = rate_limit.get("fallback_reply", ["这个我不了解呢，帮你问下我们的技术人员"])
+        # 兼容旧格式（单个字符串）和新格式（数组）
+        if isinstance(fallback, str):
+            text = fallback
+        elif isinstance(fallback, list):
+            text = '\n'.join(fallback)
+        else:
+            text = "这个我不了解呢，帮你问下我们的技术人员"
+        self.fallback_reply_edit.setPlainText(text)
 
 
 class StaffReplyWaitCard(CardWidget):
@@ -440,7 +451,7 @@ class SettingUI(QFrame):
                 "rate_limit": config.get("rate_limit", {
                     "window_hours": 4,
                     "max_requests": 10,
-                    "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
+                    "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]
                 })
             }
             
@@ -466,7 +477,7 @@ class SettingUI(QFrame):
             "rate_limit": {
                 "window_hours": 4,
                 "max_requests": 10,
-                "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
+                "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]
             }
         }
         
@@ -487,7 +498,7 @@ class SettingUI(QFrame):
             "rate_limit": config_data.get("rate_limit", {
                 "window_hours": 4,
                 "max_requests": 10,
-                "fallback_reply": "这个我不了解呢，帮你问下我们的技术人员"
+                "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]
             })
         }
         
@@ -510,7 +521,7 @@ class SettingUI(QFrame):
         
         rate_limit.setdefault("window_hours", 4)
         rate_limit.setdefault("max_requests", 10)
-        rate_limit.setdefault("fallback_reply", "这个我不了解呢，帮你问下我们的技术人员")
+        rate_limit.setdefault("fallback_reply", ["这个我不了解呢，帮你问下我们的技术人员"])
         
         # 设置到界面
         self.coze_config_card.setConfig(validated_config)
@@ -549,7 +560,8 @@ class SettingUI(QFrame):
             
             # 验证限流配置
             rate_limit = rate_limit_config.get("rate_limit", {})
-            if not rate_limit.get("fallback_reply"):
+            fallback = rate_limit.get("fallback_reply", [])
+            if not fallback or (isinstance(fallback, list) and not any(fallback)):
                 QMessageBox.warning(self, "配置错误", "请输入限流兜底回复内容！")
                 return
             
