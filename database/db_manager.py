@@ -130,6 +130,13 @@ class DatabaseManager:
                 conn.commit()
                 self.logger.info("keyword_groups表迁移完成：已添加pass_to_ai列")
 
+            # 检查keywords表是否有match_type列（新功能：匹配类型）
+            if 'match_type' not in columns:
+                self.logger.info("正在迁移keywords表：添加match_type列...")
+                cursor.execute("ALTER TABLE keywords ADD COLUMN match_type TEXT DEFAULT 'partial'")
+                conn.commit()
+                self.logger.info("keywords表迁移完成：已添加match_type列")
+
             conn.close()
         except Exception as e:
             self.logger.error(f"迁移keywords表失败: {e}")
@@ -843,19 +850,30 @@ class DatabaseManager:
             session.close()
 
     def get_keyword_group(self, group_id: int) -> Optional[Dict[str, Any]]:
-        """获取关键词分组（含关键词列表）"""
+        """获取关键词分组（含关键词列表） - 兼容新旧格式"""
         session = self.get_session()
         try:
             group = session.query(KeywordGroup).filter(KeywordGroup.id == group_id).first()
             if not group:
                 return None
+            
+            # 兼容层：检查关键词是否有match_type属性
+            keywords_list = []
+            for kw in group.keywords:
+                kw_data = {'text': kw.keyword}
+                if hasattr(kw, 'match_type'):
+                    kw_data['match_type'] = kw.match_type
+                else:
+                    kw_data['match_type'] = 'partial'  # 旧数据默认为部分匹配
+                keywords_list.append(kw_data)
+            
             return {
                 'id': group.id,
                 'group_name': group.group_name,
                 'reply': group.reply,
                 'is_transfer': group.is_transfer,
                 'pass_to_ai': group.pass_to_ai,
-                'keywords': [kw.keyword for kw in group.keywords]
+                'keywords': keywords_list
             }
         except SQLAlchemyError as e:
             self.logger.error(f"获取关键词分组失败: {str(e)}")
@@ -864,21 +882,30 @@ class DatabaseManager:
             session.close()
 
     def get_all_keyword_groups(self) -> List[Dict[str, Any]]:
-        """获取所有关键词分组（含关键词列表）"""
+        """获取所有关键词分组（含关键词列表） - 兼容新旧格式"""
         session = self.get_session()
         try:
             groups = session.query(KeywordGroup).all()
-            return [
-                {
+            result = []
+            for g in groups:
+                keywords_list = []
+                for kw in g.keywords:
+                    kw_data = {'text': kw.keyword}
+                    if hasattr(kw, 'match_type'):
+                        kw_data['match_type'] = kw.match_type
+                    else:
+                        kw_data['match_type'] = 'partial'
+                    keywords_list.append(kw_data)
+                
+                result.append({
                     'id': g.id,
                     'group_name': g.group_name,
                     'reply': g.reply,
                     'is_transfer': g.is_transfer,
                     'pass_to_ai': g.pass_to_ai,
-                    'keywords': [kw.keyword for kw in g.keywords]
-                }
-                for g in groups
-            ]
+                    'keywords': keywords_list
+                })
+            return result
         except SQLAlchemyError as e:
             self.logger.error(f"获取关键词分组列表失败: {str(e)}")
             return []
@@ -931,12 +958,13 @@ class DatabaseManager:
             session.close()
 
     # ========== 关键词相关操作（分组版） ==========
-    def add_keyword_to_group(self, keyword: str, group_id: int) -> bool:
+    def add_keyword_to_group(self, keyword: str, group_id: int, match_type: str = 'partial') -> bool:
         """添加关键词到指定分组
 
         Args:
             keyword: 关键词
             group_id: 分组ID
+            match_type: 匹配类型 (exact/partial/regex/wildcard)
 
         Returns:
             bool: 是否添加成功
@@ -957,10 +985,14 @@ class DatabaseManager:
                 self.logger.warning(f"关键词 '{keyword}' 已存在于分组 {group_id}")
                 return False
 
+            # 创建关键词对象，支持match_type
             keyword_obj = Keyword(keyword=keyword, group_id=group_id)
+            if hasattr(keyword_obj, 'match_type'):
+                keyword_obj.match_type = match_type
+            
             session.add(keyword_obj)
             session.commit()
-            self.logger.info(f"成功添加关键词 '{keyword}' 到分组 '{group.group_name}'")
+            self.logger.info(f"成功添加关键词 '{keyword}' (匹配类型:{match_type}) 到分组 '{group.group_name}'")
             return True
         except SQLAlchemyError as e:
             session.rollback()
@@ -970,26 +1002,51 @@ class DatabaseManager:
             session.close()
 
     def get_all_keywords(self) -> List[Dict[str, Any]]:
-        """获取所有关键词（含分组信息）"""
+        """获取所有关键词（含分组信息和匹配类型）"""
         session = self.get_session()
         try:
             keywords = session.query(Keyword).all()
-            return [
-                {
+            result = []
+            for kw in keywords:
+                kw_data = {
                     'id': kw.id,
                     'keyword': kw.keyword,
                     'group_id': kw.group_id
                 }
-                for kw in keywords
-            ]
+                if hasattr(kw, 'match_type'):
+                    kw_data['match_type'] = kw.match_type
+                else:
+                    kw_data['match_type'] = 'partial'
+                result.append(kw_data)
+            return result
         except SQLAlchemyError as e:
             self.logger.error(f"获取关键词列表失败: {str(e)}")
             return []
         finally:
             session.close()
 
-    def get_keywords_by_group(self, group_id: int) -> List[str]:
-        """获取指定分组的所有关键词"""
+    def get_keywords_by_group(self, group_id: int) -> List[Dict[str, Any]]:
+        """获取指定分组的所有关键词（含匹配类型，兼容旧格式）"""
+        session = self.get_session()
+        try:
+            keywords = session.query(Keyword).filter(Keyword.group_id == group_id).all()
+            result = []
+            for kw in keywords:
+                kw_data = {'text': kw.keyword}
+                if hasattr(kw, 'match_type'):
+                    kw_data['match_type'] = kw.match_type
+                else:
+                    kw_data['match_type'] = 'partial'
+                result.append(kw_data)
+            return result
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取分组关键词失败: {str(e)}")
+            return []
+        finally:
+            session.close()
+    
+    def get_keywords_by_group_simple(self, group_id: int) -> List[str]:
+        """获取指定分组的所有关键词（纯文本列表，向后兼容）"""
         session = self.get_session()
         try:
             keywords = session.query(Keyword).filter(Keyword.group_id == group_id).all()
@@ -1000,8 +1057,8 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def update_keyword(self, keyword_id: int, new_keyword: str = None, new_group_id: int = None) -> bool:
-        """更新关键词（按ID）"""
+    def update_keyword(self, keyword_id: int, new_keyword: str = None, new_group_id: int = None, match_type: str = None) -> bool:
+        """更新关键词（按ID，支持更新匹配类型）"""
         session = self.get_session()
         try:
             keyword_obj = session.query(Keyword).filter(Keyword.id == keyword_id).first()
@@ -1021,6 +1078,8 @@ class DatabaseManager:
                 keyword_obj.keyword = new_keyword
             if new_group_id is not None:
                 keyword_obj.group_id = new_group_id
+            if match_type is not None and hasattr(keyword_obj, 'match_type'):
+                keyword_obj.match_type = match_type
             session.commit()
             self.logger.info(f"成功更新关键词ID {keyword_id}")
             return True
@@ -1030,6 +1089,14 @@ class DatabaseManager:
             return False
         finally:
             session.close()
+    
+    def update_keyword_match_type(self, keyword_id: int, match_type: str) -> bool:
+        """更新关键词匹配类型"""
+        return self.update_keyword(keyword_id, match_type=match_type)
+    
+    def add_keyword_with_type(self, group_id: int, keyword: str, match_type: str = 'partial') -> bool:
+        """添加关键词（指定匹配类型） - 与add_keyword_to_group相同的别名"""
+        return self.add_keyword_to_group(keyword, group_id, match_type)
 
     def delete_keyword(self, keyword_id: int) -> bool:
         """删除关键词（按ID）"""
@@ -1051,25 +1118,39 @@ class DatabaseManager:
             session.close()
 
     def get_keyword_reply_rules(self) -> List[Dict[str, Any]]:
-        """获取所有关键词回复规则（供业务层使用）
+        """获取所有关键词回复规则（供业务层使用） - 兼容新旧格式
 
         Returns:
             List[Dict]: [{'keywords': [...], 'reply': '...', 'is_transfer': 0/1, 'group_name': '...'}]
+            keywords 现在是对象列表：[{'text': 'xxx', 'match_type': 'partial'}, ...]
+            但也兼容旧格式（纯字符串列表）
         """
         session = self.get_session()
         try:
             groups = session.query(KeywordGroup).all()
-            return [
-                {
+            result = []
+            for g in groups:
+                if not g.keywords:
+                    continue
+                
+                keywords_list = []
+                for kw in g.keywords:
+                    kw_data = {'text': kw.keyword}
+                    if hasattr(kw, 'match_type'):
+                        kw_data['match_type'] = kw.match_type
+                    else:
+                        kw_data['match_type'] = 'partial'
+                    keywords_list.append(kw_data)
+                
+                result.append({
                     'group_id': g.id,
                     'group_name': g.group_name,
-                    'keywords': [kw.keyword for kw in g.keywords],
+                    'keywords': keywords_list,
                     'reply': g.reply,
                     'is_transfer': g.is_transfer,
                     'pass_to_ai': g.pass_to_ai
-                }
-                for g in groups if g.keywords  # 只返回有关键词的分组
-            ]
+                })
+            return result
         except SQLAlchemyError as e:
             self.logger.error(f"获取关键词回复规则失败: {str(e)}")
             return []

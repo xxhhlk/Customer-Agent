@@ -82,9 +82,11 @@ class Keyword(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     keyword = Column(String(100), nullable=False, comment='关键词')
     group_id = Column(Integer, ForeignKey('keyword_groups.id'), nullable=False, comment='所属分组ID')
+    match_type = Column(String(20), nullable=False, default='partial', 
+                        comment='匹配类型: exact-完全匹配, partial-部分匹配, regex-正则, wildcard-通配符')
 
     # 关联关系
     group = relationship('KeywordGroup', back_populates='keywords')
 
     def __repr__(self):
-        return f"<Keyword(keyword='{self.keyword}', group='{self.group.group_name if self.group else None}')>"
+        return f"<Keyword(keyword='{self.keyword}', match_type='{self.match_type}', group='{self.group.group_name if self.group else None}')>"

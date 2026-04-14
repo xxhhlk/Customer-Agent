@@ -510,7 +510,7 @@ class KeywordTriggerHandler(MessageHandler):
 
 
 class CustomerServiceTransferHandler(MessageHandler):
-    """客服转接处理器 - 从数据库读取关键词分组规则"""
+    """客服转接处理器 - 从数据库读取关键词分组规则，支持多种匹配类型"""
 
     # 用于去掉关键词后的分隔符
     _SEPARATOR_RE = re.compile(r'[,，.;；!！?？、\s]+')
@@ -526,13 +526,17 @@ class CustomerServiceTransferHandler(MessageHandler):
         Args:
             keyword_rules: 关键词规则列表，每个规则格式:
                 {'keywords': [...], 'reply': '...', 'is_transfer': 0/1, 'pass_to_ai': 0/1, 'group_name': '...'}
+                keywords可以是字符串列表（旧格式）或对象列表（新格式：{'text': '...', 'match_type': '...'}）
                 如果为None则从数据库加载
         """
         self.logger = get_logger()
+        # 导入匹配器工厂
+        from Message.keyword_matcher import matcher_factory
+        self._matcher_factory = matcher_factory
         self._load_rules(keyword_rules)
 
     def _load_rules(self, keyword_rules: List[Dict[str, Any]] = None):
-        """加载关键词规则"""
+        """加载关键词规则 - 支持新旧格式兼容"""
         if keyword_rules is None:
             try:
                 from database.db_manager import db_manager
@@ -542,13 +546,35 @@ class CustomerServiceTransferHandler(MessageHandler):
                 keyword_rules = []
 
         self.keyword_rules = keyword_rules
-        # 构建扁平化查找表: keyword_text -> rule_dict
-        self._keyword_map = {}
+        
+        # 构建关键词索引，每个条目包含: text, match_type, rule, matcher
+        self._keyword_index = []
+        
         for rule in self.keyword_rules:
-            for kw in rule.get('keywords', []):
-                self._keyword_map[kw.lower()] = rule
+            keywords = rule.get('keywords', [])
+            for kw_item in keywords:
+                # 兼容新旧格式
+                if isinstance(kw_item, str):
+                    # 旧格式：纯字符串
+                    kw_text = kw_item
+                    match_type = 'partial'
+                else:
+                    # 新格式：对象格式
+                    kw_text = kw_item.get('text', '')
+                    match_type = kw_item.get('match_type', 'partial')
+                
+                # 获取匹配器
+                matcher = self._matcher_factory.get_matcher(match_type)
+                
+                self._keyword_index.append({
+                    'text': kw_text,
+                    'match_type': match_type,
+                    'rule': rule,
+                    'matcher': matcher
+                })
+        
         self.logger.info(f"已加载 {len(self.keyword_rules)} 个关键词分组规则，"
-                         f"共 {len(self._keyword_map)} 个关键词")
+                         f"共 {len(self._keyword_index)} 个关键词")
 
     def reload_rules(self):
         """重新从数据库加载规则（供UI修改后调用）"""
@@ -562,8 +588,13 @@ class CustomerServiceTransferHandler(MessageHandler):
         if not isinstance(context.content, str):
             return False
 
-        message = context.content.lower()
-        return any(kw in message for kw in self._keyword_map)
+        message = context.content
+        
+        # 检查是否有任何关键词匹配
+        for kw_item in self._keyword_index:
+            if kw_item['matcher'].match(kw_item['text'], message):
+                return True
+        return False
 
     async def handle(self, context: Context, metadata: Dict[str, Any]) -> bool:
         """根据匹配到的关键词规则进行处理，支持单条消息内循环匹配、去重和回复合并"""
@@ -579,7 +610,7 @@ class CustomerServiceTransferHandler(MessageHandler):
                 return False
 
             original_content = context.content  # 保存原始消息
-            remaining = context.content.lower()
+            remaining = original_content  # 保持原始大小写，用于匹配
             transferred = False  # 是否已执行转人工
             loop_count = 0
             
@@ -593,25 +624,32 @@ class CustomerServiceTransferHandler(MessageHandler):
 
                 # 查找匹配的规则（优先匹配最长的关键词）
                 matched_rule = None
-                matched_keyword = None
+                matched_kw_item = None
                 max_len = 0
-                for kw_text, rule in self._keyword_map.items():
-                    if kw_text in remaining and len(kw_text) > max_len:
+                
+                for kw_item in self._keyword_index:
+                    # 检查是否匹配
+                    if kw_item['matcher'].match(kw_item['text'], remaining):
                         # 检查该分组是否在本条消息内已匹配过
-                        group_name = rule.get('group_name', '')
+                        group_name = kw_item['rule'].get('group_name', '')
                         if group_name in matched_groups_in_message:
                             self.logger.debug(f"分组 '{group_name}' 在本条消息内已匹配过，跳过")
                             continue
-                        matched_rule = rule
-                        matched_keyword = kw_text
-                        max_len = len(kw_text)
+                        
+                        # 优先匹配更长的关键词（文本长度）
+                        kw_text_len = len(kw_item['text'])
+                        if kw_text_len > max_len:
+                            matched_rule = kw_item['rule']
+                            matched_kw_item = kw_item
+                            max_len = kw_text_len
 
-                if not matched_rule:
+                if not matched_rule or not matched_kw_item:
                     # 没有更多关键词匹配了
                     break
 
                 group_name = matched_rule.get('group_name', '')
-                self.logger.info(f"关键词匹配(第{loop_count}轮): '{matched_keyword}' -> 分组 '{group_name}'")
+                self.logger.info(f"关键词匹配(第{loop_count}轮): '{matched_kw_item['text']}' "
+                               f"[类型:{matched_kw_item['match_type']}] -> 分组 '{group_name}'")
 
                 # 收集回复内容（如果有）
                 reply_text = matched_rule.get('reply')
@@ -629,9 +667,14 @@ class CustomerServiceTransferHandler(MessageHandler):
                     transferred = True
 
                 # 去掉已匹配的关键词和紧邻的分隔符，检查剩余内容
-                remaining = remaining.replace(matched_keyword, '', 1)
-                remaining = self._SEPARATOR_RE.sub('', remaining, count=1)
-                remaining = remaining.strip()
+                # 对于完全匹配、正则、通配符，直接清空remaining（因为它们是整体匹配）
+                if matched_kw_item['match_type'] in ['exact', 'regex', 'wildcard']:
+                    remaining = ''
+                else:
+                    # 部分匹配：移除关键词文本
+                    remaining = remaining.replace(matched_kw_item['text'], '', 1)
+                    remaining = self._SEPARATOR_RE.sub('', remaining, count=1)
+                    remaining = remaining.strip()
 
             # 统一发送收集到的所有回复
             if collected_replies:

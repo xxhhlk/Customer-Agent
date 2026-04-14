@@ -13,6 +13,83 @@ from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel,
 from database.db_manager import db_manager
 
 
+class KeywordEditDialog(QDialog):
+    """关键词编辑对话框（支持设置匹配类型）"""
+
+    def __init__(self, keyword_data: dict = None, parent=None):
+        """
+        Args:
+            keyword_data: 编辑模式传入 {'text': 'xxx', 'match_type': 'partial'}, 添加模式传None
+        """
+        super().__init__(parent)
+        self.is_edit = keyword_data is not None
+        self.keyword_data = keyword_data or {}
+
+        self.setWindowTitle("编辑关键词" if self.is_edit else "添加关键词")
+        self.setModal(True)
+        self.resize(420, 200)
+        self.setupUI()
+
+    def setupUI(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        # 关键词文本
+        kw_label = BodyLabel("关键词")
+        self.kw_edit = LineEdit()
+        self.kw_edit.setPlaceholderText("请输入关键词")
+        self.kw_edit.setText(self.keyword_data.get('text', ''))
+        layout.addWidget(kw_label)
+        layout.addWidget(self.kw_edit)
+
+        # 匹配类型
+        type_label = BodyLabel("匹配类型")
+        self.type_combo = ComboBox()
+        self.type_combo.addItems([
+            "🔍 部分匹配（默认）",
+            "🎯 完全匹配（忽略符号）",
+            "📝 正则表达式",
+            "⭐ 通配符匹配（*任意字符, ?单个字符）"
+        ])
+        type_map = {'partial': 0, 'exact': 1, 'regex': 2, 'wildcard': 3}
+        current_type = self.keyword_data.get('match_type', 'partial')
+        self.type_combo.setCurrentIndex(type_map.get(current_type, 0))
+        layout.addWidget(type_label)
+        layout.addWidget(self.type_combo)
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = PushButton("取消")
+        cancel_btn.setFixedSize(100, 34)
+        cancel_btn.clicked.connect(self.reject)
+        ok_btn = PrimaryPushButton("确定")
+        ok_btn.setFixedSize(100, 34)
+        ok_btn.clicked.connect(self._on_confirm)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+    def _on_confirm(self):
+        text = self.kw_edit.text().strip()
+        if not text:
+            QMessageBox.warning(self, '提示', '关键词不能为空！')
+            return
+
+        type_map = {0: 'partial', 1: 'exact', 2: 'regex', 3: 'wildcard'}
+        match_type = type_map.get(self.type_combo.currentIndex(), 'partial')
+
+        self._result = {
+            'text': text,
+            'match_type': match_type
+        }
+        self.accept()
+
+    def get_result(self) -> dict:
+        return getattr(self, '_result', None)
+
+
 class GroupEditDialog(QDialog):
     """分组编辑对话框（添加/编辑共用）"""
 
@@ -142,8 +219,8 @@ class GroupCard(QFrame):
     edit_group_clicked = pyqtSignal(int)   # 编辑分组（group_id）
     delete_group_clicked = pyqtSignal(int) # 删除分组（group_id）
     add_keyword_clicked = pyqtSignal(int)  # 添加关键词（group_id）
-    edit_keyword_clicked = pyqtSignal(int, int)  # 编辑关键词（group_id, keyword_id）
-    delete_keyword_clicked = pyqtSignal(int, int)  # 删除关键词（group_id, keyword_id）
+    edit_keyword_clicked = pyqtSignal(int, object, int)  # 编辑关键词（group_id, keyword_data, index）
+    delete_keyword_clicked = pyqtSignal(int, object, int)  # 删除关键词（group_id, keyword_data, index）
 
     def __init__(self, group_data: dict, parent=None):
         super().__init__(parent)
@@ -230,13 +307,31 @@ class GroupCard(QFrame):
             kw_layout.setContentsMargins(0, 0, 0, 0)
             kw_layout.setSpacing(4)
 
-            for kw in keywords:
+            # 匹配类型显示映射
+            type_labels = {
+                'partial': '🔍',
+                'exact': '🎯',
+                'regex': '📝',
+                'wildcard': '⭐'
+            }
+
+            for idx, kw in enumerate(keywords):
                 kw_row = QWidget()
                 kw_row_layout = QHBoxLayout(kw_row)
                 kw_row_layout.setContentsMargins(8, 2, 8, 2)
                 kw_row_layout.setSpacing(8)
 
-                kw_label = QLabel(f"• {kw}")
+                # 兼容新旧格式
+                if isinstance(kw, dict):
+                    kw_text = kw.get('text', '')
+                    kw_type = kw.get('match_type', 'partial')
+                else:
+                    kw_text = str(kw)
+                    kw_type = 'partial'
+
+                # 显示匹配类型图标 + 关键词
+                type_icon = type_labels.get(kw_type, '🔍')
+                kw_label = QLabel(f"{type_icon} {kw_text}")
                 kw_label.setStyleSheet("font-size: 13px; color: #333;")
                 kw_row_layout.addWidget(kw_label)
 
@@ -245,15 +340,15 @@ class GroupCard(QFrame):
                 # 编辑关键词按钮
                 edit_btn = PushButton("编辑")
                 edit_btn.setFixedSize(60, 24)
-                edit_btn.clicked.connect(lambda checked, g=self.group_data['id'], k=kw:
-                                         self._emit_edit_keyword(g, k))
+                edit_btn.clicked.connect(lambda checked, g=self.group_data['id'], k=kw, i=idx:
+                                         self._emit_edit_keyword(g, k, i))
                 kw_row_layout.addWidget(edit_btn)
 
                 # 删除关键词按钮
                 del_btn = PushButton("删除")
                 del_btn.setFixedSize(60, 24)
-                del_btn.clicked.connect(lambda checked, g=self.group_data['id'], k=kw:
-                                        self._emit_delete_keyword(g, k))
+                del_btn.clicked.connect(lambda checked, g=self.group_data['id'], k=kw, i=idx:
+                                        self._emit_delete_keyword(g, k, i))
                 kw_row_layout.addWidget(del_btn)
 
                 kw_layout.addWidget(kw_row)
@@ -266,23 +361,28 @@ class GroupCard(QFrame):
         add_kw_btn.clicked.connect(lambda: self.add_keyword_clicked.emit(self.group_data['id']))
         main_layout.addWidget(add_kw_btn)
 
-    def _find_keyword_id(self, keyword_text: str) -> int:
-        """根据关键词文本从数据库查找关键词ID"""
+    def _find_keyword_id(self, keyword_data) -> int:
+        """根据关键词数据从数据库查找关键词ID"""
+        # 兼容新旧格式
+        if isinstance(keyword_data, dict):
+            kw_text = keyword_data.get('text', '')
+        else:
+            kw_text = str(keyword_data)
+            
         all_keywords = db_manager.get_all_keywords()
         for kw in all_keywords:
-            if kw.get('keyword') == keyword_text:
+            if kw.get('keyword') == kw_text:
                 return kw['id']
         return -1
 
-    def _emit_edit_keyword(self, group_id: int, keyword_text: str):
-        """根据关键词文本查找ID并发送信号"""
-        kw_id = self._find_keyword_id(keyword_text)
-        self.edit_keyword_clicked.emit(group_id, kw_id)
+    def _emit_edit_keyword(self, group_id: int, keyword_data, index: int):
+        """发送编辑关键词信号"""
+        self.edit_keyword_clicked.emit(group_id, keyword_data, index)
 
-    def _emit_delete_keyword(self, group_id: int, keyword_text: str):
-        """根据关键词文本查找ID并发送信号"""
-        kw_id = self._find_keyword_id(keyword_text)
-        self.delete_keyword_clicked.emit(group_id, kw_id)
+    def _emit_delete_keyword(self, group_id: int, keyword_data, index: int):
+        """发送删除关键词信号"""
+        kw_id = self._find_keyword_id(keyword_data)
+        self.delete_keyword_clicked.emit(group_id, keyword_data, kw_id)
 
 
 class KeywordManagerWidget(QFrame):
@@ -370,7 +470,7 @@ class KeywordManagerWidget(QFrame):
             self.initializeSampleGroups()
 
     def initializeSampleGroups(self):
-        """初始化示例关键词分组"""
+        """初始化示例关键词分组 - 兼容新旧格式"""
         # 分组1：转人工
         db_manager.add_keyword_group(
             group_name="转人工",
@@ -384,7 +484,7 @@ class KeywordManagerWidget(QFrame):
             transfer_group = next((g for g in groups if g['group_name'] == "转人工"), None)
             if transfer_group:
                 for kw in transfer_keywords:
-                    db_manager.add_keyword_to_group(kw, transfer_group['id'])
+                    db_manager.add_keyword_to_group(kw, transfer_group['id'], match_type='partial')
 
         # 分组2：售后问题
         db_manager.add_keyword_group(
@@ -399,7 +499,7 @@ class KeywordManagerWidget(QFrame):
             after_group = next((g for g in groups if g['group_name'] == "售后问题"), None)
             if after_group:
                 for kw in after_sale_keywords:
-                    db_manager.add_keyword_to_group(kw, after_group['id'])
+                    db_manager.add_keyword_to_group(kw, after_group['id'], match_type='partial')
 
         # 分组3：订单操作
         db_manager.add_keyword_group(
@@ -413,7 +513,7 @@ class KeywordManagerWidget(QFrame):
             order_group = next((g for g in groups if g['group_name'] == "订单操作"), None)
             if order_group:
                 for kw in order_keywords:
-                    db_manager.add_keyword_to_group(kw, order_group['id'])
+                    db_manager.add_keyword_to_group(kw, order_group['id'], match_type='partial')
 
         # 分组4：开发票
         db_manager.add_keyword_group(
@@ -427,7 +527,7 @@ class KeywordManagerWidget(QFrame):
             invoice_group = next((g for g in groups if g['group_name'] == "开发票"), None)
             if invoice_group:
                 for kw in invoice_keywords:
-                    db_manager.add_keyword_to_group(kw, invoice_group['id'])
+                    db_manager.add_keyword_to_group(kw, invoice_group['id'], match_type='partial')
 
         # 分组5：好评返现
         db_manager.add_keyword_group(
@@ -441,7 +541,7 @@ class KeywordManagerWidget(QFrame):
             good_review_group = next((g for g in groups if g['group_name'] == "好评返现"), None)
             if good_review_group:
                 for kw in good_review_keywords:
-                    db_manager.add_keyword_to_group(kw, good_review_group['id'])
+                    db_manager.add_keyword_to_group(kw, good_review_group['id'], match_type='partial')
 
         # 重新加载
         self.groups_data = db_manager.get_all_keyword_groups()
@@ -467,7 +567,10 @@ class KeywordManagerWidget(QFrame):
 
         # 更新统计信息
         total_groups = len(self.groups_data)
-        total_keywords = sum(len(g.get('keywords', [])) for g in self.groups_data)
+        total_keywords = 0
+        for g in self.groups_data:
+            keywords = g.get('keywords', [])
+            total_keywords += len(keywords)
         self.stats_label.setText(f"共 {total_groups} 个分组，{total_keywords} 个关键词")
 
     # ===== 分组操作 =====
@@ -535,86 +638,71 @@ class KeywordManagerWidget(QFrame):
 
     # ===== 关键词操作 =====
     def onAddKeyword(self, group_id: int):
-        """向分组添加关键词"""
+        """向分组添加关键词（支持设置匹配类型）"""
         group = db_manager.get_keyword_group(group_id)
         if not group:
             return
 
-        keyword, ok = QInputDialog.getText(
-            self, f'添加关键词到 "{group["group_name"]}"',
-            '请输入关键词:'
-        )
-        if ok and keyword.strip():
-            if db_manager.add_keyword_to_group(keyword.strip(), group_id):
+        dlg = KeywordEditDialog(keyword_data=None, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        result = dlg.get_result()
+
+        if db_manager.add_keyword_to_group(result['text'], group_id, result['match_type']):
+            self.groups_data = db_manager.get_all_keyword_groups()
+            self.refreshCards()
+        else:
+            QMessageBox.warning(self, '失败', f'关键词 "{result["text"]}" 已存在于该分组！')
+
+    def onEditKeyword(self, group_id: int, keyword_data, index: int):
+        """编辑关键词（支持修改匹配类型）"""
+        group = db_manager.get_keyword_group(group_id)
+        if not group:
+            return
+
+        # 准备编辑数据
+        if isinstance(keyword_data, dict):
+            edit_data = keyword_data
+        else:
+            edit_data = {'text': str(keyword_data), 'match_type': 'partial'}
+
+        # 找到关键词ID
+        keyword_id = -1
+        all_keywords = db_manager.get_all_keywords()
+        for kw in all_keywords:
+            if kw.get('keyword') == edit_data['text']:
+                keyword_id = kw.get('id', -1)
+                break
+
+        dlg = KeywordEditDialog(keyword_data=edit_data, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        result = dlg.get_result()
+
+        if keyword_id > 0:
+            if db_manager.update_keyword(
+                keyword_id, 
+                new_keyword=result['text'],
+                match_type=result['match_type']
+            ):
                 self.groups_data = db_manager.get_all_keyword_groups()
                 self.refreshCards()
             else:
-                QMessageBox.warning(self, '失败', f'关键词 "{keyword.strip()}" 已存在于该分组！')
+                QMessageBox.warning(self, '失败', f'关键词 "{result["text"]}" 已存在于该分组！')
+        else:
+            QMessageBox.warning(self, '提示', '关键词数据异常，请刷新后重试')
 
-    def onEditKeyword(self, group_id: int, keyword_id: int):
-        """编辑关键词"""
-        group = db_manager.get_keyword_group(group_id)
-        if not group:
-            return
-
-        # 根据ID从数据库找到当前关键词文本
-        old_keyword = None
-        if keyword_id > 0:
-            all_keywords = db_manager.get_all_keywords()
-            for kw in all_keywords:
-                if kw.get('id') == keyword_id:
-                    old_keyword = kw['keyword']
-                    break
-
-        # 如果通过ID没找到，尝试从分组的关键词列表中匹配
-        if not old_keyword:
-            for kw in group.get('keywords', []):
-                if isinstance(kw, dict) and kw.get('id') == keyword_id:
-                    old_keyword = kw['keyword']
-                    break
-
-        if not old_keyword:
-            old_keyword = group.get('keywords', [''])[0] if group.get('keywords') else ''
-
-        new_keyword, ok = QInputDialog.getText(
-            self, '编辑关键词',
-            '请修改关键词:',
-            text=str(old_keyword)
-        )
-        if ok and new_keyword.strip() and new_keyword.strip() != str(old_keyword):
-            if keyword_id > 0:
-                if db_manager.update_keyword(keyword_id, new_keyword=new_keyword.strip()):
-                    self.groups_data = db_manager.get_all_keyword_groups()
-                    self.refreshCards()
-                else:
-                    QMessageBox.warning(self, '失败', f'关键词 "{new_keyword.strip()}" 已存在于该分组！')
-            else:
-                QMessageBox.warning(self, '提示', '关键词数据异常，请刷新后重试')
-
-    def onDeleteKeyword(self, group_id: int, keyword_id: int):
+    def onDeleteKeyword(self, group_id: int, keyword_data, keyword_id: int):
         """删除关键词"""
         group = db_manager.get_keyword_group(group_id)
         if not group:
             return
 
-        # 找到关键词文本
-        kw_text = str(keyword_id)
-        # 优先通过ID从数据库查找
-        if keyword_id > 0:
-            all_keywords = db_manager.get_all_keywords()
-            for kw in all_keywords:
-                if kw.get('id') == keyword_id:
-                    kw_text = kw['keyword']
-                    break
-        # 兜底：从分组关键词列表中匹配
-        if kw_text == str(keyword_id):
-            for kw in group.get('keywords', []):
-                if isinstance(kw, dict) and kw.get('id') == keyword_id:
-                    kw_text = kw['keyword']
-                    break
-                elif isinstance(kw, str) and kw == str(keyword_id):
-                    kw_text = kw
-                    break
+        # 获取关键词文本
+        if isinstance(keyword_data, dict):
+            kw_text = keyword_data.get('text', '')
+        else:
+            kw_text = str(keyword_data)
 
         reply = QMessageBox.question(
             self, '确认删除',
