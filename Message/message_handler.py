@@ -79,6 +79,16 @@ class AIAutoReplyHandler(MessageHandler):
         except Exception:
             self._fallback_reply = self.DEFAULT_FALLBACK_REPLY
 
+        # 如果没有提供bot实例，尝试创建默认的CozeBot
+        if not self.bot:
+            try:
+                from Agent.bot_factory import create_bot
+                self.bot = create_bot()
+                self.logger.debug("已创建默认AI Bot实例")
+            except Exception as e:
+                self.logger.warning(f"创建AI Bot失败: {e}，将使用规则回复")
+                self.bot = None
+
     def _get_random_fallback(self) -> str:
         """
         随机获取一个兜底回复
@@ -92,16 +102,6 @@ class AIAutoReplyHandler(MessageHandler):
             return self._fallback_reply
         else:
             return self.DEFAULT_FALLBACK_REPLY[0]
-
-        # 如果没有提供bot实例，尝试创建默认的CozeBot
-        if not self.bot:
-            try:
-                from Agent.bot_factory import create_bot
-                self.bot = create_bot()
-                self.logger.debug("已创建默认AI Bot实例")
-            except Exception as e:
-                self.logger.warning(f"创建AI Bot失败: {e}，将使用规则回复")
-                self.bot = None
 
     def __del__(self):
         """析构函数，确保线程池被正确关闭"""
