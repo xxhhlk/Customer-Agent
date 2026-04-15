@@ -389,12 +389,13 @@ class UserSequentialProcessor:
         )
         
         # 开始等待
-        staff_reply_event_manager.start_waiting(from_uid)
+        event_id = staff_reply_event_manager.start_waiting(from_uid)
         staff_wait_elapsed = 0.0
         
         try:
             staff_replied = await staff_reply_event_manager.wait_for_staff_reply(
                 from_uid, 
+                event_id,
                 timeout=wait_seconds
             )
             
