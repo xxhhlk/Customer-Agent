@@ -387,7 +387,7 @@ class UserSequentialProcessor:
             f"用户 {self.user_id} 等待人工客服回复 "
             f"(最多{wait_seconds}秒)"
         )
-        
+
         # 开始等待
         event_id = staff_reply_event_manager.start_waiting(from_uid)
         staff_wait_elapsed = 0.0
@@ -490,26 +490,35 @@ class UserSequentialProcessor:
                     f"已记录到message_wrapper"
                 )
 
-            # AI处理器：并行运行处理 + 新消息监听
+            # AI处理器：并行运行处理 + 新消息监听 + 人工回复监听
             ai_start_time = time.time()
             original_content = context.content if context.type == ContextType.TEXT else None
             original_kwargs = dict(context.kwargs)
+            from_uid = context.kwargs.get('from_uid', '')
 
             ai_task = asyncio.create_task(handler.handle(context, message_wrapper))
             queue_task = asyncio.create_task(self.message_queue.get())
+            # 创建人工回复监听任务，超时设置为AI处理的最大超时时间
+            from Message.staff_reply_event import staff_reply_event_manager
+            staff_reply_event_id = staff_reply_event_manager.start_waiting(from_uid)
+            staff_reply_task = asyncio.create_task(
+                staff_reply_event_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=300)
+            )
 
             try:
                 while True:
                     done, pending_tasks = await asyncio.wait(
-                        {ai_task, queue_task},
+                        {ai_task, queue_task, staff_reply_task},
                         return_when=asyncio.FIRST_COMPLETED
                     )
 
                     if ai_task in done:
                         # AI完成了（正常或异常）
                         queue_task.cancel()
+                        staff_reply_task.cancel()
                         try:
                             await queue_task
+                            await staff_reply_task
                         except asyncio.CancelledError:
                             pass
                         self._ai_pending = None
@@ -517,8 +526,33 @@ class UserSequentialProcessor:
 
                     elif queue_task in done:
                         # 新消息到了
+                        staff_reply_task.cancel()
+                        try:
+                            await staff_reply_task
+                        except asyncio.CancelledError:
+                            pass
                         new_msg = queue_task.result()
                         elapsed = time.time() - ai_start_time
+
+                    elif staff_reply_task in done:
+                        # 人工客服回复了，取消AI处理
+                        staff_replied = staff_reply_task.result()
+                        ai_task.cancel()
+                        queue_task.cancel()
+                        try:
+                            await ai_task
+                            await queue_task
+                        except asyncio.CancelledError:
+                            pass
+                        
+                        self.logger.info(
+                            f"用户 {self.user_id} AI处理过程中收到人工客服回复，取消AI流程"
+                        )
+                        self._ai_pending = None
+                        return
+            finally:
+                # 确保无论什么情况都清理人工等待状态
+                staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
 
                         if elapsed < self.CANCEL_WINDOW:
                             # 在取消窗口内 → 取消AI，收集新消息，设置pending
