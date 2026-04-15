@@ -535,26 +535,6 @@ class UserSequentialProcessor:
                         elapsed = time.time() - ai_start_time
 
                         if elapsed < self.CANCEL_WINDOW:
-
-                    elif staff_reply_task in done:
-                        # 人工客服回复了，取消AI处理
-                        staff_replied = staff_reply_task.result()
-                        ai_task.cancel()
-                        queue_task.cancel()
-                        try:
-                            await ai_task
-                            await queue_task
-                        except asyncio.CancelledError:
-                            pass
-                        
-                        self.logger.info(
-                            f"用户 {self.user_id} AI处理过程中收到人工客服回复，取消AI流程"
-                        )
-                        self._ai_pending = None
-                        return
-            finally:
-                # 确保无论什么情况都清理人工等待状态
-                staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
                             # 在取消窗口内 → 取消AI，收集新消息，设置pending
                             ai_task.cancel()
                             try:
@@ -596,6 +576,26 @@ class UserSequentialProcessor:
                             # 创建新的 queue_task 继续监听
                             queue_task = asyncio.create_task(self.message_queue.get())
                             # 继续下一轮wait，AI如果完成了自然返回
+
+                    elif staff_reply_task in done:
+                        # 人工客服回复了，取消AI处理
+                        staff_replied = staff_reply_task.result()
+                        ai_task.cancel()
+                        queue_task.cancel()
+                        try:
+                            await ai_task
+                            await queue_task
+                        except asyncio.CancelledError:
+                            pass
+                        
+                        self.logger.info(
+                            f"用户 {self.user_id} AI处理过程中收到人工客服回复，取消AI流程"
+                        )
+                        self._ai_pending = None
+                        return
+            finally:
+                # 确保无论什么情况都清理人工等待状态
+                staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
 
             except Exception as e:
                 ai_task.cancel()
