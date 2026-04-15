@@ -415,7 +415,7 @@ class UserSequentialProcessor:
                 return False, staff_wait_elapsed
         finally:
             # 确保清理等待状态
-            staff_reply_event_manager.stop_waiting(from_uid)
+            staff_reply_event_manager.stop_waiting(from_uid, event_id)
 
     async def _process_single_message(self, message_wrapper: Dict[str, Any]):
         """
