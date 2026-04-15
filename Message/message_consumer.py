@@ -593,15 +593,14 @@ class UserSequentialProcessor:
                         )
                         self._ai_pending = None
                         return
-            finally:
-                # 确保无论什么情况都清理人工等待状态
-                staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
-
             except Exception as e:
                 ai_task.cancel()
                 queue_task.cancel()
                 self.logger.error(f"用户 {self.user_id} 并行处理异常: {e}")
                 raise
+            finally:
+                # 确保无论什么情况都清理人工等待状态
+                staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
 
         except Exception as e:
             self.logger.error(f"用户 {self.user_id} 处理消息 {message_id} 时发生异常: {e}")
