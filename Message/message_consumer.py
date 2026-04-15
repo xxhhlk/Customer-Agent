@@ -225,33 +225,81 @@ class UserSequentialProcessor:
 
         self.logger.debug(f"用户 {self.user_id} 开始防抖收集, buffered初始长度={len(buffered)}, id={id(buffered)}")
 
-        while True:
-            try:
-                # 等待新消息，每次收到都重置倒计时
-                message = await asyncio.wait_for(
-                    self.message_queue.get(),
-                    timeout=debounce_seconds
+        # 防抖期人工回复监听
+        from Message.staff_reply_event import staff_reply_event_manager
+        staff_replied = False
+        staff_reply_task = None
+        staff_reply_event_id = None
+        from_uid = ""
+        # 从第一条消息获取from_uid
+        if buffered:
+            first_context = buffered[0]['context']
+            from_uid = first_context.kwargs.get('from_uid', '')
+            if from_uid:
+                # 启动人工回复监听
+                staff_reply_event_id = staff_reply_event_manager.start_waiting(from_uid)
+                staff_reply_task = asyncio.create_task(
+                    staff_reply_event_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=debounce_seconds)
                 )
-                # 添加类型检查日志
-                if not isinstance(message, dict):
-                    self.logger.warning(f"用户 {self.user_id} 收到非dict类型消息: {type(message)}, value={message}")
-                self.logger.debug(f"用户 {self.user_id} 收到新消息, buffered当前长度={len(buffered)}, 准备追加")
-                buffered.append(message)
-                self.logger.debug(f"用户 {self.user_id} 追加后buffered长度={len(buffered)}")
-
-                # 夜间时段每次收到新消息都刷新倒计时
-                if is_night:
-                    self.logger.info(f"用户 {self.user_id} 夜间时段收到新消息，重置{debounce_seconds}秒倒计时")
-
-                # 继续循环，重新等待，实现"刷新倒计时"
-            except asyncio.TimeoutError:
-                # 超时无新消息，收集结束
-                self.logger.debug(f"用户 {self.user_id} 防抖超时, buffered最终长度={len(buffered)}, id={id(buffered)}")
-                if len(buffered) > 1:
-                    self.logger.info(f"用户 {self.user_id} 防抖收集完成，合并 {len(buffered)} 条消息")
-                if is_night:
-                    self.logger.info(f"用户 {self.user_id} 夜间防抖结束，准备发送合并消息")
-                break
+        try:
+            while True:
+                # 构建等待任务列表
+                wait_tasks = [asyncio.wait_for(self.message_queue.get(), timeout=debounce_seconds)]
+                if staff_reply_task and not staff_reply_task.done():
+                    wait_tasks.append(staff_reply_task)
+                
+                # 等待第一个完成的任务
+                done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+                
+                if staff_reply_task in done:
+                    # 收到人工回复，停止收集
+                    staff_replied = staff_reply_task.result()
+                    if staff_replied:
+                        self.logger.info(f"用户 {self.user_id} 防抖期收到人工客服回复，停止消息收集，丢弃{len(buffered)}条消息")
+                        buffered.clear()  # 清空消息，后续不再处理
+                        break
+                
+                # 处理新消息
+                try:
+                    message = done.pop().result()
+                    # 添加类型检查日志
+                    if not isinstance(message, dict):
+                        self.logger.warning(f"用户 {self.user_id} 收到非dict类型消息: {type(message)}, value={message}")
+                    self.logger.debug(f"用户 {self.user_id} 收到新消息, buffered当前长度={len(buffered)}, 准备追加")
+                    buffered.append(message)
+                    self.logger.debug(f"用户 {self.user_id} 追加后buffered长度={len(buffered)}")
+                    # 夜间时段每次收到新消息都刷新倒计时
+                    if is_night:
+                        self.logger.info(f"用户 {self.user_id} 夜间时段收到新消息，重置{debounce_seconds}秒倒计时")
+                    # 重新创建监听任务（因为超时时间重置了）
+                    if staff_reply_event_id:
+                        staff_reply_task.cancel()
+                        try:
+                            await staff_reply_task
+                        except asyncio.CancelledError:
+                            pass
+                        staff_reply_task = asyncio.create_task(
+                            staff_reply_event_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=debounce_seconds)
+                        )
+                    # 继续循环，重新等待
+                except asyncio.TimeoutError:
+                    # 超时无新消息，收集结束
+                    self.logger.debug(f"用户 {self.user_id} 防抖超时, buffered最终长度={len(buffered)}, id={id(buffered)}")
+                    if len(buffered) > 1:
+                        self.logger.info(f"用户 {self.user_id} 防抖收集完成，合并 {len(buffered)} 条消息")
+                    if is_night:
+                        self.logger.info(f"用户 {self.user_id} 夜间防抖结束，准备发送合并消息")
+                    break
+        finally:
+            # 清理人工等待状态
+            if staff_reply_event_id and from_uid:
+                staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
+                if staff_reply_task:
+                    staff_reply_task.cancel()
+                    try:
+                        await staff_reply_task
+                    except asyncio.CancelledError:
+                        pass
     
     async def _process_batch(self, messages: list):
         """处理一批消息（可能是合并后的）"""
