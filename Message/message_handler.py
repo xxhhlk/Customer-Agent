@@ -784,6 +784,8 @@ class BusinessHoursHandler(MessageHandler):
         now = datetime.now().time()
         start_time = datetime.strptime(self.business_hours['start'], '%H:%M').time()
         end_time = datetime.strptime(self.business_hours['end'], '%H:%M').time()
+        # 给结束时间加上59秒，覆盖整分钟所有时间
+        end_time = end_time.replace(second=59)
         
         return start_time <= now <= end_time
 

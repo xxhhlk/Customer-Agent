@@ -434,6 +434,12 @@ class UserSequentialProcessor:
         """
         message_id = message_wrapper['id']
         context = message_wrapper['context']
+        
+        # 统一打印收到的消息日志
+        username = context.kwargs.get("username", "")
+        nickname = context.kwargs.get("nickname", "")
+        from_uid = context.kwargs.get("from_uid", "")
+        self.logger.info(f"[{username}]收到用户[{nickname}]({from_uid})消息: 类型={context.type.name}, 内容={self._context_to_text(context)}")
 
         try:
             # 查找处理器
