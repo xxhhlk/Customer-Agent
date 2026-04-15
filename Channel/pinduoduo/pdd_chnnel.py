@@ -410,7 +410,7 @@ class PDDChannel(Channel):
                 
             elif context.type == ContextType.MALL_CS:
                 # 其他客服消息，通常不需要回复
-                self.logger.debug(f"收到客服消息: {context.content}")
+                self.logger.info(f"收到客服消息: {context.content}")
                 
                 # 通知人工客服已回复（用于人工优先回复功能）
                 # 注意：客服发送消息时，from_uid 是客服ID，to_uid 是买家ID
