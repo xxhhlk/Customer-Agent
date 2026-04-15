@@ -534,6 +534,8 @@ class UserSequentialProcessor:
                         new_msg = queue_task.result()
                         elapsed = time.time() - ai_start_time
 
+                        if elapsed < self.CANCEL_WINDOW:
+
                     elif staff_reply_task in done:
                         # 人工客服回复了，取消AI处理
                         staff_replied = staff_reply_task.result()
@@ -553,8 +555,6 @@ class UserSequentialProcessor:
             finally:
                 # 确保无论什么情况都清理人工等待状态
                 staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
-
-                        if elapsed < self.CANCEL_WINDOW:
                             # 在取消窗口内 → 取消AI，收集新消息，设置pending
                             ai_task.cancel()
                             try:
