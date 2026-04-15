@@ -359,6 +359,63 @@ class UserSequentialProcessor:
             self.logger.error(f"转换context到文本失败: {e}")
             return ""
     
+    async def _check_staff_reply(self, context) -> tuple[bool, float]:
+        """
+        检查人工客服是否已回复
+        
+        Args:
+            context: 消息上下文
+            
+        Returns:
+            tuple[bool, float]: (人工是否已回复, 等待耗时秒数)
+        """
+        from config import config
+        from Message.staff_reply_event import staff_reply_event_manager
+        
+        staff_wait_config = config.get_staff_reply_wait_config()
+        enable_staff_wait = staff_wait_config['enable']
+        wait_seconds = staff_wait_config['wait_seconds']
+        
+        if not enable_staff_wait:
+            return False, 0.0
+        
+        from_uid = context.kwargs.get('from_uid', '')
+        if not from_uid:
+            return False, 0.0
+        
+        self.logger.info(
+            f"用户 {self.user_id} 等待人工客服回复 "
+            f"(最多{wait_seconds}秒)"
+        )
+        
+        # 开始等待
+        staff_reply_event_manager.start_waiting(from_uid)
+        staff_wait_elapsed = 0.0
+        
+        try:
+            staff_replied = await staff_reply_event_manager.wait_for_staff_reply(
+                from_uid, 
+                timeout=wait_seconds
+            )
+            
+            if staff_replied:
+                # 人工客服已回复
+                self.logger.info(
+                    f"用户 {self.user_id} 人工客服已回复，跳过AI处理"
+                )
+                return True, 0.0
+            else:
+                # 超时，继续AI处理
+                staff_wait_elapsed = wait_seconds
+                self.logger.info(
+                    f"用户 {self.user_id} 等待人工客服超时({wait_seconds}秒)，"
+                    f"继续AI处理"
+                )
+                return False, staff_wait_elapsed
+        finally:
+            # 确保清理等待状态
+            staff_reply_event_manager.stop_waiting(from_uid)
+
     async def _process_single_message(self, message_wrapper: Dict[str, Any]):
         """
         处理单条消息 - 并行执行AI处理和新消息监听
@@ -414,50 +471,9 @@ class UserSequentialProcessor:
                     return
 
             # AI处理器：检查是否需要等待人工客服回复
-            from config import config
-            from Message.staff_reply_event import staff_reply_event_manager
-            
-            staff_wait_config = config.get_staff_reply_wait_config()
-            enable_staff_wait = staff_wait_config['enable']
-            wait_seconds = staff_wait_config['wait_seconds']
-            
-            staff_wait_elapsed = 0.0
-            
-            if enable_staff_wait:
-                # 启用人工等待 → 等待人工客服回复（全天生效）
-                from_uid = context.kwargs.get('from_uid', '')
-                
-                if from_uid:
-                    self.logger.info(
-                        f"用户 {self.user_id} 等待人工客服回复 "
-                        f"(最多{wait_seconds}秒)"
-                    )
-                    
-                    # 开始等待
-                    staff_reply_event_manager.start_waiting(from_uid)
-                    
-                    try:
-                        staff_replied = await staff_reply_event_manager.wait_for_staff_reply(
-                            from_uid, 
-                            timeout=wait_seconds
-                        )
-                        
-                        if staff_replied:
-                            # 人工客服已回复，取消AI处理
-                            self.logger.info(
-                                f"用户 {self.user_id} 人工客服已回复，跳过AI处理"
-                            )
-                            return
-                        else:
-                            # 超时，继续AI处理
-                            staff_wait_elapsed = wait_seconds
-                            self.logger.info(
-                                f"用户 {self.user_id} 等待人工客服超时({wait_seconds}秒)，"
-                                f"继续AI处理"
-                            )
-                    finally:
-                        # 确保清理等待状态
-                        staff_reply_event_manager.stop_waiting(from_uid)
+            staff_replied, staff_wait_elapsed = await self._check_staff_reply(context)
+            if staff_replied:
+                return
             
             # 将等待时间传递给AI处理器（用于扣除超时时间）
             if staff_wait_elapsed > 0:
@@ -585,6 +601,20 @@ class UserSequentialProcessor:
             )
             new_kwargs = buffered_new[-1].copy()
             new_kwargs['context'] = new_context
+
+        # 检查人工客服是否已回复（新增！）
+        staff_replied, _ = await self._check_staff_reply(new_context)
+        if staff_replied:
+            # 人工客服已回复，取消旧的 Coze chat 并直接返回
+            if chat_info:
+                bot = self._find_ai_bot()
+                if bot and hasattr(bot, 'cancel_chat'):
+                    try:
+                        bot.cancel_chat(chat_info['chat_id'], chat_info['conversation_id'])
+                        self.logger.info(f"用户 {self.user_id} 人工已回复，取消旧chat")
+                    except Exception as e:
+                        self.logger.warning(f"用户 {self.user_id} 取消旧chat失败: {e}")
+            return
 
         # 先走非AI处理器（如关键词检测），返回False则继续找下一个处理器
         # 取消重发时，新消息也应该经过关键词检测
