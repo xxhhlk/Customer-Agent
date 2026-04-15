@@ -243,8 +243,9 @@ class UserSequentialProcessor:
                 )
         try:
             while True:
-                # 构建等待任务列表
-                wait_tasks = [asyncio.wait_for(self.message_queue.get(), timeout=debounce_seconds)]
+                # 构建等待任务列表，必须包装为Task对象，不能直接传协程
+                queue_wait_task = asyncio.create_task(asyncio.wait_for(self.message_queue.get(), timeout=debounce_seconds))
+                wait_tasks = [queue_wait_task]
                 if staff_reply_task and not staff_reply_task.done():
                     wait_tasks.append(staff_reply_task)
                 
