@@ -422,7 +422,7 @@ class AIAutoReplyHandler(MessageHandler):
             self.logger.error(f"发送回复失败: {e}")
             return False
     
-    async     def _send_single_reply(self, reply, sender, from_uid: str) -> bool:
+    async def _send_single_reply(self, reply, sender, from_uid: str) -> bool:
         """发送单个回复"""
         try:
             from bridge.reply import ReplyType
