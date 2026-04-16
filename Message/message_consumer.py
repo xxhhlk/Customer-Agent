@@ -961,7 +961,8 @@ class MessageConsumer:
                 for user_id in inactive_users:
                     processor = self.user_processors.pop(user_id, None)
                     if processor:
-                        await processor.stop()
+                        if hasattr(processor, 'stop') and callable(getattr(processor, 'stop')):
+                            await processor.stop()
                         self.logger.debug(f"清理用户 {user_id} 的不活跃处理器")
                         
         except asyncio.CancelledError:
@@ -973,7 +974,8 @@ class MessageConsumer:
         """停止所有用户处理器"""
         tasks = []
         for processor in self.user_processors.values():
-            tasks.append(processor.stop())
+            if hasattr(processor, 'stop') and callable(getattr(processor, 'stop')):
+                tasks.append(processor.stop())
         
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
