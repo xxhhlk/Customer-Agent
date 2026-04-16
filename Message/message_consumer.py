@@ -324,6 +324,11 @@ class UserSequentialProcessor:
 
     async def _process_batch(self, messages: list):
         """处理一批消息（可能是合并后的）"""
+        # 空列表直接返回
+        if not messages:
+            self.logger.debug(f"用户 {self.user_id} _process_batch: 消息列表为空，跳过处理")
+            return
+        
         # 添加调试日志，记录消息数量和类型
         self.logger.debug(f"用户 {self.user_id} _process_batch: messages类型={type(messages)}, len={len(messages)}")
         if messages:
