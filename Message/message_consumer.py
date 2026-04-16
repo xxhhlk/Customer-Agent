@@ -328,11 +328,28 @@ class UserSequentialProcessor:
         if not messages:
             self.logger.debug(f"用户 {self.user_id} _process_batch: 消息列表为空，跳过处理")
             return
-        
+
         # 添加调试日志，记录消息数量和类型
         self.logger.debug(f"用户 {self.user_id} _process_batch: messages类型={type(messages)}, len={len(messages)}")
         if messages:
             self.logger.debug(f"用户 {self.user_id} 第一条消息类型={type(messages[0])}, keys={list(messages[0].keys()) if isinstance(messages[0], dict) else 'N/A'}")
+
+        # 检查是否只有图片/视频消息（没有文本）
+        has_text = False
+        has_media = False
+        for msg in messages:
+            ctx = msg.get('context')
+            if ctx:
+                if ctx.type == ContextType.TEXT:
+                    has_text = True
+                    break
+                elif ctx.type in (ContextType.IMAGE, ContextType.VIDEO):
+                    has_media = True
+
+        # 如果只有图片/视频没有文本，直接回复提示语
+        if has_media and not has_text:
+            await self._handle_media_only(messages)
+            return
 
         if len(messages) == 1:
             # 单条消息，直接处理
@@ -372,7 +389,53 @@ class UserSequentialProcessor:
         merged_wrapper['merged_count'] = len(messages)
         
         await self._process_single_message(merged_wrapper)
-    
+
+    async def _handle_media_only(self, messages: list):
+        """
+        处理纯图片/视频消息（没有文本）
+        直接发送提示语，不走AI流程
+        """
+        try:
+            # 从第一条消息获取必要信息
+            first_msg = messages[0]
+            context = first_msg.get('context')
+            if not context:
+                return
+
+            shop_id = context.kwargs.get('shop_id')
+            user_id = context.kwargs.get('user_id')
+            from_uid = context.kwargs.get('from_uid')
+            username = context.kwargs.get('username', '')
+            nickname = context.kwargs.get('nickname', '')
+
+            if not all([shop_id, user_id, from_uid]):
+                self.logger.warning("纯媒体消息缺少必要信息，跳过处理")
+                return
+
+            # 统计消息类型
+            media_types = []
+            for msg in messages:
+                ctx = msg.get('context')
+                if ctx:
+                    if ctx.type == ContextType.IMAGE:
+                        media_types.append('图片')
+                    elif ctx.type == ContextType.VIDEO:
+                        media_types.append('视频')
+
+            self.logger.info(
+                f"[{username}] 用户[{nickname}]({from_uid}) 发送纯媒体消息: {', '.join(media_types)}"
+            )
+
+            # 发送提示语
+            from Channel.pinduoduo.utils.API.send_message import SendMessage
+            sender = SendMessage(shop_id, user_id)
+            reply_text = "请问您具体想问什么问题呢？"
+            sender.send_text(from_uid, reply_text)
+            self.logger.info(f"[{username}] 已向用户[{nickname}]发送媒体消息提示")
+
+        except Exception as e:
+            self.logger.error(f"处理纯媒体消息失败: {e}")
+
     def _context_to_text(self, context: Context) -> str:
         """将不同类型的 context 转换为文本，保留关键信息"""
         try:
