@@ -172,13 +172,16 @@ class UserSequentialProcessor:
         else:
             return self.DEBOUNCE_SECONDS
     
-    async def add_message(self, message_wrapper: Dict[str, Any]):
-        """添加消息到用户队列"""
-        await self.message_queue.put(message_wrapper)
-        
-        # 启动处理器（如果未运行）
-        if not self.is_processing:
-            self.processor_task = asyncio.create_task(self._process_user_messages())
+async def add_message(self, message_wrapper: Dict[str, Any]):
+    """添加消息到用户队列，先校验消息类型，过滤无效消息"""
+    if not isinstance(message_wrapper, dict):
+        self.logger.debug(f"过滤无效消息，类型：{type(message_wrapper)}，值：{message_wrapper}")
+        return
+    await self.message_queue.put(message_wrapper)
+    
+    # 启动处理器（如果未运行）
+    if not self.is_processing:
+        self.processor_task = asyncio.create_task(self._process_user_messages())
     
     async def _process_user_messages(self):
         """处理用户消息队列（防抖合并处理 + AI超时中断重发）"""
@@ -225,22 +228,27 @@ class UserSequentialProcessor:
 
         self.logger.debug(f"用户 {self.user_id} 开始防抖收集, buffered初始长度={len(buffered)}, id={id(buffered)}")
 
-        # 防抖期人工回复监听
-        from Message.staff_reply_event import staff_reply_event_manager
-        staff_replied = False
-        staff_reply_task = None
-        staff_reply_event_id = None
-        from_uid = ""
-        # 从第一条消息获取from_uid
-        if buffered:
-            first_context = buffered[0]['context']
-            from_uid = first_context.kwargs.get('from_uid', '')
-            if from_uid:
-                # 启动人工回复监听
-                staff_reply_event_id = staff_reply_event_manager.start_waiting(from_uid)
-                staff_reply_task = asyncio.create_task(
-                    staff_reply_event_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=debounce_seconds)
-                )
+    # 防抖期人工回复监听
+    from Message.staff_reply_event import staff_reply_event_manager
+    staff_replied = False
+    staff_reply_task = None
+    staff_reply_event_id = None
+    from_uid = ""
+    # 从第一条消息获取from_uid
+    if buffered:
+        first_context = buffered[0]['context']
+        from_uid = first_context.kwargs.get('from_uid', '')
+        if from_uid:
+            # 先清理之前可能存在的未结束监听，避免重复start导致stop时找不到记录
+            try:
+                staff_reply_event_manager.stop_waiting(from_uid, None)
+            except Exception as e:
+                self.logger.debug(f"清理旧人工监听异常：{e}")
+            # 启动人工回复监听
+            staff_reply_event_id = staff_reply_event_manager.start_waiting(from_uid)
+            staff_reply_task = asyncio.create_task(
+                staff_reply_event_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=debounce_seconds)
+            )
         try:
             while True:
                 # 构建等待任务列表，必须包装为Task对象，不能直接传协程
@@ -294,13 +302,16 @@ class UserSequentialProcessor:
         finally:
             # 清理人工等待状态
             if staff_reply_event_id and from_uid:
-                staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
-                if staff_reply_task:
-                    staff_reply_task.cancel()
-                    try:
-                        await staff_reply_task
-                    except asyncio.CancelledError:
-                        pass
+                try:
+                    staff_reply_event_manager.stop_waiting(from_uid, staff_reply_event_id)
+                    if staff_reply_task:
+                        staff_reply_task.cancel()
+                        try:
+                            await staff_reply_task
+                        except asyncio.CancelledError:
+                            pass
+                except Exception as e:
+                    self.logger.debug(f"清理人工监听异常：{e}")
     
     async def _process_batch(self, messages: list):
         """处理一批消息（可能是合并后的）"""
