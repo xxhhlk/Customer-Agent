@@ -172,13 +172,13 @@ class UserSequentialProcessor:
         else:
             return self.DEBOUNCE_SECONDS
     
-async def add_message(self, message_wrapper: Dict[str, Any]):
-    """添加消息到用户队列，先校验消息类型，过滤无效消息"""
-    if not isinstance(message_wrapper, dict):
-        self.logger.debug(f"过滤无效消息，类型：{type(message_wrapper)}，值：{message_wrapper}")
-        return
-    await self.message_queue.put(message_wrapper)
-    
+    async def add_message(self, message_wrapper: Dict[str, Any]):
+        """添加消息到用户队列，先校验消息类型，过滤无效消息"""
+        if not isinstance(message_wrapper, dict):
+            self.logger.debug(f"过滤无效消息，类型：{type(message_wrapper)}，值：{message_wrapper}")
+            return
+        await self.message_queue.put(message_wrapper)
+
         # 启动处理器（如果未运行）
         if not self.is_processing:
             self.processor_task = asyncio.create_task(self._process_user_messages())
