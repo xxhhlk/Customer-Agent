@@ -260,6 +260,7 @@ class UserSequentialProcessor:
                 # 等待第一个完成的任务
                 done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
                 
+                # 检查人工回复任务
                 if staff_reply_task in done:
                     # 收到人工回复，停止收集
                     staff_replied = staff_reply_task.result()
@@ -267,10 +268,18 @@ class UserSequentialProcessor:
                         self.logger.info(f"用户 {self.user_id} 防抖期收到人工客服回复，停止消息收集，丢弃{len(buffered)}条消息")
                         buffered.clear()  # 清空消息，后续不再处理
                         break
+                    else:
+                        # 人工回复超时（返回False），从done中移除，继续检查队列任务
+                        done.discard(staff_reply_task)
+                
+                # 检查是否有队列消息任务完成
+                if queue_wait_task not in done:
+                    # 没有新消息，继续循环等待
+                    continue
                 
                 # 处理新消息
                 try:
-                    message = done.pop().result()
+                    message = queue_wait_task.result()
                     # 添加类型检查日志
                     if not isinstance(message, dict):
                         self.logger.warning(f"用户 {self.user_id} 收到非dict类型消息: {type(message)}, value={message}")
