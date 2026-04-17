@@ -28,6 +28,18 @@ class AIAutoReplyHandler(MessageHandler):
     # 默认兜底回复（限流和AI无回复时使用）
     DEFAULT_FALLBACK_REPLY = ["这个我不了解呢，帮你问下我们的技术人员"]
     
+    # AI回复兜底模式关键词（当AI回复包含这些关键词时，替换为配置的兜底回复）
+    FALLBACK_PATTERNS = [
+        "不知道",
+        "不清楚",
+        "不了解",
+        "帮你反馈",
+        "反馈给",
+        "技术人员",
+        "无法回答",
+        "无法解答"
+    ]
+    
     def __init__(self, bot=None, auto_reply_types: Set[ContextType] = None, enable_fallback: bool = True, max_workers: int = 5):
         """
         初始化AI自动回复处理器
@@ -102,6 +114,26 @@ class AIAutoReplyHandler(MessageHandler):
             return self._fallback_reply
         else:
             return self.DEFAULT_FALLBACK_REPLY[0]
+    
+    def _is_fallback_pattern(self, reply_content: str) -> bool:
+        """
+        检测AI回复是否匹配兜底模式
+        
+        Args:
+            reply_content: AI回复内容
+            
+        Returns:
+            bool: 是否匹配兜底模式
+        """
+        if not reply_content or not isinstance(reply_content, str):
+            return False
+        
+        # 检查是否包含兜底模式关键词
+        for pattern in self.FALLBACK_PATTERNS:
+            if pattern in reply_content:
+                return True
+        
+        return False
 
     def __del__(self):
         """析构函数，确保线程池被正确关闭"""
@@ -214,6 +246,12 @@ class AIAutoReplyHandler(MessageHandler):
             if pending_info:
                 reply = await self._cancel_and_resend(context, pending_info)
                 if reply:
+                    # 检查AI回复是否为兜底模式
+                    if self._is_fallback_pattern(reply.content):
+                        self.logger.info(f"'{username}'取消重发AI回复匹配兜底模式，替换为配置的兜底回复")
+                        from bridge.reply import Reply, ReplyType
+                        reply = Reply(ReplyType.TEXT, self._get_random_fallback())
+                    
                     await self._send_reply(reply, shop_id, user_id, from_uid)
                     self.logger.info(f"'{username}'取消重发回复用户'{nickname}': {reply.content[:100]}")
                 else:
@@ -238,6 +276,12 @@ class AIAutoReplyHandler(MessageHandler):
                 
                 reply = await self._get_ai_reply(context, timeout=ai_timeout)
                 if reply:
+                    # 检查AI回复是否为兜底模式
+                    if self._is_fallback_pattern(reply.content):
+                        self.logger.info(f"'{username}'AI回复匹配兜底模式，替换为配置的兜底回复")
+                        from bridge.reply import Reply, ReplyType
+                        reply = Reply(ReplyType.TEXT, self._get_random_fallback())
+                    
                     await self._send_reply(reply, shop_id, user_id, from_uid)
                     self.logger.info(f"'{username}'回复用户'{nickname}': {reply.content[:100]}")
                 else:
