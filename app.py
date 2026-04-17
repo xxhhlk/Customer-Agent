@@ -4,6 +4,12 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QSharedMemory
 
+# 设置高DPI支持必须在导入 QApplication 之前
+if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
+if hasattr(Qt.ApplicationAttribute, 'AA_UseHighDpiPixmaps'):
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
+
 from ui.main_ui import MainWindow
 from utils.logger import get_logger
 
@@ -33,13 +39,45 @@ def main():
     # 共享内存创建成功，继续正常启动
     logger.info("单实例检查通过，继续启动...")
 
-    # 启用高分屏支持
-    if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
-    if hasattr(Qt.ApplicationAttribute, 'AA_UseHighDpiPixmaps'):
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
-
+    # 创建应用实例
     app = QApplication(sys.argv)
+    
+    # 设置应用程序跟随系统深色模式
+    from qfluentwidgets import setTheme, Theme
+    from PyQt6.QtGui import QPalette
+    from PyQt6.QtCore import QEvent
+    
+    def update_theme():
+        """根据系统主题更新应用主题"""
+        palette = app.palette()
+        # 通过背景色亮度判断是否为深色模式
+        bg_color = palette.color(QPalette.ColorRole.Window)
+        is_dark = bg_color.lightness() < 128
+        
+        if is_dark:
+            setTheme(Theme.DARK)
+            logger.info("切换到深色模式")
+        else:
+            setTheme(Theme.LIGHT)
+            logger.info("切换到浅色模式")
+    
+    # 初始化主题
+    update_theme()
+    
+    # 监听系统主题变化
+    class ThemeChangeListener:
+        def __init__(self):
+            self.last_theme = None
+            
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Type.PaletteChange:
+                # 延迟更新，避免频繁触发
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(100, update_theme)
+            return False
+    
+    theme_listener = ThemeChangeListener()
+    app.installEventFilter(theme_listener)
     
     # 在Windows上设置AppUserModelID，以确保任务栏图标正确显示
     try:
