@@ -585,7 +585,10 @@ class KeywordManagerWidget(QFrame):
         # 创建滚动区域（放卡片列表）
         self.scroll_area = ScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.scroll_area.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollArea > QWidget > QWidget { background: transparent; }
+        """)
 
         # 卡片容器
         self.cards_container = QWidget()
