@@ -257,7 +257,7 @@ class KeywordTestDialog(QDialog):
         # 结果显示区域（滚动）
         self.result_scroll = ScrollArea()
         self.result_scroll.setWidgetResizable(True)
-        self.result_scroll.setStyleSheet("QScrollArea { border: 1px solid #e0e0e0; border-radius: 4px; background: white; }")
+        self.result_scroll.setStyleSheet("QScrollArea { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; }")
         
         self.result_container = QWidget()
         self.result_layout = QVBoxLayout(self.result_container)
@@ -344,8 +344,7 @@ class KeywordTestDialog(QDialog):
             card = QFrame()
             card.setStyleSheet("""
                 QFrame {
-                    background: #f8f9fa;
-                    border: 1px solid #e0e0e0;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
                     border-radius: 6px;
                     padding: 10px;
                 }
@@ -511,7 +510,7 @@ class GroupCard(QFrame):
                 # 显示匹配类型图标 + 关键词
                 type_icon = type_labels.get(kw_type, '🔍')
                 kw_label = QLabel(f"{type_icon} {kw_text}")
-                kw_label.setStyleSheet("font-size: 13px; color: #333;")
+                kw_label.setStyleSheet("font-size: 13px;")
                 kw_row_layout.addWidget(kw_label)
 
                 kw_row_layout.addStretch()

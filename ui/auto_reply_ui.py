@@ -605,7 +605,6 @@ class AutoReplyCard(CardWidget):
         # 店铺名称
         shop_name_label = StrongBodyLabel(self.shop_name)
         shop_name_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        shop_name_label.setStyleSheet("color: #2c3e50;")
         
         # 平台标签
         platform_badge = InfoBadge.info(self.platform, self)
@@ -638,12 +637,10 @@ class AutoReplyCard(CardWidget):
         
         # 标签
         label = CaptionLabel(label_text)
-        label.setStyleSheet("color: #7f8c8d; font-weight: 500;")
         label.setFixedWidth(60)
-        
+
         # 值
         value = BodyLabel(value_text)
-        value.setStyleSheet("color: #34495e;")
         
         row_layout.addWidget(label)
         row_layout.addWidget(value)

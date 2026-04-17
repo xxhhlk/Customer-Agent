@@ -76,24 +76,22 @@ class LogDisplayWidget(QTextEdit):
         self.setReadOnly(True)
         self.setFont(QFont("Consolas", 10))
         
-        # 设置样式 - 白色背景
+        # 设置样式
         self.setStyleSheet("""
             QTextEdit {
-                background-color: #ffffff;
-                color: #333333;
-                border: 1px solid #cccccc;
+                border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 6px;
                 padding: 8px;
             }
         """)
         
-        # 日志级别颜色配置 - 适配白色背景
+        # 日志级别颜色配置 - 适配深浅色模式
         self.level_colors = {
-            'DEBUG': QColor(100, 100, 100),     # 深灰色
-            'INFO': QColor(0, 128, 0),          # 绿色
-            'WARNING': QColor(255, 140, 0),     # 橙色
-            'ERROR': QColor(220, 20, 60),       # 深红色
-            'CRITICAL': QColor(139, 0, 0)       # 暗红色
+            'DEBUG': QColor(150, 150, 150),     # 灰色
+            'INFO': QColor(0, 180, 0),          # 绿色
+            'WARNING': QColor(255, 180, 0),     # 橙色
+            'ERROR': QColor(255, 80, 80),       # 红色
+            'CRITICAL': QColor(255, 50, 50)     # 亮红色
         }
         
         # 最大显示行数
