@@ -76,12 +76,13 @@ class LogDisplayWidget(QTextEdit):
         self.setReadOnly(True)
         self.setFont(QFont("Consolas", 10))
         
-        # 设置样式
+        # 设置样式 - 适配深浅色模式
         self.setStyleSheet("""
             QTextEdit {
                 border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 6px;
                 padding: 8px;
+                background: transparent;
             }
         """)
         

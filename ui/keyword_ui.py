@@ -257,9 +257,10 @@ class KeywordTestDialog(QDialog):
         # 结果显示区域（滚动）
         self.result_scroll = ScrollArea()
         self.result_scroll.setWidgetResizable(True)
-        self.result_scroll.setStyleSheet("QScrollArea { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; }")
+        self.result_scroll.setStyleSheet("QScrollArea { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; background: transparent; }")
         
         self.result_container = QWidget()
+        self.result_container.setStyleSheet("background: transparent;")
         self.result_layout = QVBoxLayout(self.result_container)
         self.result_layout.setContentsMargins(15, 15, 15, 15)
         self.result_layout.setSpacing(10)
