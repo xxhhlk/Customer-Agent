@@ -4,6 +4,10 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QSharedMemory
 
+# 禁用 QPainter 警告（这些警告通常不影响功能）
+import os
+os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false'
+
 # 设置高DPI支持必须在导入 QApplication 之前
 if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
