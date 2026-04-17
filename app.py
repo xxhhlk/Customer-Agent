@@ -50,20 +50,40 @@ def main():
     from qfluentwidgets import setTheme, Theme
     from PyQt6.QtGui import QPalette
     from PyQt6.QtCore import QEvent, QObject, QTimer
+    import winreg
     
     # 主题更新防抖标志和当前主题状态
     theme_update_pending = False
     current_theme = None  # 记录当前主题状态
+    
+    def is_windows_dark_mode():
+        """检测 Windows 系统是否为深色模式"""
+        try:
+            # Windows 10/11 深色模式注册表路径
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                0,
+                winreg.KEY_READ
+            )
+            # AppsUseLightTheme: 0 = 深色, 1 = 浅色
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            winreg.CloseKey(key)
+            return value == 0
+        except Exception as e:
+            logger.debug(f"无法从注册表读取系统主题: {e}")
+            # 回退到调色板检测
+            palette = app.palette()
+            bg_color = palette.color(QPalette.ColorRole.Window)
+            return bg_color.lightness() < 128
     
     def update_theme():
         """根据系统主题更新应用主题"""
         nonlocal theme_update_pending, current_theme
         theme_update_pending = False
         
-        palette = app.palette()
-        # 通过背景色亮度判断是否为深色模式
-        bg_color = palette.color(QPalette.ColorRole.Window)
-        is_dark = bg_color.lightness() < 128
+        # 使用注册表检测 Windows 深色模式
+        is_dark = is_windows_dark_mode()
         
         # 检测到的主题
         detected_theme = Theme.DARK if is_dark else Theme.LIGHT
