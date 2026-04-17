@@ -511,6 +511,7 @@ class GroupCard(QFrame):
                 # 显示匹配类型图标 + 关键词
                 type_icon = type_labels.get(kw_type, '🔍')
                 kw_label = BodyLabel(f"{type_icon} {kw_text}")
+                kw_label.setStyleSheet("font-size: 13px;")  # 只设置字体大小，颜色继承主题
                 kw_row_layout.addWidget(kw_label)
 
                 kw_row_layout.addStretch()
