@@ -4,13 +4,14 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                             QInputDialog, QMessageBox, QTextEdit, QSizePolicy,
-                            QDialog)
-from PyQt6.QtGui import QFont, QIcon
+                            QDialog, QScrollArea)
+from PyQt6.QtGui import QFont, QIcon, QColor
 from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton,
                            ScrollArea, FluentIcon as FIF,
-                           TableWidget, ComboBox, LineEdit)
+                           TableWidget, ComboBox, LineEdit, StrongBodyLabel)
 from database.db_manager import db_manager
+from Message.keyword_matcher import matcher_factory
 
 
 class KeywordEditDialog(QDialog):
@@ -210,6 +211,184 @@ class GroupEditDialog(QDialog):
 
     def get_result(self) -> dict:
         return getattr(self, '_result', None)
+
+
+class KeywordTestDialog(QDialog):
+    """关键词测试对话框"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("关键词匹配测试")
+        self.setModal(True)
+        self.resize(600, 500)
+        self.setupUI()
+    
+    def setupUI(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(24, 20, 24, 20)
+        
+        # 说明文字
+        hint_label = CaptionLabel("输入测试消息，查看会匹配哪些关键词")
+        hint_label.setStyleSheet("color: #888;")
+        layout.addWidget(hint_label)
+        
+        # 输入区域
+        input_label = BodyLabel("测试消息")
+        self.message_edit = QTextEdit()
+        self.message_edit.setPlaceholderText("请输入要测试的消息内容...")
+        self.message_edit.setMinimumHeight(80)
+        layout.addWidget(input_label)
+        layout.addWidget(self.message_edit)
+        
+        # 测试按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        test_btn = PrimaryPushButton("开始测试")
+        test_btn.setFixedSize(120, 34)
+        test_btn.clicked.connect(self._on_test)
+        btn_layout.addWidget(test_btn)
+        layout.addLayout(btn_layout)
+        
+        # 结果标题
+        result_title = StrongBodyLabel("匹配结果")
+        layout.addWidget(result_title)
+        
+        # 结果显示区域（滚动）
+        self.result_scroll = ScrollArea()
+        self.result_scroll.setWidgetResizable(True)
+        self.result_scroll.setStyleSheet("QScrollArea { border: 1px solid #e0e0e0; border-radius: 4px; background: white; }")
+        
+        self.result_container = QWidget()
+        self.result_layout = QVBoxLayout(self.result_container)
+        self.result_layout.setContentsMargins(15, 15, 15, 15)
+        self.result_layout.setSpacing(10)
+        self.result_layout.addStretch()
+        
+        self.result_scroll.setWidget(self.result_container)
+        layout.addWidget(self.result_scroll, 1)
+        
+        # 关闭按钮
+        close_btn = PushButton("关闭")
+        close_btn.setFixedSize(100, 34)
+        close_btn.clicked.connect(self.accept)
+        close_layout = QHBoxLayout()
+        close_layout.addStretch()
+        close_layout.addWidget(close_btn)
+        layout.addLayout(close_layout)
+    
+    def _on_test(self):
+        """执行测试"""
+        message = self.message_edit.toPlainText().strip()
+        if not message:
+            QMessageBox.warning(self, '提示', '请输入测试消息！')
+            return
+        
+        # 清空之前的结果
+        while self.result_layout.count() > 1:
+            item = self.result_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # 获取所有分组数据
+        groups = db_manager.get_all_keyword_groups()
+        if not groups:
+            no_data_label = CaptionLabel("暂无关键词数据")
+            no_data_label.setStyleSheet("color: #999; padding: 20px;")
+            self.result_layout.insertWidget(0, no_data_label)
+            return
+        
+        # 匹配结果
+        matched_groups = []
+        
+        for group in groups:
+            keywords = group.get('keywords', [])
+            matched_keywords = []
+            
+            for kw in keywords:
+                # 兼容新旧格式
+                if isinstance(kw, dict):
+                    kw_text = kw.get('text', '')
+                    kw_type = kw.get('match_type', 'partial')
+                else:
+                    kw_text = str(kw)
+                    kw_type = 'partial'
+                
+                # 使用匹配器测试
+                matcher = matcher_factory.get_matcher(kw_type)
+                if matcher.match(kw_text, message):
+                    matched_keywords.append({
+                        'text': kw_text,
+                        'match_type': kw_type
+                    })
+            
+            if matched_keywords:
+                matched_groups.append({
+                    'group': group,
+                    'keywords': matched_keywords
+                })
+        
+        # 显示结果
+        if not matched_groups:
+            no_match_label = CaptionLabel("❌ 未匹配到任何关键词")
+            no_match_label.setStyleSheet("color: #e74c3c; padding: 20px; font-size: 14px;")
+            self.result_layout.insertWidget(0, no_match_label)
+            return
+        
+        # 显示匹配结果
+        for match_info in matched_groups:
+            group = match_info['group']
+            keywords = match_info['keywords']
+            
+            # 创建结果卡片
+            card = QFrame()
+            card.setStyleSheet("""
+                QFrame {
+                    background: #f8f9fa;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 6px;
+                    padding: 10px;
+                }
+            """)
+            card_layout = QVBoxLayout(card)
+            card_layout.setSpacing(8)
+            
+            # 分组名称
+            group_name_label = StrongBodyLabel(f"📦 {group['group_name']}")
+            card_layout.addWidget(group_name_label)
+            
+            # 匹配的关键词
+            kw_text = "、".join([f"「{kw['text']}」" for kw in keywords])
+            kw_label = CaptionLabel(f"匹配关键词: {kw_text}")
+            kw_label.setWordWrap(True)
+            card_layout.addWidget(kw_label)
+            
+            # 操作类型
+            is_transfer = group.get('is_transfer', 0)
+            if is_transfer:
+                type_text = "🔄 转人工"
+                type_color = "#e74c3c"
+            elif group.get('pass_to_ai'):
+                type_text = "🤖 传AI"
+                type_color = "#3498db"
+            else:
+                type_text = "💬 自动回复"
+                type_color = "#27ae60"
+            
+            type_label = CaptionLabel(f"操作类型: {type_text}")
+            type_label.setStyleSheet(f"color: {type_color};")
+            card_layout.addWidget(type_label)
+            
+            # 回复内容
+            reply = group.get('reply', '')
+            if reply:
+                reply_preview = reply[:100] + ("..." if len(reply) > 100 else "")
+                reply_label = CaptionLabel(f"回复内容: {reply_preview}")
+                reply_label.setWordWrap(True)
+                reply_label.setStyleSheet("color: #666;")
+                card_layout.addWidget(reply_label)
+            
+            self.result_layout.insertWidget(self.result_layout.count() - 1, card)
 
 
 class GroupCard(QFrame):
@@ -443,6 +622,11 @@ class KeywordManagerWidget(QFrame):
         title_layout.addWidget(title_label)
         title_layout.addWidget(self.stats_label)
 
+        # 测试匹配按钮
+        self.test_btn = PushButton("🧪 测试匹配")
+        self.test_btn.setFixedSize(120, 40)
+        self.test_btn.clicked.connect(self.onTestKeywords)
+
         # 添加分组按钮
         self.add_group_btn = PrimaryPushButton("添加分组")
         self.add_group_btn.setIcon(FIF.ADD)
@@ -451,6 +635,7 @@ class KeywordManagerWidget(QFrame):
 
         header_layout.addWidget(title_area)
         header_layout.addStretch()
+        header_layout.addWidget(self.test_btn)
         header_layout.addWidget(self.add_group_btn)
 
         return header_widget
@@ -721,3 +906,8 @@ class KeywordManagerWidget(QFrame):
     def reloadKeywords(self):
         """重新加载关键词数据"""
         self.loadFromDB()
+    
+    def onTestKeywords(self):
+        """打开关键词测试对话框"""
+        dlg = KeywordTestDialog(parent=self)
+        dlg.exec()
