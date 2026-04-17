@@ -45,7 +45,7 @@ def main():
     # 设置应用程序跟随系统深色模式
     from qfluentwidgets import setTheme, Theme
     from PyQt6.QtGui import QPalette
-    from PyQt6.QtCore import QEvent
+    from PyQt6.QtCore import QEvent, QObject, QTimer
     
     def update_theme():
         """根据系统主题更新应用主题"""
@@ -65,14 +65,14 @@ def main():
     update_theme()
     
     # 监听系统主题变化
-    class ThemeChangeListener:
+    class ThemeChangeListener(QObject):
         def __init__(self):
+            super().__init__()
             self.last_theme = None
             
         def eventFilter(self, obj, event):
             if event.type() == QEvent.Type.PaletteChange:
                 # 延迟更新，避免频繁触发
-                from PyQt6.QtCore import QTimer
                 QTimer.singleShot(100, update_theme)
             return False
     
