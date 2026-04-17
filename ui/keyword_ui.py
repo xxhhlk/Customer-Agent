@@ -220,7 +220,7 @@ class KeywordTestDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("关键词匹配测试")
         self.setModal(True)
-        self.resize(600, 500)
+        self.resize(700, 600)
         self.setupUI()
     
     def setupUI(self):
@@ -237,7 +237,7 @@ class KeywordTestDialog(QDialog):
         input_label = BodyLabel("测试消息")
         self.message_edit = QTextEdit()
         self.message_edit.setPlaceholderText("请输入要测试的消息内容...")
-        self.message_edit.setMinimumHeight(80)
+        self.message_edit.setFixedHeight(60)
         layout.addWidget(input_label)
         layout.addWidget(self.message_edit)
         
@@ -266,7 +266,7 @@ class KeywordTestDialog(QDialog):
         self.result_layout.addStretch()
         
         self.result_scroll.setWidget(self.result_container)
-        layout.addWidget(self.result_scroll, 1)
+        layout.addWidget(self.result_scroll, 1)  # 设置伸展因子为1，让结果区域占据剩余空间
         
         # 关闭按钮
         close_btn = PushButton("关闭")
