@@ -47,13 +47,13 @@ def main():
     from PyQt6.QtGui import QPalette
     from PyQt6.QtCore import QEvent, QObject, QTimer
     
-    # 主题更新定时器和防抖标志
-    theme_timer = None
+    # 主题更新防抖标志和当前主题状态
     theme_update_pending = False
+    current_theme = None  # 记录当前主题状态
     
     def update_theme():
         """根据系统主题更新应用主题"""
-        nonlocal theme_update_pending
+        nonlocal theme_update_pending, current_theme
         theme_update_pending = False
         
         palette = app.palette()
@@ -61,6 +61,15 @@ def main():
         bg_color = palette.color(QPalette.ColorRole.Window)
         is_dark = bg_color.lightness() < 128
         
+        # 检测到的主题
+        detected_theme = Theme.DARK if is_dark else Theme.LIGHT
+        
+        # 如果主题没有变化，不执行更新
+        if current_theme == detected_theme:
+            return
+        
+        # 更新主题
+        current_theme = detected_theme
         if is_dark:
             setTheme(Theme.DARK)
             logger.info("切换到深色模式")
@@ -75,10 +84,9 @@ def main():
     class ThemeChangeListener(QObject):
         def __init__(self):
             super().__init__()
-            self.last_theme = None
             
         def eventFilter(self, obj, event):
-            nonlocal theme_timer, theme_update_pending
+            nonlocal theme_update_pending
             
             if event.type() == QEvent.Type.PaletteChange:
                 # 如果已有定时器在运行，不创建新的
