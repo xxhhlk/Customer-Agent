@@ -589,6 +589,7 @@ class KeywordManagerWidget(QFrame):
 
         # 卡片容器
         self.cards_container = QWidget()
+        self.cards_container.setStyleSheet("background: transparent;")
         self.cards_layout = QVBoxLayout(self.cards_container)
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
         self.cards_layout.setSpacing(15)
