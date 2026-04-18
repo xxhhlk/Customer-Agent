@@ -29,6 +29,8 @@ class KeywordEditDialog(QDialog):
         self.setWindowTitle("编辑关键词" if self.is_edit else "添加关键词")
         self.setModal(True)
         self.resize(420, 200)
+        # 适配深色模式
+        self.setStyleSheet("QDialog { background: transparent; }")
         self.setupUI()
 
     def setupUI(self):
@@ -106,6 +108,8 @@ class GroupEditDialog(QDialog):
         self.setWindowTitle("编辑分组" if self.is_edit else "添加分组")
         self.setModal(True)
         self.resize(480, 420)
+        # 适配深色模式
+        self.setStyleSheet("QDialog { background: transparent; }")
         self.setupUI()
 
     def setupUI(self):
@@ -221,6 +225,8 @@ class KeywordTestDialog(QDialog):
         self.setWindowTitle("关键词匹配测试")
         self.setModal(True)
         self.resize(700, 600)
+        # 适配深色模式
+        self.setStyleSheet("QDialog { background: transparent; }")
         self.setupUI()
     
     def setupUI(self):

@@ -752,6 +752,8 @@ class EditAccountDialog(QDialog):
         self.setWindowTitle("编辑账号")
         self.setModal(True)
         self.resize(400, 350)
+        # 适配深色模式
+        self.setStyleSheet("QDialog { background: transparent; }")
         self.setupUI()
     
     def setupUI(self):
@@ -877,6 +879,8 @@ class AddAccountDialog(QDialog):
         self.setWindowTitle("通过登录添加账号")
         self.setModal(True)
         self.resize(400, 200)
+        # 适配深色模式
+        self.setStyleSheet("QDialog { background: transparent; }")
         self.setupUI()
     
     def setupUI(self):
