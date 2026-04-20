@@ -85,9 +85,7 @@ class WildcardMatcher(KeywordMatcher):
     
     @staticmethod
     def _wildcard_to_regex(pattern: str) -> str:
-        """将通配符模式转换为正则表达式，自动添加首尾星号实现部分匹配"""
-        # 自动添加首尾星号，实现部分匹配效果
-        pattern = f"*{pattern}*"
+        """将通配符模式转换为正则表达式"""
         # 先转义正则特殊字符，然后替换通配符
         regex = re.escape(pattern)
         regex = regex.replace(r'\*', '.*')  # * -> 任意字符序列
