@@ -558,6 +558,8 @@ class CustomerServiceTransferHandler(MessageHandler):
 
     # 用于去掉关键词后的分隔符
     _SEPARATOR_RE = re.compile(r'[,，.;；!！?？、\s]+')
+    # 用于去除结尾的分隔符
+    _TRAILING_SEPARATOR_RE = re.compile(r'[,，.;；!！?？、\s]+$')
     # 循环匹配最大次数（防止死循环）
     _MAX_LOOP = 10
     # 回复分隔符（用于合并多个回复）
@@ -654,7 +656,8 @@ class CustomerServiceTransferHandler(MessageHandler):
                 return False
 
             original_content = context.content  # 保存原始消息
-            remaining = original_content  # 保持原始大小写，用于匹配
+            # 去除结尾的符号
+            remaining = self._TRAILING_SEPARATOR_RE.sub('', original_content)
             transferred = False  # 是否已执行转人工
             loop_count = 0
             
