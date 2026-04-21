@@ -55,3 +55,10 @@ Thumbs.db
 .DS_Store
 .spec-workflow/
 chroma_db/
+
+# WorkBuddy
+.workbuddy/
+
+# Virtual environment
+venv/
+.venv/
