@@ -103,7 +103,7 @@ class UserSequentialProcessor:
     """用户消息顺序处理器 - 支持防抖合并 + AI超时中断重发 + 夜间延迟"""
 
     # 防抖等待时间（秒）
-    DEBOUNCE_SECONDS = 5
+    DEBOUNCE_SECONDS = 8
     # 夜间防抖等待时间（秒）- 5分钟
     NIGHT_DEBOUNCE_SECONDS = 300
     # 夜间时段配置（小时:分钟）
