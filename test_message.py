@@ -3,6 +3,7 @@
 直接调用AI Bot测试脚本
 """
 import sys
+import json
 from bridge.context import Context, ContextType, ChannelType
 from Agent.bot_factory import create_bot
 
@@ -22,12 +23,21 @@ def main():
     # 创建Bot
     bot = create_bot()
     
-    # 创建Context
+    # 构造消息内容（JSON格式）
+    content = json.dumps([{"type": "text", "text": text}], ensure_ascii=False)
+    
+    # 创建Context，添加必要的参数
     context = Context(
         type=ContextType.TEXT,
-        content=text,
+        content=content,
         channel_type=ChannelType.PINDUODUO,
-        kwargs={}
+        kwargs={
+            'shop_id': 'test_shop_1',
+            'user_id': 'test_user_1',
+            'from_uid': 'test_from_1',
+            'username': '测试店铺',
+            'nickname': '测试用户'
+        }
     )
     
     # 调用Bot
