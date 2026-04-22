@@ -946,16 +946,12 @@ class DatabaseManager:
         finally:
             session.close()
 
-_db_instance = None
-
 def get_db_manager() -> "DatabaseManager":
-    global _db_instance
-    if _db_instance is None:
-        _db_instance = DatabaseManager()
-    return _db_instance
+    """从 DI 容器获取 DatabaseManager 单例"""
+    from core.di_container import container
+    return container.get(DatabaseManager)
 
-class _LazyDBProxy:
-    def __getattr__(self, name):
-        return getattr(get_db_manager(), name)
-
-db_manager = _LazyDBProxy()
+# 代理对象，支持 `from database.db_manager import db_manager` 的导入方式
+# 底层通过 get_db_manager() 从 DI 容器获取实例
+from core.service_providers import _create_proxy
+db_manager = _create_proxy(DatabaseManager)
