@@ -196,15 +196,19 @@ def adjust_config_for_runtime(config: dict) -> dict:
             if not path.is_absolute():
                 adjusted_config["db_path"] = str(path.absolute())
 
-    # 调整知识库相关路径
-    if "knowledge_base" in adjusted_config:
-        kb_config = adjusted_config["knowledge_base"]
+    # 调整知识库相关路径 - 确保总是有默认值
+    if "knowledge_base" not in adjusted_config:
+        adjusted_config["knowledge_base"] = {}
 
-        if "contents_db_path" in kb_config:
-            kb_config["contents_db_path"] = str(get_contents_db_path())
+    kb_config = adjusted_config["knowledge_base"]
 
-        if "vector_db_path" in kb_config:
-            kb_config["vector_db_path"] = str(get_vector_db_path())
+    # 确保有 contents_db_path
+    if not kb_config.get("contents_db_path"):
+        kb_config["contents_db_path"] = str(get_contents_db_path())
+
+    # 确保有 vector_db_path
+    if not kb_config.get("vector_db_path"):
+        kb_config["vector_db_path"] = str(get_vector_db_path())
 
     # 调整其他可能的路径配置
     path_keys = [
