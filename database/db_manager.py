@@ -26,7 +26,10 @@ class DatabaseManager:
         """
         if self._initialized:
             return
-            
+        
+        # 打印实际使用的数据库路径
+        print(f"[DatabaseManager] 使用数据库路径: {db_path}")
+        
         # 确保数据库目录存在
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         

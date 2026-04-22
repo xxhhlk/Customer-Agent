@@ -333,9 +333,10 @@ def configure_standard_services(config_instance: Any = None) -> 'DIContainer':
         db_path = "./temp/channel_shop.db"
         if config_instance is not None:
             db_path = config_instance.get("db_path", db_path)
+        print(f"[DI Container] 配置中的 db_path: {db_path}")
         container.register_singleton(
             DatabaseManager,
-            factory=lambda: DatabaseManager(db_path=db_path)
+            factory=lambda db_path=db_path: DatabaseManager(db_path=db_path)
         )
 
     # 注：QueueManager、MessageConsumerManager、CacheManager
