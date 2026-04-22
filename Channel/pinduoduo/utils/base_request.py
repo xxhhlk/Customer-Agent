@@ -129,7 +129,7 @@ class BaseRequest:
         from utils.async_helper import run_async_in_thread
 
         async def _run_wrapper() -> Any:
-            return func(*args)
+            return await func(*args)  # 必须使用 await 才能真正执行异步函数
 
         return run_async_in_thread(_run_wrapper(), timeout=60.0)
 

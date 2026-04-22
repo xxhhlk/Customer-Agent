@@ -63,10 +63,19 @@ logger = logging.getLogger(__name__)
 
 class KnowledgeManager:
     def __init__(self):
+        import os
         config = Config()
 
+        # 获取内容数据库路径并确保目录存在
+        contents_db_path = config.get("knowledge_base.contents_db_path")
+        if contents_db_path:
+            db_dir = os.path.dirname(contents_db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+                logger.info(f"确保内容数据库目录存在: {db_dir}")
+
         # 创建内容数据库
-        contents_db = SqliteDb(db_file=config.get("knowledge_base.contents_db_path"))
+        contents_db = SqliteDb(db_file=contents_db_path)
 
         # 创建向量数据库 - 使用增强版本（如果可用）
         # 配置嵌入器

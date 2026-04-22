@@ -167,9 +167,11 @@ def get_contents_db_path() -> Path:
     获取内容数据库路径
 
     Returns:
-        Path: 内容数据库的绝对路径
+        Path: 内容数据库的绝对路径（文件路径，非目录）
     """
-    return ensure_temp_dir("contents.db")
+    # 确保父目录存在，返回文件路径
+    db_dir = ensure_temp_dir()
+    return db_dir / "contents.db"
 
 
 
@@ -195,6 +197,12 @@ def adjust_config_for_runtime(config: dict) -> dict:
             path = Path(adjusted_config["db_path"])
             if not path.is_absolute():
                 adjusted_config["db_path"] = str(path.absolute())
+        
+        # 确保数据库目录存在
+        db_path = Path(adjusted_config["db_path"])
+        db_dir = db_path.parent
+        if not db_dir.exists():
+            db_dir.mkdir(parents=True, exist_ok=True)
 
     # 调整知识库相关路径 - 确保总是有默认值
     if "knowledge_base" not in adjusted_config:
@@ -205,10 +213,22 @@ def adjust_config_for_runtime(config: dict) -> dict:
     # 确保有 contents_db_path
     if not kb_config.get("contents_db_path"):
         kb_config["contents_db_path"] = str(get_contents_db_path())
+    
+    # 确保内容数据库目录存在
+    contents_db_path = Path(kb_config["contents_db_path"])
+    contents_db_dir = contents_db_path.parent
+    if not contents_db_dir.exists():
+        contents_db_dir.mkdir(parents=True, exist_ok=True)
 
     # 确保有 vector_db_path
     if not kb_config.get("vector_db_path"):
         kb_config["vector_db_path"] = str(get_vector_db_path())
+    
+    # 确保向量数据库目录存在
+    vector_db_path = Path(kb_config["vector_db_path"])
+    vector_db_dir = vector_db_path.parent if vector_db_path.suffix else vector_db_path
+    if not vector_db_dir.exists():
+        vector_db_dir.mkdir(parents=True, exist_ok=True)
 
     # 调整其他可能的路径配置
     path_keys = [
