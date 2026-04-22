@@ -1,65 +1,178 @@
-__pycache__
+# ============================================
+# Python 项目 .gitignore 配置文件
+# 项目: Agent-Customer (拼多多智能客服系统)
+# ============================================
+
+# ====================
+# Python 编译文件
+# ====================
+__pycache__/
+*.py[cod]
+*$py.class
 *.pyc
 *.pyo
 *.pyd
 *.pyw
 *.pyz
 *.pywz
-*.exe
-*.spec
-!scripts/*.spec
-browser_data/*
-*.log
-examples/
-logs/
-dist
-build
-.venv
-user_data/
-*.db
-*.db
-config.json
-temp/
-.claude/
-*.env
-.env*
-# Backup directories
-backup/
-*.backup
-.bak/
 
-# Serena project files
-.serena/
+# ====================
+# Python 分发和打包
+# ====================
+*.egg
+*.egg-info/
+*.manifest
+dist/
+build/
+wheels/
+*.whl
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
 
-# Temporary and cache files
-temp/
-tmp/
-*.tmp
-*.temp
+# ====================
+# 虚拟环境
+# ====================
+.venv/
+venv/
+ENV/
+env/
+.env
 
-# IDE and editor files
+# ====================
+# 测试和代码质量
+# ====================
+.pytest_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+.hypothesis/
+
+# ====================
+# IDE 和编辑器
+# ====================
+# VSCode
 .vscode/
+
+# PyCharm
 .idea/
+
+# Vim
 *.swp
 *.swo
 *~
 
-# OS generated files
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ====================
+# 操作系统生成文件
+# ====================
+# macOS
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
-ehthumbs.db
+
+# Windows
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-.DS_Store
-.spec-workflow/
+# Linux
+*~
+
+# ====================
+# 项目特定目录
+# ====================
+# 用户数据
+user_data/
+
+# 临时文件
+temp/
+tmp/
+*.tmp
+*.temp
+
+# 日志文件
+logs/
+*.log
+
+# 浏览器数据 (Playwright)
+browser_data/
+.browsers/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 向量数据库
 chroma_db/
+*.lance/
+.vector_cache/
 
+# 备份文件
+backup/
+*.backup
+.bak/
+
+# 配置文件 (包含敏感信息)
+config.json
+*.env
+.env*
+
+# ====================
+# 工具和框架特定
+# ====================
 # WorkBuddy
 .workbuddy/
 
-# Virtual environment
-venv/
-.venv/
+# Serena
+.serena/
+
+# Claude
+.claude/
+
+# Qwen
+.qwen/
+
+# Spec workflow
+.spec-workflow/
+
+# ====================
+# PyInstaller 打包
+# ====================
+*.spec
+# 但保留 scripts 目录下的 spec 文件
+!scripts/*.spec
+
+# ====================
+# 其他
+# ====================
+# 示例代码
+examples/
+
+# 文档构建
+docs/_build/
+site/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# mypy
+.mypy_cache/
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
