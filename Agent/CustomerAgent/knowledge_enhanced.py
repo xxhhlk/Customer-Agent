@@ -13,7 +13,7 @@
 import asyncio
 import logging
 from enum import Enum
-from typing import Callable, Optional, List, Any, Dict
+from typing import Callable, Optional, List, Any, Dict, Protocol
 
 # 导入 agno 基类
 from agno.vectordb.lancedb import LanceDb
@@ -35,10 +35,16 @@ class ImportStage(Enum):
     SAVING = "saving"          # 保存到数据库
 
 
-ProgressCallback = Callable[
-    [ImportStage, int, int, str, Optional[Dict]],  # (stage, current, total, message, metadata)
-    None
-]
+class ProgressCallback(Protocol):
+    """进度回调协议"""
+    def __call__(
+        self,
+        stage: ImportStage,
+        current: int,
+        total: int,
+        message: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None: ...
 
 
 class CancelToken:

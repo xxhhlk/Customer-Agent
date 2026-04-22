@@ -13,7 +13,7 @@ from Agent.bot import Bot
 class AIReplyHandler(BaseHandler):
     """专注的AI回复处理器"""
 
-    def __init__(self, bot: Bot = None, auto_reply_types: set = None):
+    def __init__(self, bot: Optional[Bot] = None, auto_reply_types: Optional[set] = None):
         super().__init__("AIReplyHandler")
         # 从 DI 容器获取 CustomerAgent（如果未传入）
         if bot is None:
@@ -45,7 +45,8 @@ class AIReplyHandler(BaseHandler):
         """处理AI回复"""
         try:
             # 1. 预处理消息
-            processed_content = self.preprocessor.process(context.content, context.type)
+            content = context.content if context.content else ""
+            processed_content = self.preprocessor.process(content, context.type)
 
             # 2. 调用AI生成回复
             reply = await self._get_ai_reply(processed_content, context)
@@ -96,14 +97,14 @@ class AIReplyHandler(BaseHandler):
             user_id = metadata.get('user_id')
             from_uid = metadata.get('from_uid')
 
-            if not all([shop_id, user_id, from_uid]):
+            if not shop_id or not user_id or not from_uid:
                 self.logger.warning(f"缺少发送信息: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
                 return False
 
             # 尝试发送消息
             from Channel.pinduoduo.utils.API.send_message import SendMessage
-            sender = SendMessage(shop_id, user_id)
-            result = sender.send_text(from_uid, reply)
+            sender = SendMessage(str(shop_id), str(user_id))
+            result = sender.send_text(str(from_uid), reply)
             if isinstance(result, dict) and result.get("success"):
                 return True
             return False

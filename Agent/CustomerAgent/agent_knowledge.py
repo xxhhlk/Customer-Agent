@@ -141,8 +141,10 @@ class KnowledgeManager:
                 # 重新连接数据库确保数据被写入
                 if hasattr(self.knowledge, 'contents_db') and self.knowledge.contents_db:
                     # 创建新的连接来验证数据
-                    test_db = SqliteDb(db_file=self.knowledge.contents_db.db_file)
-                    logger.info(f"内容数据库连接测试成功: {self.knowledge.contents_db.db_file}")
+                    db_file = getattr(self.knowledge.contents_db, 'db_file', None)
+                    if db_file:
+                        test_db = SqliteDb(db_file=db_file)
+                        logger.info(f"内容数据库连接测试成功: {db_file}")
             except Exception as db_err:
                 logger.warning(f"内容数据库连接测试失败: {db_err}")
 
@@ -152,7 +154,7 @@ class KnowledgeManager:
             logger.error(f"导入文件失败 {file_path}: {str(e)}")
             raise
 
-    def search_knowledge(self, query: str, limit: int = None) -> list:
+    def search_knowledge(self, query: str, limit: Optional[int] = None) -> list:
         """
         搜索知识库内容
 

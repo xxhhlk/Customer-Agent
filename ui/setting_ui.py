@@ -2,12 +2,13 @@
 
 import json
 import os
+from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel, 
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QFormLayout, QGroupBox, QMessageBox)
 from PyQt6.QtGui import QFont
-from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel, 
-                           PrimaryPushButton, PushButton, StrongBodyLabel, 
+from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
+                           PrimaryPushButton, PushButton, StrongBodyLabel,
                            LineEdit, ComboBox, ScrollArea, FluentIcon as FIF,
                            InfoBar, InfoBarPosition, TextEdit, PasswordLineEdit,
                            TimePicker)
@@ -21,11 +22,11 @@ from config import config
 class LLMConfigCard(CardWidget):
     """LLM配置卡片"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupUI()
 
-    def setupUI(self):
+    def setupUI(self) -> None:
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -87,11 +88,11 @@ class LLMConfigCard(CardWidget):
 class EmbedderConfigCard(CardWidget):
     """嵌入器配置卡片"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupUI()
 
-    def setupUI(self):
+    def setupUI(self) -> None:
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -152,11 +153,11 @@ class EmbedderConfigCard(CardWidget):
 class KnowledgeConfigCard(CardWidget):
     """知识库配置卡片"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupUI()
 
-    def setupUI(self):
+    def setupUI(self) -> None:
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -210,11 +211,11 @@ class KnowledgeConfigCard(CardWidget):
 class PromptConfigCard(CardWidget):
     """提示词配置卡片"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupUI()
 
-    def setupUI(self):
+    def setupUI(self) -> None:
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -286,12 +287,12 @@ class PromptConfigCard(CardWidget):
 
 class BusinessHoursCard(CardWidget):
     """业务时间配置卡片"""
-    
-    def __init__(self, parent=None):
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupUI()
-    
-    def setupUI(self):
+
+    def setupUI(self) -> None:
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -362,17 +363,17 @@ class BusinessHoursCard(CardWidget):
 
 class SettingUI(QFrame):
     """设置界面"""
-    
-    def __init__(self, parent=None):
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent=parent)
         self.logger = get_logger("SettingUI")
         self.setupUI()
         self.loadConfig()
-        
+
         # 设置对象名
         self.setObjectName("设置")
-    
-    def setupUI(self):
+
+    def setupUI(self) -> None:
         """设置主界面UI"""
         # 主布局
         main_layout = QVBoxLayout(self)

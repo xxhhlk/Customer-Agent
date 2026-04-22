@@ -56,7 +56,7 @@ def get_resource_path(relative_path: Union[str, Path]) -> Path:
 
     # 在打包环境下，优先查找 _MEIPASS 目录（PyInstaller 临时目录）
     if hasattr(sys, '_MEIPASS'):
-        resource_dir = Path(sys._MEIPASS)
+        resource_dir = Path(getattr(sys, '_MEIPASS'))  # type: ignore[attr-defined]
         resource_path = resource_dir / relative_path
 
         # 如果在临时目录中找到资源，返回该路径
@@ -213,7 +213,7 @@ def adjust_config_for_runtime(config: dict) -> dict:
             # 如果是相对路径，转换为绝对路径
             path = Path(adjusted_config[key])
             if not path.is_absolute():
-                adjusted_config[key] = str(get_temp_dir() / path.name)
+                adjusted_config[key] = str(get_temp_path() / path.name)
 
     return adjusted_config
 

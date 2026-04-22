@@ -58,8 +58,8 @@ class EncodingConverter:
         Returns:
             (解码后的文本, 检测到的编码)
         """
-        content = None
-        detected_encoding = None
+        content: str
+        detected_encoding: str = 'unknown'
 
         for encoding in EncodingConverter.ENCODINGS:
             try:
@@ -71,7 +71,7 @@ class EncodingConverter:
                 continue
 
         # 如果所有编码都失败，使用忽略错误的方式
-        if content is None:
+        else:
             content = raw_data.decode('utf-8', errors='ignore')
             detected_encoding = 'utf-8 (ignore errors)'
             logger.warning("使用忽略错误的方式读取文件")

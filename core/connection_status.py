@@ -52,11 +52,13 @@ class ConnectionStatusManager:
     """
 
     _instance: Optional['ConnectionStatusManager'] = None
+    _connections: Dict[str, ConnectionStatus]
+    _lock: RLock
 
     def __new__(cls):
         if cls._instance is None:
             instance = super().__new__(cls)
-            instance._connections: Dict[str, ConnectionStatus] = {}
+            instance._connections = {}
             instance._lock = RLock()
             cls._instance = instance
         return cls._instance
@@ -67,7 +69,7 @@ class ConnectionStatusManager:
         user_id: str,
         username: str,
         state: ConnectionState,
-        error: str = None
+        error: Optional[str] = None
     ) -> None:
         """更新连接状态"""
         connection_key = f"{shop_id}_{user_id}"

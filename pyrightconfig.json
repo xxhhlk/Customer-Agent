@@ -1,0 +1,27 @@
+{
+  "include": [
+    "Agent",
+    "Channel",
+    "Message",
+    "bridge",
+    "core",
+    "database",
+    "ui",
+    "utils"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv"
+  ],
+  "venvPath": ".",
+  "venv": "venv",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": false,
+  "reportOptionalMemberAccess": "warning",
+  "reportOptionalCall": "warning",
+  "reportOptionalIterable": "warning",
+  "reportOptionalSubscript": "warning"
+}

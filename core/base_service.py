@@ -86,7 +86,7 @@ class ConfigurableService(BaseService):
         self.config_service = config_service
         self._config = {}
 
-    def load_config(self, config_key: str = None, default_config: Dict[str, Any] = None) -> Dict[str, Any]:
+    def load_config(self, config_key: Optional[str] = None, default_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """加载配置"""
         if default_config:
             self._config = default_config

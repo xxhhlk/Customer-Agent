@@ -2,10 +2,11 @@
 Message模块重构版入口
 保持向后兼容性的同时简化架构
 """
+from typing import Optional
 
 # 核心模块 - 新的简化实现
 from .core.queue import SimpleMessageQueue, queue_manager
-from .core.consumer import MessageConsumer, message_consumer_manager
+from .core.consumer import MessageConsumer, message_consumer_manager, MessageConsumerManager
 from .core.handlers import MessageHandler, TypeBasedHandler, ChannelBasedHandler, CatchAllHandler
 
 # 模型
@@ -16,6 +17,12 @@ from .models.queue_models import MessageWrapper, QueueStats
 from .handlers.base import BaseHandler
 from .handlers.ai_handler import AIReplyHandler
 from .handlers.preprocessor import MessagePreprocessor
+
+# 尝试导入关键词检测处理器
+try:
+    from .handlers.keyword_handler import KeywordDetectionHandler
+except ImportError:
+    KeywordDetectionHandler = None  # type: ignore[misc,assignment]
 
 # 管理器 - 直接使用核心队列管理器
 from .core.queue import QueueManager
@@ -47,12 +54,18 @@ def create_consumer(queue_name: str, max_concurrent: int = 10) -> MessageConsume
 
 def get_queue(name: str) -> SimpleMessageQueue:
     """获取消息队列（兼容原API）"""
-    return queue_manager.get_queue(name)
+    queue = queue_manager.get_queue(name)
+    if queue is None:
+        raise ValueError(f"Queue {name} not found")
+    return queue
 
 
 def get_consumer(queue_name: str) -> MessageConsumer:
     """获取消息消费者（兼容原API）"""
-    return message_consumer_manager.get_consumer(queue_name)
+    consumer = message_consumer_manager.get_consumer(queue_name)
+    if consumer is None:
+        raise ValueError(f"Consumer {queue_name} not found")
+    return consumer
 
 
 async def start_consumer(queue_name: str):
@@ -71,7 +84,7 @@ async def put_message(queue_name: str, context: Context) -> str:
     return await queue.put(context)
 
 
-async def get_message(queue_name: str, timeout: float = None):
+async def get_message(queue_name: str, timeout: Optional[float] = None):
     """从队列获取消息（兼容原API）"""
     queue = queue_manager.get_queue(queue_name)
     if queue:

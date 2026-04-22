@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from collections import deque
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QAbstractTableModel, QModelIndex
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QAbstractTableModel, QModelIndex, QObject
 from PyQt6.QtWidgets import (QFrame, QVBoxLayout, QHBoxLayout, QWidget,
                             QTextEdit, QFileDialog, QMessageBox, QSplitter,
                             QTableView, QHeaderView, QApplication,
@@ -20,7 +20,7 @@ from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
                            ComboBox, LineEdit, ScrollArea, FluentIcon as FIF,
                            InfoBar, InfoBarPosition, ToolButton, CheckBox)
-from utils.logger_loguru import get_logger, logger, UILogHandler
+from utils.logger_loguru import get_logger, logger, UILogHandler  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class LogHandler:
@@ -66,15 +66,23 @@ class LogSignalEmitter(QWidget):
     # 适配loguru的record类型
     log_received = pyqtSignal(str, str, object)  # level, message, record
 
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+
 
 class UILogManager:
     """UI日志管理器 - 适配loguru的日志处理器"""
-    _instance = None
-    _handlers = []
+    _instance: Optional["UILogManager"] = None
+    _handlers: List[Any] = []
 
-    def __new__(cls):
+    def __init__(self):
+        """初始化 - 单例模式下仅执行一次"""
+        pass
+
+    @classmethod
+    def get_instance(cls) -> "UILogManager":
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            cls._instance = cls.__new__(cls)  # pyright: ignore[reportCallIssue,reportGeneralTypeIssues]
         return cls._instance
 
     def add_handler(self, handler):
@@ -148,10 +156,10 @@ class LogModel(QAbstractTableModel):
     ModuleRole = Qt.ItemDataRole.UserRole + 4
     FileInfoRole = Qt.ItemDataRole.UserRole + 5
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._logs = deque(maxlen=10000)  # 使用循环缓冲区，最多保存10000条日志
-        self._filtered_logs = []
+        self._filtered_logs: List[LogItem] = []
         self._headers = ["时间", "级别", "模块", "文件", "消息"]
 
     def rowCount(self, parent=QModelIndex()):
@@ -254,7 +262,7 @@ class LogModel(QAbstractTableModel):
 class LogTableDelegate(QStyledItemDelegate):
     """自定义表格项渲染器"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
         self.highlight_text = ""
 
@@ -285,11 +293,12 @@ class LogTableDelegate(QStyledItemDelegate):
 class LogTableView(QTableView):
     """优化的日志表格视图"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
         # 设置模型
-        self.setModel(LogModel())
+        self._log_model = LogModel()
+        self.setModel(self._log_model)
 
         # 设置代理
         self.setItemDelegate(LogTableDelegate())
@@ -350,11 +359,11 @@ class LogTableView(QTableView):
 class LogDisplayWidget(QWidget):
     """日志显示组件容器"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._setup_ui()
         # 保存所有日志记录
-        self.all_logs = []
+        self.all_logs: List[tuple] = []
 
     def _setup_ui(self):
         """设置UI"""
@@ -372,12 +381,12 @@ class LogDisplayWidget(QWidget):
         self.all_logs.append(log_item)
 
         # 直接添加到模型（模型会根据当前过滤器进行处理）
-        self.log_table.model().add_log(level, message, record)
+        self.log_table._log_model.add_log(level, message, record)
 
     def clear_all(self):
         """清空所有日志"""
         self.all_logs.clear()
-        self.log_table.model().clear()
+        self.log_table._log_model.clear()
 
     def set_filter(self, filter_dict):
         """设置过滤条件"""
@@ -397,7 +406,7 @@ class LogDisplayWidget(QWidget):
             return True
 
         # 清空模型
-        model = self.log_table.model()
+        model = self.log_table._log_model
         model.clear()
 
         # 重新添加所有日志，让过滤器决定是否显示
@@ -418,7 +427,7 @@ class LogFilterWidget(CardWidget):
 
     filter_changed = pyqtSignal(dict)  # 过滤条件改变信号
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupUI()
         self.connectSignals()
@@ -490,7 +499,7 @@ class LogControlWidget(CardWidget):
     clear_logs = pyqtSignal()
     export_logs = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.export_format = "txt"  # 默认导出格式
         self.setupUI()
@@ -556,8 +565,8 @@ class LogControlWidget(CardWidget):
 
 class LogUI(QFrame):
     """日志管理界面"""
-    
-    def __init__(self, parent=None):
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.logger = get_logger()
 
@@ -624,12 +633,13 @@ class LogUI(QFrame):
         
         # 先连接信号，再添加处理器 - 使用QueuedConnection确保线程安全
         self.signal_emitter.log_received.connect(
-            self.handle_log_received, 
-            Qt.ConnectionType.QueuedConnection
+            self.handle_log_received,
+            Qt.ConnectionType.QueuedConnection  # pyright: ignore[reportCallIssue]
         )
         
         # 使用UILogManager添加处理器到loguru系统
-        self.ui_log_manager = UILogManager()
+        # 获取单例
+        self.ui_log_manager = UILogManager.get_instance()
         self.ui_log_manager.add_handler(self.log_handler)
     
     def connectSignals(self):
@@ -653,15 +663,14 @@ class LogUI(QFrame):
     def clear_logs(self):
         """清空日志"""
         reply = QMessageBox.question(
-            self, 
-            "确认清空", 
+            self,
+            "确认清空",
             "确定要清空所有日志吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
-        
+
         if reply == QMessageBox.StandardButton.Yes:
-            self.log_records.clear()
             self.log_display.clear_all()
             InfoBar.success(
                 title="清空成功",
@@ -720,7 +729,7 @@ class LogUI(QFrame):
         """导出为TXT格式"""
         with open(file_path, 'w', encoding='utf-8') as f:
             # 从LogDisplayWidget获取过滤后的日志
-            model = self.log_display.log_table.model()
+            model = self.log_display.log_table._log_model
             for log_item in model._filtered_logs:
                 # 导出完整格式的日志
                 formatted_log = f"{log_item.timestamp} | {log_item.level:8} | {log_item.file_info} - {log_item.message}"
@@ -732,7 +741,7 @@ class LogUI(QFrame):
         logs = []
 
         # 从LogDisplayWidget获取过滤后的日志
-        model = self.log_display.log_table.model()
+        model = self.log_display.log_table._log_model
         for log_item in model._filtered_logs:
             log_data = {
                 'timestamp': log_item.timestamp,
@@ -754,7 +763,7 @@ class LogUI(QFrame):
             writer.writerow(['时间', '级别', '模块', '文件', '消息'])
 
             # 从LogDisplayWidget获取过滤后的日志
-            model = self.log_display.log_table.model()
+            model = self.log_display.log_table._log_model
             for log_item in model._filtered_logs:
                 writer.writerow([
                     log_item.timestamp,

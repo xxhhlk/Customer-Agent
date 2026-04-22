@@ -4,7 +4,7 @@
 提供知识库相关的UI组件，包括卡片、对话框和弹窗。
 """
 
-from typing import Optional
+from typing import Optional, Any, Union
 from PyQt6.QtCore import Qt, QEvent, QObject, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -46,7 +46,7 @@ class KnowledgeCard(ElevatedCardWidget):
         """
         super().__init__(parent)
         self.doc = doc
-        self.current_dialog: Optional[QDialog] = None
+        self.current_dialog: Optional[Union[QDialog, Flyout]] = None
         self._delete_worker = None  # 删除工作线程
         self._setup_ui()
 
@@ -245,9 +245,11 @@ class KnowledgeCard(ElevatedCardWidget):
         Returns:
             顶层窗口组件
         """
-        widget = self
-        while widget.parent() is not None:
-            widget = widget.parent()
+        widget: QWidget = self
+        parent = widget.parent()
+        while parent is not None:
+            widget = parent
+            parent = widget.parent()
         return widget
 
     def _find_knowledge_ui_parent(self) -> Optional[QWidget]:
@@ -260,7 +262,7 @@ class KnowledgeCard(ElevatedCardWidget):
         parent_widget = self.parent()
         while parent_widget and not hasattr(parent_widget, 'knowledge_manager'):
             parent_widget = parent_widget.parent()
-        return parent_widget
+        return parent_widget  # type: ignore[return-value]
 
     def _fade_out_and_remove(self) -> None:
         """
@@ -300,7 +302,7 @@ class KnowledgeCard(ElevatedCardWidget):
             parent_widget = self.parent()
             if parent_widget and hasattr(parent_widget, 'gridLayout'):
                 # 从网格布局中移除
-                parent_widget.gridLayout.removeWidget(self)
+                parent_widget.gridLayout.removeWidget(self)  # type: ignore[union-attr]
                 self.setParent(None)
                 self.deleteLater()
         except Exception as e:
@@ -319,7 +321,7 @@ class KnowledgeCard(ElevatedCardWidget):
 
         # 创建删除工作线程
         self._delete_worker = DeleteWorker(
-            parent_ui.knowledge_manager,
+            getattr(parent_ui, 'knowledge_manager'),  # type: ignore[arg-type]
             doc_id,
             doc_title
         )
@@ -346,30 +348,31 @@ class KnowledgeCard(ElevatedCardWidget):
         """
         try:
             # 从主数据列表中移除（不仅是缓存）
-            if hasattr(parent_ui, 'docs') and parent_ui.docs:
-                parent_ui.docs = [doc for doc in parent_ui.docs if doc.id != doc_id]
+            if hasattr(parent_ui, 'docs') and getattr(parent_ui, 'docs'):
+                parent_ui.docs = [doc for doc in getattr(parent_ui, 'docs') if doc.id != doc_id]  # type: ignore[misc]
 
             # 从缓存中移除（如果存在）
             if hasattr(parent_ui, '_cached_docs'):
-                parent_ui._cached_docs = [
-                    doc for doc in parent_ui._cached_docs if doc.id != doc_id
+                parent_ui._cached_docs = [  # type: ignore[misc]
+                    doc for doc in getattr(parent_ui, '_cached_docs') if doc.id != doc_id
                 ]
 
             # 重新计算分页 - 如果当前页空了，跳转到前一页
             if hasattr(parent_ui, '_current_page') and hasattr(parent_ui, '_page_size'):
-                total_docs = len(parent_ui.docs)
-                page_size = parent_ui._page_size
-                current_page = parent_ui._current_page
+                parent_ui_docs = getattr(parent_ui, 'docs', [])
+                total_docs = len(parent_ui_docs)
+                page_size = getattr(parent_ui, '_page_size')
+                current_page = getattr(parent_ui, '_current_page')
 
                 # 计算当前页是否还有数据
                 start_idx = (current_page - 1) * page_size
                 if start_idx >= total_docs and current_page > 1:
                     # 当前页空了，跳转到前一页
-                    parent_ui._current_page = current_page - 1
+                    setattr(parent_ui, '_current_page', current_page - 1)
 
             # 重新渲染当前页
             if hasattr(parent_ui, '_populate_current_page'):
-                parent_ui._populate_current_page()
+                getattr(parent_ui, '_populate_current_page')()
 
             # 显示成功消息 - 使用 parent_ui 作为父组件
             self._show_message(
@@ -397,7 +400,7 @@ class KnowledgeCard(ElevatedCardWidget):
         try:
             # 重新渲染当前页（卡片会被恢复显示）
             if hasattr(parent_ui, '_populate_current_page'):
-                parent_ui._populate_current_page()
+                getattr(parent_ui, '_populate_current_page')()
 
             # 显示错误消息 - 使用 parent_ui 作为父组件
             self._show_message(
@@ -646,7 +649,8 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
 
         # 连接信号
         copy_btn.clicked.connect(self._copy_content)
-        close_btn.clicked.connect(lambda: Flyout.close(self.parent()))
+        parent_widget = self.parent()
+        close_btn.clicked.connect(lambda: Flyout.close(parent_widget) if parent_widget else None)  # type: ignore[arg-type]
 
         btn_bar.addStretch(1)
         btn_bar.addWidget(copy_btn)

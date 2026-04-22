@@ -26,7 +26,7 @@ class WebSocketResourceManager:
         self._connection_names: Dict[int, str] = {}  # 连接名称映射
         self._lock = asyncio.Lock()
 
-    def register_websocket(self, websocket: Any, name: str = None) -> None:
+    def register_websocket(self, websocket: Any, name: Optional[str] = None) -> None:
         """
         注册WebSocket连接
 

@@ -1,33 +1,35 @@
 # 关键词管理界面
 
+from typing import Optional, List
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel, 
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-                            QInputDialog, QMessageBox)
+                            QInputDialog, QMessageBox, QDialog, QFormLayout, QLineEdit,
+                            QSpinBox, QCheckBox, QComboBox, QTextEdit)
 from PyQt6.QtGui import QFont, QIcon
-from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel, 
-                           PrimaryPushButton, PushButton, 
+from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel,
+                           PrimaryPushButton, PushButton,
                            ScrollArea, FluentIcon as FIF,
-                           TableWidget)
+                           TableWidget, LineEdit, SpinBox, CheckBox, ComboBox)
 from database.db_manager import db_manager
 
 
 class KeywordTableWidget(TableWidget):
     """关键词表格组件"""
-    
+
     # 定义信号
-    edit_clicked = pyqtSignal(str)  # 编辑按钮点击信号，传递关键词
-    delete_clicked = pyqtSignal(str)  # 删除按钮点击信号，传递关键词
-    
-    def __init__(self, parent=None):
+    edit_clicked = pyqtSignal(int)  # 编辑按钮点击信号，传递关键词ID
+    delete_clicked = pyqtSignal(int)  # 删除按钮点击信号，传递关键词ID
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupTable()
         
     def setupTable(self):
         """设置表格"""
         # 设置列数和表头
-        self.setColumnCount(2)
-        self.setHorizontalHeaderLabels(['关键词', '操作'])
+        self.setColumnCount(6)
+        self.setHorizontalHeaderLabels(['关键词', '分组', '回复内容', '转人工', '优先级', '操作'])
         
         # 设置表格属性
         self.setAlternatingRowColors(True)  # 交替行颜色
@@ -38,22 +40,61 @@ class KeywordTableWidget(TableWidget):
         # 设置列宽
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # 关键词列自动拉伸
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)   # 操作列固定宽度
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # 分组列
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # 回复内容列自动拉伸
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # 转人工列
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # 优先级列
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)   # 操作列固定宽度
         
-        self.setColumnWidth(1, 250)  # 操作列
+        self.setColumnWidth(5, 250)  # 操作列
         
         # 设置行高
         self.verticalHeader().setDefaultSectionSize(50)
         
-    def addKeyword(self, keyword: str):
-        """添加关键词到表格"""
+    def addKeyword(self, keyword_data: dict):
+        """添加关键词到表格
+        
+        Args:
+            keyword_data: 包含关键词信息的字典 {
+                'id': int,
+                'keyword': str,
+                'group_name': str,
+                'reply_content': str,
+                'transfer_to_human': bool,
+                'priority': int
+            }
+        """
         row = self.rowCount()
         self.insertRow(row)
         
+        keyword_id = keyword_data.get('id', 0)
+        
         # 关键词
-        keyword_item = QTableWidgetItem(keyword)
+        keyword_item = QTableWidgetItem(keyword_data.get('keyword', ''))
         keyword_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        keyword_item.setData(Qt.ItemDataRole.UserRole, keyword_id)  # 存储ID
         self.setItem(row, 0, keyword_item)
+        
+        # 分组
+        group_item = QTableWidgetItem(keyword_data.get('group_name', 'default'))
+        group_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        self.setItem(row, 1, group_item)
+        
+        # 回复内容
+        reply_item = QTableWidgetItem(keyword_data.get('reply_content', '') or '')
+        reply_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        self.setItem(row, 2, reply_item)
+        
+        # 转人工
+        transfer_text = '是' if keyword_data.get('transfer_to_human', False) else '否'
+        transfer_item = QTableWidgetItem(transfer_text)
+        transfer_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        self.setItem(row, 3, transfer_item)
+        
+        # 优先级
+        priority_item = QTableWidgetItem(str(keyword_data.get('priority', 0)))
+        priority_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        self.setItem(row, 4, priority_item)
         
         # 操作按钮
         action_widget = QWidget()
@@ -66,29 +107,106 @@ class KeywordTableWidget(TableWidget):
         edit_btn = PushButton("编辑")
         edit_btn.setIcon(FIF.EDIT)
         edit_btn.setFixedSize(100, 30)
-        edit_btn.clicked.connect(lambda: self.edit_clicked.emit(keyword))
+        edit_btn.clicked.connect(lambda: self.edit_clicked.emit(keyword_id))
         
         # 删除按钮
         delete_btn = PushButton("删除")
         delete_btn.setIcon(FIF.DELETE)
         delete_btn.setFixedSize(100, 30)
-        delete_btn.clicked.connect(lambda: self.delete_clicked.emit(keyword))
+        delete_btn.clicked.connect(lambda: self.delete_clicked.emit(keyword_id))
         
         action_layout.addWidget(edit_btn)
         action_layout.addWidget(delete_btn)
-        self.setCellWidget(row, 1, action_widget)
+        self.setCellWidget(row, 5, action_widget)
         
     def clearTable(self):
         """清空表格"""
         self.setRowCount(0)
 
 
+class KeywordDialog(QDialog):
+    """关键词编辑对话框"""
+    
+    def __init__(self, parent=None, keyword_data: Optional[dict] = None):
+        super().__init__(parent)
+        self.keyword_data = keyword_data or {}
+        self.setupUI()
+        
+    def setupUI(self):
+        """设置对话框UI"""
+        self.setWindowTitle('编辑关键词' if self.keyword_data else '添加关键词')
+        self.setMinimumWidth(400)
+        
+        layout = QFormLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # 关键词输入
+        self.keyword_edit = QLineEdit()
+        self.keyword_edit.setText(self.keyword_data.get('keyword', ''))
+        layout.addRow('关键词:', self.keyword_edit)
+        
+        # 分组选择
+        self.group_combo = QComboBox()
+        self.group_combo.setEditable(True)
+        self.group_combo.addItem('default')
+        # 加载现有分组
+        try:
+            groups = db_manager.get_all_keyword_groups()
+            for group in groups:
+                if group and group not in ['default']:
+                    self.group_combo.addItem(group)
+        except:
+            pass
+        self.group_combo.setCurrentText(self.keyword_data.get('group_name', 'default'))
+        layout.addRow('分组:', self.group_combo)
+        
+        # 回复内容
+        self.reply_edit = QTextEdit()
+        self.reply_edit.setPlaceholderText('输入回复内容（可选）')
+        self.reply_edit.setMaximumHeight(80)
+        self.reply_edit.setText(self.keyword_data.get('reply_content', '') or '')
+        layout.addRow('回复内容:', self.reply_edit)
+        
+        # 转人工
+        self.transfer_check = QCheckBox('匹配后转人工客服')
+        self.transfer_check.setChecked(self.keyword_data.get('transfer_to_human', False))
+        layout.addRow('', self.transfer_check)
+        
+        # 优先级
+        self.priority_spin = QSpinBox()
+        self.priority_spin.setRange(0, 100)
+        self.priority_spin.setValue(self.keyword_data.get('priority', 0))
+        layout.addRow('优先级:', self.priority_spin)
+        
+        # 按钮
+        button_layout = QHBoxLayout()
+        self.ok_btn = PrimaryPushButton('确定')
+        self.cancel_btn = PushButton('取消')
+        self.ok_btn.clicked.connect(self.accept)
+        self.cancel_btn.clicked.connect(self.reject)
+        button_layout.addStretch()
+        button_layout.addWidget(self.ok_btn)
+        button_layout.addWidget(self.cancel_btn)
+        layout.addRow(button_layout)
+        
+    def get_data(self) -> dict:
+        """获取对话框数据"""
+        return {
+            'keyword': self.keyword_edit.text().strip(),
+            'group_name': self.group_combo.currentText().strip() or 'default',
+            'reply_content': self.reply_edit.toPlainText().strip() or None,
+            'transfer_to_human': self.transfer_check.isChecked(),
+            'priority': self.priority_spin.value()
+        }
+
+
 class KeywordManagerWidget(QFrame):
     """关键词管理主界面"""
-    
-    def __init__(self, parent=None):
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent=parent)
-        self.keywords_data = []  # 存储关键词数据
+        self.keywords_data: List[dict] = []  # 存储关键词数据
         self.setupUI()
         self.loadKeywordsFromDB()
         
@@ -166,14 +284,22 @@ class KeywordManagerWidget(QFrame):
         
         return header_widget
     
-
-    
     def loadKeywordsFromDB(self):
         """从数据库加载关键词数据"""
         try:
             # 从数据库获取所有关键词
             keywords = db_manager.get_all_keywords()
-            self.keywords_data = [{"keyword": kw["keyword"]} for kw in keywords]
+            self.keywords_data = [
+                {
+                    "id": kw["id"],
+                    "keyword": kw["keyword"],
+                    "group_name": kw.get("group_name", "default"),
+                    "reply_content": kw.get("reply_content"),
+                    "transfer_to_human": kw.get("transfer_to_human", False),
+                    "priority": kw.get("priority", 0)
+                }
+                for kw in keywords
+            ]
             
             # 如果数据库为空，初始化示例关键词
             if not self.keywords_data:
@@ -188,16 +314,41 @@ class KeywordManagerWidget(QFrame):
     def initializeSampleKeywords(self):
         """初始化示例关键词到数据库"""
         sample_keywords = [
-            "转人工", "人工客服", "真人", "客服", "人工", "工单", "好评",
-            "取消订单", "改地址", "转售后客服", "转售后", "返现", "过敏",
-            "退款", "没有效果", "骗人", "投诉", "纠纷", "开发票", "开票",
-            "烂", "取消", "备注"
+            {"keyword": "转人工", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "人工客服", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "真人", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "客服", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "人工", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "工单", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "好评", "group_name": "默认", "reply_content": "感谢您的好评！祝您生活愉快~", "priority": 5},
+            {"keyword": "取消订单", "group_name": "订单问题", "transfer_to_human": True, "priority": 8},
+            {"keyword": "改地址", "group_name": "订单问题", "transfer_to_human": True, "priority": 8},
+            {"keyword": "转售后客服", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "转售后", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
+            {"keyword": "返现", "group_name": "售后", "transfer_to_human": True, "priority": 7},
+            {"keyword": "过敏", "group_name": "售后", "transfer_to_human": True, "priority": 9},
+            {"keyword": "退款", "group_name": "售后", "transfer_to_human": True, "priority": 8},
+            {"keyword": "没有效果", "group_name": "售后", "transfer_to_human": True, "priority": 7},
+            {"keyword": "骗人", "group_name": "投诉", "transfer_to_human": True, "priority": 9},
+            {"keyword": "投诉", "group_name": "投诉", "transfer_to_human": True, "priority": 10},
+            {"keyword": "纠纷", "group_name": "投诉", "transfer_to_human": True, "priority": 9},
+            {"keyword": "开发票", "group_name": "发票", "transfer_to_human": True, "priority": 6},
+            {"keyword": "开票", "group_name": "发票", "transfer_to_human": True, "priority": 6},
+            {"keyword": "烂", "group_name": "售后", "transfer_to_human": True, "priority": 7},
+            {"keyword": "取消", "group_name": "订单问题", "transfer_to_human": True, "priority": 7},
+            {"keyword": "备注", "group_name": "订单问题", "transfer_to_human": True, "priority": 6}
         ]
         
         # 将示例关键词添加到数据库
-        for keyword in sample_keywords:
-            if db_manager.add_keyword(keyword):
-                self.keywords_data.append({"keyword": keyword})
+        for kw_data in sample_keywords:
+            if db_manager.add_keyword(
+                keyword=kw_data["keyword"],
+                group_name=kw_data.get("group_name", "default"),
+                reply_content=kw_data.get("reply_content"),
+                transfer_to_human=kw_data.get("transfer_to_human", False),
+                priority=kw_data.get("priority", 0)
+            ):
+                self.keywords_data.append(kw_data)
         
         self.refreshKeywordList()
     
@@ -208,7 +359,7 @@ class KeywordManagerWidget(QFrame):
         
         # 添加关键词到表格
         for keyword_data in self.keywords_data:
-            self.table_widget.addKeyword(keyword_data["keyword"])
+            self.table_widget.addKeyword(keyword_data)
         
         # 更新统计信息
         self.updateStats()
@@ -216,31 +367,67 @@ class KeywordManagerWidget(QFrame):
     def updateStats(self):
         """更新统计信息"""
         total_count = len(self.keywords_data)
-        self.stats_label.setText(f"共 {total_count} 个关键词")
+        groups = set(kw.get('group_name', 'default') for kw in self.keywords_data)
+        self.stats_label.setText(f"共 {total_count} 个关键词，{len(groups)} 个分组")
     
-    def onEditKeyword(self, keyword: str):
+    def onEditKeyword(self, keyword_id: int):
         """编辑关键词回调"""
-        text, ok = QInputDialog.getText(
-            self, '编辑关键词', 
-            '请修改关键词:', 
-            text=keyword  # 预填充当前关键词
-        )
+        # 查找关键词数据
+        keyword_data = None
+        for kw in self.keywords_data:
+            if kw.get('id') == keyword_id:
+                keyword_data = kw
+                break
         
-        if ok and text.strip():
-            new_keyword = text.strip()
-            
-            # 如果没有修改，直接返回
-            if new_keyword == keyword:
+        if not keyword_data:
+            QMessageBox.warning(self, '错误', '找不到关键词数据！')
+            return
+        
+        # 打开编辑对话框
+        dialog = KeywordDialog(self, keyword_data)
+        if dialog.exec():
+            new_data = dialog.get_data()
+            if not new_data['keyword']:
+                QMessageBox.warning(self, '失败', '关键词不能为空！')
                 return
+            
+            # 更新数据库
+            if db_manager.update_keyword(
+                old_keyword=keyword_data['keyword'],
+                new_keyword=new_data['keyword'],
+                group_name=new_data['group_name'],
+                reply_content=new_data['reply_content'],
+                transfer_to_human=new_data['transfer_to_human'],
+                priority=new_data['priority']
+            ):
+                # 更新本地数据
+                for i, kw in enumerate(self.keywords_data):
+                    if kw.get('id') == keyword_id:
+                        self.keywords_data[i] = {
+                            'id': keyword_id,
+                            **new_data
+                        }
+                        break
                 
-            # 使用统一的更新方法
-            if self.updateKeyword(keyword, new_keyword):
-                QMessageBox.information(self, '成功', f'关键词修改成功!\n"{keyword}" -> "{new_keyword}"')
+                self.refreshKeywordList()
+                QMessageBox.information(self, '成功', '关键词修改成功！')
             else:
-                QMessageBox.warning(self, '失败', f'关键词修改失败!\n新关键词 "{new_keyword}" 可能已存在或为空')
+                QMessageBox.warning(self, '失败', '关键词修改失败！')
     
-    def onDeleteKeyword(self, keyword: str):
+    def onDeleteKeyword(self, keyword_id: int):
         """删除关键词回调"""
+        # 查找关键词数据
+        keyword_data = None
+        for kw in self.keywords_data:
+            if kw.get('id') == keyword_id:
+                keyword_data = kw
+                break
+        
+        if not keyword_data:
+            return
+        
+        keyword = keyword_data.get('keyword', '')
+        
         # 确认删除
         reply = QMessageBox.question(
             self, '确认删除', 
@@ -255,7 +442,7 @@ class KeywordManagerWidget(QFrame):
                 if db_manager.delete_keyword(keyword):
                     print(f"成功删除关键词: {keyword}")
                     # 从本地数据中移除
-                    self.keywords_data = [k for k in self.keywords_data if k["keyword"] != keyword]
+                    self.keywords_data = [k for k in self.keywords_data if k.get('id') != keyword_id]
                     self.refreshKeywordList()
                     QMessageBox.information(self, '成功', f'关键词 "{keyword}" 删除成功!')
                 else:
@@ -264,21 +451,27 @@ class KeywordManagerWidget(QFrame):
             except Exception as e:
                 print(f"删除关键词出错: {e}")
                 QMessageBox.critical(self, '错误', f'删除关键词时出错: {str(e)}')
-        
-    def addKeyword(self, keyword: str):
+    
+    def addKeyword(self, keyword_data: dict) -> bool:
         """添加新关键词"""
         try:
+            keyword = keyword_data.get('keyword', '').strip()
             # 检查关键词是否为空
-            if not keyword.strip():
+            if not keyword:
                 print("关键词不能为空")
                 return False
                 
             # 添加到数据库
-            if db_manager.add_keyword(keyword.strip()):
+            if db_manager.add_keyword(
+                keyword=keyword,
+                group_name=keyword_data.get('group_name', 'default'),
+                reply_content=keyword_data.get('reply_content'),
+                transfer_to_human=keyword_data.get('transfer_to_human', False),
+                priority=keyword_data.get('priority', 0)
+            ):
                 print(f"成功添加关键词: {keyword}")
-                # 添加到本地数据
-                self.keywords_data.append({"keyword": keyword.strip()})
-                self.refreshKeywordList()
+                # 重新加载数据
+                self.loadKeywordsFromDB()
                 return True
             else:
                 print(f"添加关键词失败: {keyword} (可能已存在)")
@@ -287,13 +480,13 @@ class KeywordManagerWidget(QFrame):
             print(f"添加关键词出错: {e}")
             return False
     
-    def removeKeyword(self, keyword: str):
+    def removeKeyword(self, keyword: str) -> bool:
         """移除关键词"""
         try:
             # 从数据库删除
             if db_manager.delete_keyword(keyword):
                 # 从本地数据中移除
-                self.keywords_data = [k for k in self.keywords_data if k["keyword"] != keyword]
+                self.keywords_data = [k for k in self.keywords_data if k.get('keyword') != keyword]
                 self.refreshKeywordList()
                 return True
             else:
@@ -302,50 +495,23 @@ class KeywordManagerWidget(QFrame):
             print(f"移除关键词出错: {e}")
             return False
             
-    def updateKeyword(self, old_keyword: str, new_keyword: str):
-        """更新关键词"""
-        try:
-            # 检查关键词是否为空
-            if not new_keyword.strip():
-                print("新关键词不能为空")
-                return False
-                
-            # 如果没有修改，直接返回成功
-            if old_keyword == new_keyword.strip():
-                return True
-                
-            # 更新数据库
-            if db_manager.update_keyword(old_keyword, new_keyword.strip()):
-                print(f"成功更新关键词: {old_keyword} -> {new_keyword}")
-                
-                # 更新本地数据
-                for i, kw_data in enumerate(self.keywords_data):
-                    if kw_data["keyword"] == old_keyword:
-                        self.keywords_data[i]["keyword"] = new_keyword.strip()
-                        break
-                
-                # 刷新界面
-                self.refreshKeywordList()
-                return True
-            else:
-                print(f"更新关键词失败: {old_keyword} -> {new_keyword} (可能已存在)")
-                return False
-        except Exception as e:
-            print(f"更新关键词出错: {e}")
-            return False
-    
     def reloadKeywords(self):
         """重新加载关键词数据"""
         self.loadKeywordsFromDB()
         
     def onAddKeyword(self):
         """添加关键词按钮点击事件"""
-        text, ok = QInputDialog.getText(self, '添加关键词', '请输入关键词:')
-        if ok and text.strip():
-            if self.addKeyword(text.strip()):
-                QMessageBox.information(self, '成功', f'关键词 "{text.strip()}" 添加成功!')
+        dialog = KeywordDialog(self)
+        if dialog.exec():
+            keyword_data = dialog.get_data()
+            if not keyword_data['keyword']:
+                QMessageBox.warning(self, '失败', '关键词不能为空！')
+                return
+            
+            if self.addKeyword(keyword_data):
+                QMessageBox.information(self, '成功', f'关键词 "{keyword_data["keyword"]}" 添加成功!')
             else:
-                QMessageBox.warning(self, '失败', f'关键词 "{text.strip()}" 添加失败，可能已存在!')
+                QMessageBox.warning(self, '失败', f'关键词 "{keyword_data["keyword"]}" 添加失败，可能已存在!')
     
     def onImportKeywords(self):
         """批量导入关键词按钮点击事件"""
@@ -359,7 +525,7 @@ class KeywordManagerWidget(QFrame):
             duplicate_count = 0
             
             for keyword in keywords:
-                if self.addKeyword(keyword):
+                if self.addKeyword({'keyword': keyword}):
                     success_count += 1
                 else:
                     duplicate_count += 1

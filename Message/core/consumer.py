@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from utils.logger_loguru import get_logger
 from bridge.context import Context
 from .queue import queue_manager
@@ -24,7 +24,7 @@ class MessageConsumer:
         self.handlers: List[MessageHandler] = []
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.running = False
-        self.consumer_task = None
+        self.consumer_task: Optional[asyncio.Task[None]] = None
         self.logger = get_logger(f"Consumer.{queue_name}")
 
     def add_handler(self, handler: MessageHandler):
@@ -68,7 +68,7 @@ class MessageConsumer:
         self.running = False
 
         # 取消消费任务
-        if hasattr(self, 'consumer_task'):
+        if self.consumer_task is not None:
             self.consumer_task.cancel()
             try:
                 await self.consumer_task
@@ -125,11 +125,11 @@ class MessageConsumer:
             # 处理可能的None值
             if from_uid is None:
                 from_uid = "unknown"
-            if channel is None:
-                channel = "unknown"
 
             # 处理channel可能是字符串或枚举对象的情况
-            if hasattr(channel, 'value'):
+            if channel is None:
+                channel_str = "unknown"
+            elif hasattr(channel, 'value'):
                 channel_str = str(channel.value)
             else:
                 channel_str = str(channel)
@@ -158,7 +158,7 @@ class MessageConsumerManager:
         self.logger.info(f"Created consumer: {queue_name}")
         return consumer
 
-    def get_consumer(self, queue_name: str) -> MessageConsumer:
+    def get_consumer(self, queue_name: str) -> Optional[MessageConsumer]:
         """获取消费者"""
         return self._consumers.get(queue_name)
 

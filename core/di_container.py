@@ -38,8 +38,8 @@ class DIContainer:
         self._lock = threading.RLock()
         self.logger = get_logger("DIContainer")
 
-    def register_singleton(self, service_type: Type, instance: Any = None,
-                         factory: Callable = None, implementation_type: Type = None):
+    def register_singleton(self, service_type: Type, instance: Optional[Any] = None,
+                         factory: Optional[Callable] = None, implementation_type: Optional[Type] = None):
         """注册单例服务"""
         if instance is not None:
             descriptor = ServiceDescriptor(
@@ -69,8 +69,8 @@ class DIContainer:
 
         return self
 
-    def register_transient(self, service_type: Type, implementation_type: Type = None,
-                          factory: Callable = None):
+    def register_transient(self, service_type: Type, implementation_type: Optional[Type] = None,
+                          factory: Optional[Callable] = None):
         """注册瞬态服务（每次都创建新实例）"""
         if implementation_type is not None:
             descriptor = ServiceDescriptor(
@@ -94,8 +94,8 @@ class DIContainer:
 
         return self
 
-    def register_scoped(self, service_type: Type, implementation_type: Type = None,
-                       factory: Callable = None):
+    def register_scoped(self, service_type: Type, implementation_type: Optional[Type] = None,
+                       factory: Optional[Callable] = None):
         """注册作用域服务（在同一个作用域内是单例）"""
         if implementation_type is not None:
             descriptor = ServiceDescriptor(
@@ -349,7 +349,7 @@ def configure_standard_services(config_instance: Any = None) -> 'DIContainer':
     return container
 
 # 便捷装饰器
-def injectable(service_type: Type = None, lifetime: ServiceLifetime = ServiceLifetime.TRANSIENT):
+def injectable(service_type: Optional[Type] = None, lifetime: ServiceLifetime = ServiceLifetime.TRANSIENT):
     """可注入装饰器"""
     def decorator(cls):
         nonlocal service_type
@@ -357,11 +357,11 @@ def injectable(service_type: Type = None, lifetime: ServiceLifetime = ServiceLif
             service_type = cls
 
         if lifetime == ServiceLifetime.SINGLETON:
-            container.register_singleton(service_type, implementation_type=cls)
+            container.register_singleton(service_type, implementation_type=cls)  # type: ignore[arg-type]
         elif lifetime == ServiceLifetime.TRANSIENT:
-            container.register_transient(service_type, implementation_type=cls)
+            container.register_transient(service_type, implementation_type=cls)  # type: ignore[arg-type]
         elif lifetime == ServiceLifetime.SCOPED:
-            container.register_scoped(service_type, implementation_type=cls)
+            container.register_scoped(service_type, implementation_type=cls)  # type: ignore[arg-type]
 
         return cls
     return decorator

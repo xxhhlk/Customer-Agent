@@ -47,14 +47,14 @@ class ConnectionWrapper:
     def close(self):
         """关闭连接"""
         try:
-            if self.connection and not self.connection.closed:
+            if self.connection and not self.connection.closed:  # type: ignore[union-attr]
                 self.connection.close()
         except Exception:
             pass
 
     def is_valid(self, max_idle_time: float = 3600) -> bool:
         """检查连接是否有效"""
-        if not self.connection or self.connection.closed:
+        if not self.connection or self.connection.closed:  # type: ignore[union-attr]
             return False
 
         if self.status == ConnectionStatus.ERROR:
@@ -67,7 +67,7 @@ class ConnectionWrapper:
         return True
 
 
-class ConnectionPool(BaseService, HealthCheckable):
+class ConnectionPool(BaseService, HealthCheckable):  # type: ignore[misc]
     """SQLite连接池"""
 
     def __init__(self,
@@ -375,7 +375,7 @@ class ConnectionPool(BaseService, HealthCheckable):
         async def cleanup_loop():
             while not self._disposed:
                 try:
-                    await asyncio.sleep(self.cleanup_interval)
+                    await asyncio.sleep(self.cleanup_interval)  # type: ignore[attr-defined]
                     await self.cleanup_expired_connections()
                 except asyncio.CancelledError:
                     break
@@ -392,7 +392,7 @@ class ConnectionPool(BaseService, HealthCheckable):
             if self._cleanup_task and not self._cleanup_task.done():
                 self._cleanup_task.cancel()
                 try:
-                    asyncio.run(self._cleanup_task)
+                    asyncio.run(self._cleanup_task)  # type: ignore[arg-type]
                 except asyncio.CancelledError:
                     pass
 

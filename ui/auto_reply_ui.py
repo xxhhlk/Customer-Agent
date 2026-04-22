@@ -1,18 +1,18 @@
 #自动回复界面
 
 import asyncio
+from typing import Optional, Dict
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
                             QInputDialog, QMessageBox, QComboBox, QDialog, QFormLayout)
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
-from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel, 
-                           PrimaryPushButton, PushButton, StrongBodyLabel, 
+from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
+                           PrimaryPushButton, PushButton, StrongBodyLabel,
                            InfoBadge, ScrollArea, FluentIcon as FIF)
 from database.db_manager import db_manager
 from utils.logger_loguru import get_logger
 from Channel.pinduoduo.utils.API.Set_up_online import AccountMonitor
 import threading
-from typing import Dict, Optional
 import requests
 
 
@@ -20,7 +20,7 @@ class LogoLoaderThread(QThread):
     """异步加载Logo的线程"""
     logo_loaded = pyqtSignal(QPixmap)
 
-    def __init__(self, url):
+    def __init__(self, url: str):
         super().__init__()
         self.url = url
 
@@ -285,10 +285,10 @@ auto_reply_manager = AutoReplyManager()
 
 class SetStatusThread(QThread):
     """设置账号状态的线程"""
-    
+
     status_set_success = pyqtSignal(dict, int)  # 设置成功信号
     status_set_failed = pyqtSignal(dict, str)   # 设置失败信号
-    
+
     def __init__(self, account_data: dict, target_status: int):
         super().__init__()
         self.account_data = account_data
@@ -304,7 +304,7 @@ class SetStatusThread(QThread):
 
             account_monitor = AccountMonitor(cookies)
             
-            api_success = account_monitor.set_csstatus(self.target_status)
+            api_success = account_monitor.set_csstatus(str(self.target_status))
 
             if not api_success:
                 # API调用失败
@@ -336,14 +336,18 @@ class SetStatusThread(QThread):
 
 class AutoReplyCard(CardWidget):
     """自动回复卡片组件"""
-    
+
     # 定义信号
     online_clicked = pyqtSignal(dict)  # 上线按钮点击信号
     offline_clicked = pyqtSignal(dict)  # 离线按钮点击信号
     auto_reply_clicked = pyqtSignal(dict)  # 开始自动回复按钮点击信号
-    
-    def __init__(self, account_data: dict, parent=None):
+
+    # 动态属性声明
+    logo_loader_thread: Optional['LogoLoaderThread']
+
+    def __init__(self, account_data: dict, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.logo_loader_thread = None
         self.account_data = account_data
         self.shop_id = account_data.get("shop_id", "")
         self.shop_name = account_data.get("shop_name", "")
@@ -561,20 +565,25 @@ class AutoReplyCard(CardWidget):
         """更新账号状态"""
         self.account_data["status"] = new_status
         self.status = self.getStatusText(new_status)
-        
+
         # 重新创建状态标签
-        old_badge = self.action_widget.layout().itemAt(0).widget()
-        if old_badge:
-            old_badge.deleteLater()
-            
-        new_badge = self.createStatusBadge()
-        self.action_widget.layout().insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)
+        layout = self.action_widget.layout()
+        if layout is not None:
+            old_badge_item = layout.itemAt(0)
+            old_badge = old_badge_item.widget() if old_badge_item else None
+            if old_badge:
+                old_badge.deleteLater()
+
+            new_badge = self.createStatusBadge()
+            if hasattr(layout, 'insertWidget'):
+                layout.insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)  # type: ignore[union-attr]
 
     def loadLogo(self):
         """异步加载Logo"""
         if self.shop_logo:
             def _start():
-                self.logo_loader_thread = LogoLoaderThread(self.shop_logo)
+                assert self.shop_logo is not None
+                self.logo_loader_thread = LogoLoaderThread(str(self.shop_logo))
                 self.logo_loader_thread.logo_loaded.connect(self.setLogo)
                 self.logo_loader_thread.start()
             QTimer.singleShot(200, _start)
@@ -591,11 +600,11 @@ class AutoReplyCard(CardWidget):
 
 class AutoReplyUI(QFrame):
     """自动回复主界面"""
-    
-    def __init__(self, parent=None):
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent=parent)
         self.logger = get_logger()  # 初始化logger（必须在其他操作之前）
-        self.accounts_data = []  # 存储账号数据
+        self.accounts_data: list = []  # 存储账号数据
         self._loaded_once = False
         self.setupUI()
         QTimer.singleShot(300, self._maybeLoadOnShow)

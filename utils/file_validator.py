@@ -17,8 +17,8 @@ class ValidationResult:
     is_valid: bool
     error_type: Optional[str] = None
     error_message: Optional[str] = None
-    suggestions: List[str] = None
-    file_info: Dict = None
+    suggestions: Optional[List[str]] = None
+    file_info: Optional[Dict] = None
 
     def __post_init__(self):
         if self.suggestions is None:
@@ -219,17 +219,19 @@ class ExcelValidator(FileValidator):
 
             # 检查是否有工作表
             if not workbook.worksheets:
+                file_info = basic_result.file_info or {}
                 return ValidationResult(
                     is_valid=False,
                     error_type="NO_WORKSHEETS",
                     error_message="Excel文件中没有工作表",
                     suggestions=["添加至少一个工作表", "检查文件是否正确保存"],
-                    file_info={**basic_result.file_info, "worksheet_count": 0}
+                    file_info={**file_info, "worksheet_count": 0}
                 )
 
             # 更新文件信息
+            base_file_info = basic_result.file_info or {}
             file_info = {
-                **basic_result.file_info,
+                **base_file_info,
                 "worksheet_count": len(workbook.worksheets),
                 "worksheet_names": [ws.title for ws in workbook.worksheets]
             }

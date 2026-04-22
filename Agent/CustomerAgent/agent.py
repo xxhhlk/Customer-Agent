@@ -20,7 +20,9 @@ from typing import Dict
 
 
 class CustomerAgent(Bot):
-    def __init__(self, knowledge_manager: 'KnowledgeManager' = None):
+    knowledge_manager: KnowledgeManager
+
+    def __init__(self, knowledge_manager: Optional['KnowledgeManager'] = None):
         super().__init__()
         # 从 DI 容器获取 KnowledgeManager（如果未传入）
         if knowledge_manager is None:
@@ -30,7 +32,7 @@ class CustomerAgent(Bot):
             except ValueError:
                 # 容器中未注册时直接创建
                 knowledge_manager = KnowledgeManager()
-        self.knowledge_manager = knowledge_manager
+        self.knowledge_manager = knowledge_manager  # pyright: ignore[reportAttributeAccessIssue]
         self._agent: Optional[Agent] = None  # 延迟初始化
         self.logger = get_logger("CustomerAgent")
         self._is_initialized = False
@@ -82,13 +84,17 @@ class CustomerAgent(Bot):
             self.logger.error(f"CustomerAgent初始化失败: {e}")
             return False
 
-    async def async_reply(self, query: str, context:Context = None) -> Reply:
+    async def async_reply(self, query: str, context: Optional[Context] = None) -> Reply:
         """异步回复接口 - 确保返回Reply对象"""
         if not self._agent:
             if not await self.initialize_async():
                 return Reply(ReplyType.TEXT, "AI客服初始化失败")
 
+        if context is None:
+            return Reply(ReplyType.TEXT, "缺少上下文信息")
+
         try:
+            assert self._agent is not None, "Agent未初始化"
             # 确保session_id是字符串
             session_id = f"{context.channel_type}{context.kwargs.user_id}"
             # 确保dependencies中的值是安全的类型

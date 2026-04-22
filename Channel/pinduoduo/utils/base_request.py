@@ -31,7 +31,7 @@ class BaseRequest:
     RETRY_JITTER_MIN = 0.1
     RETRY_JITTER_MAX = 0.3
 
-    def __init__(self, shop_id: str = None, user_id: str = None, channel_name: str = "pinduoduo",
+    def __init__(self, shop_id: Optional[str] = None, user_id: Optional[str] = None, channel_name: str = "pinduoduo",
                  max_retries: int = 3, retry_delay: float = 1.0, retry_backoff: float = 2.0):
         """
         初始化基类
@@ -115,7 +115,7 @@ class BaseRequest:
             
         return False
     
-    def _run_async_login_func(self, func: callable, *args) -> Any:
+    def _run_async_login_func(self, func: Callable[..., Any], *args) -> Any:
         """
         在线程中安全执行异步登录函数（避免事件循环冲突）
 
@@ -225,7 +225,7 @@ class BaseRequest:
             self.logger.error(f"账号 {self.account_name} 重新获取cookies过程中发生错误: {str(e)}")
             return False
     
-    def _should_retry(self, response: requests.Response = None, exception: Exception = None) -> bool:
+    def _should_retry(self, response: Optional[requests.Response] = None, exception: Optional[Exception] = None) -> bool:
         """
         判断是否应该重试
         
@@ -503,8 +503,8 @@ class BaseRequest:
         if key in self.default_headers:
             del self.default_headers[key]
     
-    def set_retry_config(self, max_retries: int = None, retry_delay: float = None,
-                        retry_backoff: float = None) -> None:
+    def set_retry_config(self, max_retries: Optional[int] = None, retry_delay: Optional[float] = None,
+                        retry_backoff: Optional[float] = None) -> None:
         """
         动态设置重试配置
         

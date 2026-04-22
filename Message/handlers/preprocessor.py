@@ -16,7 +16,7 @@ class MessagePreprocessor:
     """消息预处理器 - 提取通用逻辑"""
 
     @staticmethod
-    def safe_parse_json(data: Any, default_structure: Dict[str, str] = None) -> Dict[str, str]:
+    def safe_parse_json(data: Any, default_structure: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """安全解析JSON，统一处理各种消息格式"""
         if default_structure is None:
             default_structure = {}
@@ -46,7 +46,7 @@ class MessagePreprocessor:
         return json.dumps([{"type": "image", "url": url}], ensure_ascii=False)
 
     @staticmethod
-    def create_video_message(url: str, cover: str = None) -> str:
+    def create_video_message(url: str, cover: Optional[str] = None) -> str:
         """创建标准视频消息格式"""
         data = {"type": "video", "url": url}
         if cover:
@@ -54,7 +54,7 @@ class MessagePreprocessor:
         return json.dumps([data], ensure_ascii=False)
 
     @staticmethod
-    def create_goods_message(name: str, price: str = None, thumb_url: str = None, goods_id: str = None, **kwargs) -> str:
+    def create_goods_message(name: str, price: Optional[str] = None, thumb_url: Optional[str] = None, goods_id: Optional[str] = None, **kwargs) -> str:
         """创建标准商品消息格式"""
         data = {"type": "goods_card", "name": name}
         if price: data["price"] = price
@@ -64,7 +64,7 @@ class MessagePreprocessor:
         return json.dumps([data], ensure_ascii=False)
 
     @staticmethod
-    def create_order_message(order_sn: str, status: str = None, goods_name: str = None, **kwargs) -> str:
+    def create_order_message(order_sn: str, status: Optional[str] = None, goods_name: Optional[str] = None, **kwargs) -> str:
         """创建标准订单消息格式"""
         data = {"type": "order_info", "order_sn": order_sn}
         if status: data["status"] = status

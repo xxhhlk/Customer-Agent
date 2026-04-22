@@ -54,7 +54,7 @@ class DatabaseManager:
         return self.Session()
     
     # 渠道相关操作
-    def add_channel(self, channel_name: str, description: str = None) -> bool:
+    def add_channel(self, channel_name: str, description: Optional[str] = None) -> bool:
         """添加渠道
         
         Args:
@@ -160,7 +160,7 @@ class DatabaseManager:
             session.close()
     
     # 店铺相关操作
-    def add_shop(self, channel_name: str, shop_id: str, shop_name: str, shop_logo: str, description: str = None) -> bool:
+    def add_shop(self, channel_name: str, shop_id: str, shop_name: str, shop_logo: str, description: Optional[str] = None) -> bool:
         """添加店铺
         
         Args:
@@ -284,7 +284,7 @@ class DatabaseManager:
         finally:
             session.close()
     
-    def update_shop_info(self, channel_name: str, shop_id: str, shop_name: str = None, shop_logo: str = None, description: str = None) -> bool:
+    def update_shop_info(self, channel_name: str, shop_id: str, shop_name: Optional[str] = None, shop_logo: Optional[str] = None, description: Optional[str] = None) -> bool:
         """更新店铺信息
         
         Args:
@@ -363,7 +363,7 @@ class DatabaseManager:
             session.close()
 
     # 账号相关操作
-    def add_account(self, channel_name: str, shop_id: str, user_id: str, username: str, password: str, cookies: str = None) -> bool:
+    def add_account(self, channel_name: str, shop_id: str, user_id: str, username: str, password: str, cookies: Optional[str] = None) -> bool:
         """添加账号
         
         Args:
@@ -710,11 +710,16 @@ class DatabaseManager:
             session.close()
 
     # 关键词相关操作
-    def add_keyword(self, keyword: str) -> bool:
+    def add_keyword(self, keyword: str, group_name: str = 'default', reply_content: Optional[str] = None, 
+                    transfer_to_human: bool = False, priority: int = 0) -> bool:
         """添加关键词
         
         Args:
             keyword: 关键词
+            group_name: 分组名称
+            reply_content: 回复内容
+            transfer_to_human: 是否转人工
+            priority: 优先级
             
         Returns:
             bool: 是否添加成功
@@ -728,10 +733,16 @@ class DatabaseManager:
                 return False
                 
             # 创建新关键词
-            keyword_obj = Keyword(keyword=keyword)
+            keyword_obj = Keyword(
+                keyword=keyword,
+                group_name=group_name,
+                reply_content=reply_content,
+                transfer_to_human=1 if transfer_to_human else 0,
+                priority=priority
+            )
             session.add(keyword_obj)
             session.commit()
-            self.logger.info(f"成功添加关键词: {keyword}")
+            self.logger.info(f"成功添加关键词: {keyword} (分组: {group_name})")
             return True
         except SQLAlchemyError as e:
             session.rollback()
@@ -757,7 +768,13 @@ class DatabaseManager:
                 
             return {
                 'id': keyword_obj.id,
-                'keyword': keyword_obj.keyword
+                'keyword': keyword_obj.keyword,
+                'group_name': keyword_obj.group_name,
+                'reply_content': keyword_obj.reply_content,
+                'transfer_to_human': bool(keyword_obj.transfer_to_human),
+                'priority': keyword_obj.priority,
+                'created_at': keyword_obj.created_at.isoformat() if keyword_obj.created_at else None,
+                'updated_at': keyword_obj.updated_at.isoformat() if keyword_obj.updated_at else None
             }
         except SQLAlchemyError as e:
             self.logger.error(f"获取关键词失败: {str(e)}")
@@ -773,11 +790,17 @@ class DatabaseManager:
         """
         session = self.get_session()
         try:
-            keywords = session.query(Keyword).all()
+            keywords = session.query(Keyword).order_by(Keyword.priority.desc()).all()
             return [
                 {
                     'id': keyword.id,
-                    'keyword': keyword.keyword
+                    'keyword': keyword.keyword,
+                    'group_name': keyword.group_name,
+                    'reply_content': keyword.reply_content,
+                    'transfer_to_human': bool(keyword.transfer_to_human),
+                    'priority': keyword.priority,
+                    'created_at': keyword.created_at.isoformat() if keyword.created_at else None,
+                    'updated_at': keyword.updated_at.isoformat() if keyword.updated_at else None
                 }
                 for keyword in keywords
             ]
@@ -787,12 +810,49 @@ class DatabaseManager:
         finally:
             session.close()
     
-    def update_keyword(self, old_keyword: str, new_keyword: str) -> bool:
+    def get_keywords_by_group(self, group_name: str) -> List[Dict[str, Any]]:
+        """获取指定分组的关键词
+        
+        Args:
+            group_name: 分组名称
+            
+        Returns:
+            List[Dict]: 关键词列表
+        """
+        session = self.get_session()
+        try:
+            keywords = session.query(Keyword).filter(
+                Keyword.group_name == group_name
+            ).order_by(Keyword.priority.desc()).all()
+            return [
+                {
+                    'id': keyword.id,
+                    'keyword': keyword.keyword,
+                    'group_name': keyword.group_name,
+                    'reply_content': keyword.reply_content,
+                    'transfer_to_human': bool(keyword.transfer_to_human),
+                    'priority': keyword.priority
+                }
+                for keyword in keywords
+            ]
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取分组关键词失败: {str(e)}")
+            return []
+        finally:
+            session.close()
+    
+    def update_keyword(self, old_keyword: str, new_keyword: str, group_name: Optional[str] = None,
+                       reply_content: Optional[str] = None, transfer_to_human: Optional[bool] = None,
+                       priority: Optional[int] = None) -> bool:
         """更新关键词
         
         Args:
             old_keyword: 原关键词
             new_keyword: 新关键词
+            group_name: 分组名称
+            reply_content: 回复内容
+            transfer_to_human: 是否转人工
+            priority: 优先级
             
         Returns:
             bool: 是否更新成功
@@ -814,6 +874,15 @@ class DatabaseManager:
                     
             # 更新关键词
             keyword_obj.keyword = new_keyword
+            if group_name is not None:
+                keyword_obj.group_name = group_name
+            if reply_content is not None:
+                keyword_obj.reply_content = reply_content
+            if transfer_to_human is not None:
+                keyword_obj.transfer_to_human = 1 if transfer_to_human else 0
+            if priority is not None:
+                keyword_obj.priority = priority
+                
             session.commit()
             self.logger.info(f"成功更新关键词: {old_keyword} -> {new_keyword}")
             return True
@@ -823,7 +892,7 @@ class DatabaseManager:
             return False
         finally:
             session.close()
-
+    
     def delete_keyword(self, keyword: str) -> bool:
         """删除关键词
         
@@ -848,6 +917,23 @@ class DatabaseManager:
             session.rollback()
             self.logger.error(f"删除关键词失败: {str(e)}")
             return False
+        finally:
+            session.close()
+    
+    def get_all_keyword_groups(self) -> List[str]:
+        """获取所有关键词分组名称
+        
+        Returns:
+            List[str]: 分组名称列表
+        """
+        session = self.get_session()
+        try:
+            from sqlalchemy import distinct
+            groups = session.query(distinct(Keyword.group_name)).all()
+            return [g[0] for g in groups if g[0]]
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取关键词分组失败: {str(e)}")
+            return []
         finally:
             session.close()
 

@@ -13,7 +13,7 @@ import asyncio
 import time
 import threading
 import uuid
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from utils.logger_loguru import get_logger
 
 logger = get_logger(__name__)
@@ -29,7 +29,7 @@ class StaffReplyEventManager:
 
     def __init__(self):
         # from_uid -> [{"event_id": str, "event": asyncio.Event, "timestamp": float, "loop": asyncio.AbstractEventLoop}]
-        self._waiting_events: Dict[str, List[dict]] = {}
+        self._waiting_events: Dict[str, List[Dict[str, Any]]] = {}
         self._lock = threading.Lock()
 
     def start_waiting(self, from_uid: str) -> str:
@@ -190,20 +190,24 @@ class StaffReplyEventManager:
             int: 清理的数量
         """
         current_time = time.time()
-        expired_uids = []
+        expired_count = 0
 
         with self._lock:
-            for from_uid, event_info in list(self._waiting_events.items()):
-                if current_time - event_info["timestamp"] > max_age:
-                    expired_uids.append(from_uid)
+            for from_uid in list(self._waiting_events.keys()):
+                events = self._waiting_events[from_uid]
+                # 过滤掉过期的事件
+                original_count = len(events)
+                events[:] = [e for e in events if current_time - e["timestamp"] <= max_age]
+                expired_count += original_count - len(events)
 
-            for uid in expired_uids:
-                del self._waiting_events[uid]
+                # 如果列表为空，删除整个条目
+                if not events:
+                    del self._waiting_events[from_uid]
 
-        if expired_uids:
-            logger.info(f"清理过期等待事件: {len(expired_uids)}个")
+        if expired_count:
+            logger.info(f"清理过期等待事件: {expired_count}个")
 
-        return len(expired_uids)
+        return expired_count
 
 
 # 全局单例

@@ -5,6 +5,6 @@
 工具模块包
 """
 
-from utils.logger_loguru import logger
+from .logger_loguru import logger  # pyright: ignore[reportAttributeAccessIssue]
 
 __all__ = ["logger"] 

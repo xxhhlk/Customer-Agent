@@ -15,8 +15,12 @@ def get_shop_products(run_context:RunContext) -> str:
         str: 格式化的商品列表信息，包含商品名称、ID、价格、销量、库存等
     """
     try:
-        shop_id = run_context.dependencies["shop_id"]
-        user_id = run_context.dependencies["user_id"]
+        deps = run_context.dependencies
+        if deps is None:
+            return "获取商品列表失败：缺少依赖信息"
+
+        shop_id = deps.get("shop_id")
+        user_id = deps.get("user_id")
         # 验证参数
         if not shop_id or not user_id:
             return "获取商品列表失败：缺少必要的shop_id或user_id参数"

@@ -76,7 +76,7 @@ class KnowledgeDataLoader:
 
         docs = []
         for idx, row in df.iterrows():
-            doc = SimpleDocument.from_lancedb_row(row.to_dict(), idx)
+            doc = SimpleDocument.from_lancedb_row(row.to_dict(), int(idx) if isinstance(idx, int) else 0)
             docs.append(doc)
 
         return docs

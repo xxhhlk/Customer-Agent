@@ -75,12 +75,12 @@ class ImportWorker(QThread):
             if not result.is_valid and result.error_type == "MISSING_DEPENDENCY":
                 result = validator.validate_basic(self.file_path)
             if not result.is_valid:
-                raise KnowledgeImportError(result.error_message, result.suggestions)
+                raise KnowledgeImportError(result.error_message or "文件验证失败", result.suggestions)
         else:
             validator = FileValidator()
             result = validator.validate_basic(self.file_path)
             if not result.is_valid:
-                raise KnowledgeImportError(result.error_message, result.suggestions)
+                raise KnowledgeImportError(result.error_message or "文件验证失败", result.suggestions)
 
         logger.info("文件预检查通过")
 
@@ -425,9 +425,9 @@ class KnowledgeUI(QWidget):
         self.mainLayout.addWidget(tip_label)
 
         # 主内容滚动区域
-        self.scroll = QScrollArea(self)
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
 
         # 内容容器和网格布局
         self.contentWidget = QWidget()
@@ -436,8 +436,8 @@ class KnowledgeUI(QWidget):
         self.gridLayout.setContentsMargins(16, 16, 16, 16)
         self.gridLayout.setSpacing(self.CARD_SPACING)
 
-        self.scroll.setWidget(self.contentWidget)
-        self.mainLayout.addWidget(self.scroll)
+        self.scroll_area.setWidget(self.contentWidget)
+        self.mainLayout.addWidget(self.scroll_area)
 
         # 分页控件
         self._init_pagination_ui()
@@ -641,7 +641,7 @@ class KnowledgeUI(QWidget):
 
                 # 转换为SimpleDocument列表
                 for idx, row in df.iterrows():
-                    doc = SimpleDocument.from_lancedb_row(row.to_dict(), idx)
+                    doc = SimpleDocument.from_lancedb_row(row.to_dict(), int(idx) if isinstance(idx, int) else 0)
                     self.docs.append(doc)
 
             except Exception as lancedb_err:

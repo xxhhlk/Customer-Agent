@@ -29,7 +29,7 @@ class SimpleMessageQueue:
         self._closed = False
 
         # 去重缓存（可选）
-        self._deduplication_cache: Set[str] = set() if config.enable_deduplication else None
+        self._deduplication_cache: Optional[Set[str]] = set() if config.enable_deduplication else None
         self._last_cleanup_time = time.time()
 
     async def put(self, context: Context) -> str:
@@ -104,10 +104,10 @@ class SimpleMessageQueue:
 
     def _should_deduplicate(self, wrapper: MessageWrapper) -> bool:
         """检查是否应该去重"""
-        if not self._deduplication_cache:
+        if self._deduplication_cache is None:
             return False
 
-        content_hash = hash(wrapper.context.content)
+        content_hash = str(hash(wrapper.context.content))
         if content_hash in self._deduplication_cache:
             return True
 
@@ -118,6 +118,8 @@ class SimpleMessageQueue:
 
     def _cleanup_deduplication_cache(self):
         """清理过期的去重缓存"""
+        if self._deduplication_cache is None:
+            return
         current_time = time.time()
         if current_time - self._last_cleanup_time > self.config.deduplication_window:
             # 简单策略：清空缓存

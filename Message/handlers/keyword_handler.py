@@ -1,7 +1,7 @@
 """
 关键词检测处理器 - 检测转人工关键词并触发转人工流程
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 from bridge.context import Context, ContextType
 from .base import BaseHandler
 from database.db_manager import db_manager
@@ -19,24 +19,16 @@ class KeywordDetectionHandler(BaseHandler):
         # 记录加载的关键词数量
         self.logger.info(f"关键词检测处理器初始化完成，加载了 {len(self.keywords)} 个关键词")
 
-    def _load_keywords(self):
-        """从数据库加载关键词"""
+    def _load_keywords(self) -> List[dict]:
+        """从数据库加载关键词，返回带完整信息的列表"""
         try:
             keywords_data = db_manager.get_all_keywords()
-            keywords = {item['keyword'].lower() for item in keywords_data if item.get('keyword')}
-            self.logger.debug(f"从数据库加载关键词: {keywords}")
-            return keywords
+            # 按优先级排序（已在数据库查询中排序）
+            self.logger.debug(f"从数据库加载关键词: {len(keywords_data)} 个")
+            return keywords_data
         except Exception as e:
             self.logger.error(f"加载关键词失败: {e}")
-            # 如果加载失败，使用默认关键词
-            default_keywords = {
-                "转人工", "人工客服", "真人", "客服", "人工", "工单", "好评",
-                "取消订单", "改地址", "转售后客服", "转售后", "返现", "过敏",
-                "退款", "没有效果", "骗人", "投诉", "纠纷", "开发票", "开票",
-                "烂", "取消", "备注"
-            }
-            self.logger.warning(f"使用默认关键词: {default_keywords}")
-            return default_keywords
+            return []
 
     def can_handle(self, context: Context) -> bool:
         """检查消息是否包含关键词"""
@@ -51,16 +43,51 @@ class KeywordDetectionHandler(BaseHandler):
         # 将消息内容转换为小写进行检测
         content_lower = context.content.lower()
 
-        # 检查是否包含任何关键词
-        for keyword in self.keywords:
-            if keyword in content_lower:
+        # 检查是否包含任何关键词（优先级已在数据库查询时排序）
+        for kw in self.keywords:
+            keyword = kw.get('keyword', '').lower()
+            if keyword and keyword in content_lower:
                 self.logger.debug(f"检测到关键词: '{keyword}' 在消息: '{context.content}'")
                 return True
 
         return False
+    
+    def match_keyword(self, message: str) -> Optional[dict]:
+        """匹配消息中的关键词，返回匹配结果
+        
+        Args:
+            message: 用户消息
+            
+        Returns:
+            匹配的关键词信息，包含:
+            - keyword: 关键词
+            - group_name: 分组名称
+            - reply_content: 回复内容
+            - transfer_to_human: 是否转人工
+            - priority: 优先级
+            如果没有匹配则返回 None
+        """
+        if not message:
+            return None
+            
+        message_lower = message.lower()
+        
+        # 按优先级匹配（数据库查询时已排序）
+        for kw in self.keywords:
+            keyword = kw.get('keyword', '').lower()
+            if keyword and keyword in message_lower:
+                return {
+                    'keyword': kw.get('keyword'),
+                    'group_name': kw.get('group_name', 'default'),
+                    'reply_content': kw.get('reply_content'),
+                    'transfer_to_human': kw.get('transfer_to_human', False),
+                    'priority': kw.get('priority', 0)
+                }
+        
+        return None
 
     async def handle(self, context: Context, metadata: Dict[str, Any]) -> bool:
-        """转接到人工客服"""
+        """处理关键词匹配结果"""
         try:
             shop_id = context.kwargs.shop_id
             user_id = context.kwargs.user_id
@@ -69,6 +96,31 @@ class KeywordDetectionHandler(BaseHandler):
             if not all([shop_id, user_id, from_uid]):
                 return False
             
+            # 匹配关键词
+            matched = self.match_keyword(context.content)
+            if not matched:
+                return False
+            
+            # 如果需要转人工
+            if matched.get('transfer_to_human', False):
+                return await self._transfer_to_human(shop_id, user_id, from_uid)
+            
+            # 如果有回复内容，发送回复
+            if matched.get('reply_content'):
+                sender = SendMessage(shop_id, user_id)
+                sender.send_text(from_uid, matched['reply_content'])
+                self.logger.info(f"已发送关键词回复: {matched['reply_content']}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"关键词处理失败: {e}")
+            return False
+    
+    async def _transfer_to_human(self, shop_id: str, user_id: str, from_uid: str) -> bool:
+        """转接到人工客服"""
+        try:
             # 获取可用的客服列表
             sender = SendMessage(shop_id, user_id)
             cs_list = sender.getAssignCsList()
@@ -88,7 +140,6 @@ class KeywordDetectionHandler(BaseHandler):
                     transfer_result = sender.move_conversation(from_uid, cs_uid)
                     
                     if transfer_result and transfer_result.get('success'):
-
                         self.logger.info(f"会话已成功转接给 {cs_name} ({cs_uid})")
                         return True
                     else:
@@ -114,6 +165,6 @@ class KeywordDetectionHandler(BaseHandler):
         """获取当前关键词数量"""
         return len(self.keywords)
 
-    def get_keywords(self) -> set:
+    def get_keywords(self) -> List[dict]:
         """获取当前关键词列表"""
         return self.keywords.copy()

@@ -1,6 +1,7 @@
 import sys
+from typing import Optional, TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel
+from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 from PyQt6.QtGui import QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow,qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
@@ -9,9 +10,18 @@ from qfluentwidgets import Action
 from utils.logger_loguru import get_logger
 import time
 
+if TYPE_CHECKING:
+    from ui.auto_reply_ui import AutoReplyUI
+    from ui.keyword_ui import KeywordManagerWidget
+    from ui.user_ui import UserManagerWidget
+    from ui.log_ui import LogUI
+    from ui.setting_ui import SettingUI
+    from ui.Knowledge_ui import KnowledgeUI
+    from PyQt6.QtGui import QCloseEvent
+
 class Widget(QFrame):
 
-    def __init__(self, text: str, parent=None):
+    def __init__(self, text: str, parent: Optional[QWidget] = None):
         super().__init__(parent=parent)
         # 创建标题标签
         self.label = SubtitleLabel(text, self)
@@ -34,12 +44,12 @@ class MainWindow(FluentWindow):
         self.logger.info(f"  基础属性初始化: {time.perf_counter()-t:.2f}s")
 
         # 延迟加载的视图
-        self.monitor_view = None
-        self.keyword_manager_view = None
-        self.user_manager_view = None
-        self.log_view = None
-        self.knowledge_view = None
-        self.settingInterface = None
+        self.monitor_view: Optional["AutoReplyUI"] = None
+        self.keyword_manager_view: Optional["KeywordManagerWidget"] = None
+        self.user_manager_view: Optional["UserManagerWidget"] = None
+        self.log_view: Optional["LogUI"] = None
+        self.knowledge_view: Optional["KnowledgeUI"] = None
+        self.settingInterface: Optional["SettingUI"] = None
 
         t = time.perf_counter()
         # 立即初始化导航和窗口
@@ -96,7 +106,15 @@ class MainWindow(FluentWindow):
         self.logger.info(f"延迟视图初始化耗时: {time.perf_counter() - t0:.2f}s")
 
     # 初始化导航栏
-    def initNavigation(self):
+    def initNavigation(self) -> None:
+        # 确保所有视图都已初始化
+        assert self.monitor_view is not None
+        assert self.keyword_manager_view is not None
+        assert self.user_manager_view is not None
+        assert self.knowledge_view is not None
+        assert self.log_view is not None
+        assert self.settingInterface is not None
+
         self.navigationInterface.setExpandWidth(200)
         self.navigationInterface.setMinimumWidth(200)
         self.addSubInterface(self.monitor_view, FIF.CHAT, '自动回复')
@@ -113,7 +131,7 @@ class MainWindow(FluentWindow):
             selectable=False,
             position=NavigationItemPosition.BOTTOM
         )
-        
+
         self.addSubInterface(self.settingInterface, FIF.SETTING, '设置', NavigationItemPosition.BOTTOM)
         
 
@@ -151,7 +169,7 @@ class MainWindow(FluentWindow):
         except Exception as e:
             self.logger.error(f"显示二维码失败: {e}")
 
-    def closeEvent(self, a0):
+    def closeEvent(self, a0: Optional["QCloseEvent"]) -> None:
         """ 重写窗口关闭事件，确保后台线程安全退出 """
 
         # 停止所有自动回复线程
@@ -161,4 +179,5 @@ class MainWindow(FluentWindow):
         except Exception:
             pass
 
-        super().closeEvent(a0) 
+        if a0 is not None:
+            super().closeEvent(a0) 

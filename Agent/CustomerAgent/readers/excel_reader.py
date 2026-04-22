@@ -1,10 +1,13 @@
 from typing import List
 from pathlib import Path
 from agno.knowledge.document.base import Document
+
+# 尝试导入 Reader 基类，如果失败则定义一个 dummy 基类
 try:
-    from agno.knowledge.reader.base import Reader
+    from agno.knowledge.reader.base import Reader as BaseReader
 except Exception:
-    Reader = object
+    BaseReader = object  # type: ignore[misc,assignment]
+
 import importlib
 try:
     openpyxl = importlib.import_module("openpyxl")
@@ -15,7 +18,7 @@ try:
 except Exception:
     xlrd = None
 
-class ExcelReader(Reader):
+class ExcelReader(BaseReader):  # type: ignore[misc,valid-type]
     def __init__(self, chunk_size: int = 4000):
         self.chunk_size = chunk_size
 
@@ -36,6 +39,7 @@ class ExcelReader(Reader):
         return self.read(obj, name)
 
     def _read_xlsx(self, path: Path, name: str | None) -> List[Document]:
+        assert openpyxl is not None
         wb = openpyxl.load_workbook(filename=str(path), data_only=True, read_only=True)
         docs: List[Document] = []
         for ws in wb.worksheets:
@@ -49,6 +53,7 @@ class ExcelReader(Reader):
         return docs
 
     def _read_xls(self, path: Path, name: str | None) -> List[Document]:
+        assert xlrd is not None
         wb = xlrd.open_workbook(filename=str(path))
         docs: List[Document] = []
         for si in range(wb.nsheets):

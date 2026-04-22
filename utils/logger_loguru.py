@@ -17,15 +17,17 @@ from loguru import logger
 
 # 可选的PyQt6依赖
 try:
-    from PyQt6.QtCore import QObject, pyqtSignal
+    from PyQt6.QtCore import QObject, pyqtSignal  # pyright: ignore
     PYQT6_AVAILABLE = True
 except ImportError:
     PYQT6_AVAILABLE = False
     # 创建占位符类
-    class QObject:
+    class QObject:  # type: ignore[misc,no-redef]
+        """占位符类，当 PyQt6 不可用时使用"""
         def __init__(self, *args, **kwargs):
             pass
-    def pyqtSignal(*args):
+    def pyqtSignal(*args):  # type: ignore[misc,no-redef]
+        """占位符信号，当 PyQt6 不可用时使用"""
         class DummySignal:
             def emit(self, *args, **kwargs):
                 pass
@@ -172,7 +174,7 @@ def get_business_logger(module_name: str) -> BusinessLogger:
     return BusinessLogger(module_name)
 
 # UI集成部分
-class UILogHandler(QObject):
+class UILogHandler(QObject):  # type: ignore[misc]
     """UI日志处理器，兼容现有LogHandler接口"""
 
     log_received = pyqtSignal(str, str, object)  # level, message, record

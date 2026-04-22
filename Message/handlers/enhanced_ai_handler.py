@@ -39,8 +39,8 @@ class EnhancedAIReplyHandler(BaseHandler):
         "请稍等，我让技术人员来回复您"
     ]
 
-    def __init__(self, bot: Bot = None, auto_reply_types: Set[ContextType] = None,
-                 enable_fallback: bool = True, fallback_replies: List[str] = None):
+    def __init__(self, bot: Optional[Bot] = None, auto_reply_types: Optional[Set[ContextType]] = None,
+                 enable_fallback: bool = True, fallback_replies: Optional[List[str]] = None):
         """
         初始化增强版AI回复处理器
 
@@ -110,7 +110,8 @@ class EnhancedAIReplyHandler(BaseHandler):
                 return await self._send_fallback_reply(context, metadata)
 
             # 2. 预处理消息
-            processed_content = self.preprocessor.process(context.content, context.type)
+            content = context.content if context.content else ""
+            processed_content = self.preprocessor.process(content, context.type)
 
             # 3. 调用AI生成回复
             reply = await self._get_ai_reply(processed_content, context)
@@ -185,14 +186,14 @@ class EnhancedAIReplyHandler(BaseHandler):
             user_id = metadata.get('user_id')
             from_uid = metadata.get('from_uid')
 
-            if not all([shop_id, user_id, from_uid]):
+            if not shop_id or not user_id or not from_uid:
                 logger.warning(f"缺少发送信息: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
                 return False
 
             # 尝试发送消息
             from Channel.pinduoduo.utils.API.send_message import SendMessage
-            sender = SendMessage(shop_id, user_id)
-            result = sender.send_text(from_uid, reply)
+            sender = SendMessage(str(shop_id), str(user_id))
+            result = sender.send_text(str(from_uid), reply)
             if isinstance(result, dict) and result.get("success"):
                 return True
             return False

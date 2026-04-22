@@ -38,7 +38,7 @@ class EnhancedMessageConsumer:
         self.handlers: List[MessageHandler] = []
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.running = False
-        self.consumer_task = None
+        self.consumer_task: Optional[asyncio.Task[None]] = None
         self.logger = get_logger(f"EnhancedConsumer.{queue_name}")
 
         # 用户队列管理（每个用户一个队列，保证顺序处理）
@@ -211,12 +211,13 @@ class EnhancedMessageConsumer:
 
         # 并行执行：AI处理 + 新消息监听
         ai_start_time = time.time()
-        from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
+        from_uid_raw = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
+        from_uid = from_uid_raw if from_uid_raw else "unknown"
 
         # 创建任务
         ai_task = asyncio.create_task(ai_handler.handle(context, wrapper.to_metadata()))
         queue_task = asyncio.create_task(self._user_queues[user_key].get())
-        
+
         # 人工回复监听任务
         staff_reply_event_id = self.staff_reply_manager.start_waiting(from_uid)
         staff_reply_task = asyncio.create_task(
@@ -343,7 +344,7 @@ class EnhancedMessageConsumer:
                 pass
 
         # 取消消费任务
-        if hasattr(self, 'consumer_task'):
+        if self.consumer_task is not None:
             self.consumer_task.cancel()
             try:
                 await self.consumer_task
@@ -364,10 +365,11 @@ class EnhancedMessageConsumer:
 
             if from_uid is None:
                 from_uid = "unknown"
-            if channel is None:
-                channel = "unknown"
 
-            if hasattr(channel, 'value'):
+            # 处理channel可能是字符串或枚举对象的情况
+            if channel is None:
+                channel_str = "unknown"
+            elif hasattr(channel, 'value'):
                 channel_str = str(channel.value)
             else:
                 channel_str = str(channel)
@@ -396,7 +398,7 @@ class EnhancedMessageConsumerManager:
         self.logger.info(f"Created enhanced consumer: {queue_name}")
         return consumer
 
-    def get_consumer(self, queue_name: str) -> EnhancedMessageConsumer:
+    def get_consumer(self, queue_name: str) -> Optional[EnhancedMessageConsumer]:
         """获取消费者"""
         return self._consumers.get(queue_name)
 

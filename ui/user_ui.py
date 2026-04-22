@@ -1,12 +1,13 @@
 # 账号管理界面
 
 import asyncio
+from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
                             QInputDialog, QMessageBox, QComboBox, QDialog, QFormLayout)
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
-from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel, 
-                           PrimaryPushButton, PushButton, StrongBodyLabel, 
+from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
+                           PrimaryPushButton, PushButton, StrongBodyLabel,
                            InfoBadge, ScrollArea, FluentIcon as FIF)
 from database.db_manager import db_manager
 from Channel.pinduoduo.pdd_login import login_pdd
@@ -19,7 +20,7 @@ class LogoLoaderThread(QThread):
     """异步加载Logo的线程"""
     logo_loaded = pyqtSignal(QPixmap)
 
-    def __init__(self, url):
+    def __init__(self, url: str):
         super().__init__()
         self.url = url
 
@@ -60,8 +61,8 @@ class LogoLoaderThread(QThread):
 class LoginThread(QThread):
     """登录验证线程"""
     login_finished = Signal(object)  # 登录完成信号，传递结果(字典或bool)
-    
-    def __init__(self, account_data):
+
+    def __init__(self, account_data: dict):
         super().__init__()
         self.account_data = account_data
         
@@ -90,14 +91,18 @@ class LoginThread(QThread):
 
 class AccountCard(CardWidget):
     """账号卡片组件"""
-    
+
     # 定义信号
     edit_clicked = pyqtSignal(dict)  # 编辑按钮点击信号，传递账号信息
     delete_clicked = pyqtSignal(dict)  # 删除按钮点击信号，传递账号信息
     verify_clicked = pyqtSignal(dict)  # 验证按钮点击信号，传递账号信息
-    
-    def __init__(self, account_data: dict, parent=None):
+
+    # 动态属性声明
+    logo_loader_thread: Optional['LogoLoaderThread']
+
+    def __init__(self, account_data: dict, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.logo_loader_thread = None
         self.account_data = account_data
         self.shop_id = account_data.get("shop_id", "")
         self.shop_name = account_data.get("shop_name", "")
@@ -155,7 +160,8 @@ class AccountCard(CardWidget):
         """异步加载Logo"""
         if self.shop_logo:
             def _start():
-                self.logo_loader_thread = LogoLoaderThread(self.shop_logo)
+                assert self.shop_logo is not None
+                self.logo_loader_thread = LogoLoaderThread(str(self.shop_logo))
                 self.logo_loader_thread.logo_loaded.connect(self.setLogo)
                 self.logo_loader_thread.start()
             QTimer.singleShot(200, _start)
@@ -310,22 +316,26 @@ class AccountCard(CardWidget):
         """更新账号状态"""
         self.account_data["status"] = new_status
         self.status = self.getStatusText(new_status)
-        
+
         # 重新创建状态标签
-        old_badge = self.action_widget.layout().itemAt(0).widget()
-        if old_badge:
-            old_badge.deleteLater()
-            
-        new_badge = self.createStatusBadge()
-        self.action_widget.layout().insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)
+        layout = self.action_widget.layout()
+        if layout is not None:
+            old_badge = layout.itemAt(0)
+            if old_badge and old_badge.widget():
+                old_badge.widget().deleteLater()
+
+            new_badge = self.createStatusBadge()
+            # QBoxLayout.insertWidget for QHBoxLayout/QVBoxLayout
+            if hasattr(layout, 'insertWidget'):
+                layout.insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)  # type: ignore[union-attr]
 
 
 class UserManagerWidget(QFrame):
     """用户管理主界面"""
-    
-    def __init__(self, parent=None):
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent=parent)
-        self.accounts_data = []  # 存储账号数据
+        self.accounts_data: list = []  # 存储账号数据
         self._loaded_once = False
         self.setupUI()
         QTimer.singleShot(300, self._maybeLoadOnShow)
@@ -558,9 +568,9 @@ class UserManagerWidget(QFrame):
         """登录完成回调"""
         # 恢复验证按钮状态
         account_card.setVerifyStatus(False)
-        
+
         try:
-            if result:  # 登录成功，result是一个包含信息的字典
+            if result and isinstance(result, dict):  # 登录成功，result是一个包含信息的字典
                 # 首先更新cookies（重要！）
                 cookies_updated = db_manager.update_account_cookies(
                     channel_name=account_data["channel_name"],
@@ -568,7 +578,7 @@ class UserManagerWidget(QFrame):
                     user_id=account_data["user_id"],
                     cookies=result.get("cookies")
                 )
-                
+
                 # 然后更新账号状态为在线
                 status_updated = db_manager.update_account_status(
                     account_data["channel_name"],
@@ -576,7 +586,7 @@ class UserManagerWidget(QFrame):
                     account_data["user_id"],
                     1  # 在线状态
                 )
-                
+
                 if cookies_updated and status_updated:
                     # 更新卡片状态显示
                     account_card.updateStatus(1)
@@ -623,7 +633,7 @@ class UserManagerWidget(QFrame):
         self.add_btn.setEnabled(True)
         self.add_btn.setText("添加账号")
 
-        if not result:
+        if not result or not isinstance(result, dict):
             QMessageBox.warning(self, "添加失败", "登录验证失败，请检查账号和密码后重试。")
             return
 
@@ -759,8 +769,8 @@ class UserManagerWidget(QFrame):
 
 class EditAccountDialog(QDialog):
     """编辑账号对话框"""
-    
-    def __init__(self, account_data: dict, parent=None):
+
+    def __init__(self, account_data: dict, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.account_data = account_data
         self.setWindowTitle("编辑账号")
@@ -885,8 +895,8 @@ class EditAccountDialog(QDialog):
 
 class AddAccountDialog(QDialog):
     """添加账号对话框（通过登录）"""
-    
-    def __init__(self, parent=None):
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("通过登录添加账号")
         self.setModal(True)

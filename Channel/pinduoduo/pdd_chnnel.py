@@ -16,8 +16,16 @@ import json
 from websockets import exceptions as ws_exceptions
 import asyncio
 import time
-from typing import Optional, Dict, List, Set, Any
+from typing import Optional, Dict, List, Set, Any, Callable, Union
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+# Type annotation for WebSocket - use string annotation for TYPE_CHECKING
+if TYPE_CHECKING:
+    WebSocketClientProtocol: Any
+else:
+    WebSocketClientProtocol = Any
+
 # 延迟导入 Message 模块，避免模块级循环依赖
 from config import config
 
@@ -55,7 +63,9 @@ class PDDChannel(Channel):
     # API 版本号
     API_VERSION = "202506091557"
 
-    def __init__(self, max_concurrent_messages: int = 50, status_manager: ConnectionStatusManager = None):
+    status_manager: ConnectionStatusManager
+
+    def __init__(self, max_concurrent_messages: int = 50, status_manager: Optional[ConnectionStatusManager] = None):
         super().__init__()
         self.channel_name = "pinduoduo"
         self.logger = get_logger("PDDChannel")
@@ -64,11 +74,11 @@ class PDDChannel(Channel):
         if status_manager is None:
             from core.di_container import container
             status_manager = container.get(ConnectionStatusManager)
-        self.status_manager = status_manager
+        self.status_manager = status_manager  # pyright: ignore[reportAttributeAccessIssue]
 
         self._stop_event: Optional[asyncio.Event] = None
         self.base_url = "wss://m-ws.pinduoduo.com/"
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self.ws: Any = None
         self.businessHours = config.get("businessHours")
 
         # WebSocket优化功能
@@ -85,7 +95,7 @@ class PDDChannel(Channel):
         # 资源管理
         self.resource_manager = WebSocketResourceManager()
 
-    async def start_account(self, shop_id: str, user_id: str, on_success: callable, on_failure: callable) -> None:
+    async def start_account(self, shop_id: str, user_id: str, on_success: Callable[..., None], on_failure: Callable[..., None]) -> None:
         """
         启动指定店铺下账号 - 支持自动重连
         :param shop_id: 店铺ID
@@ -200,7 +210,7 @@ class PDDChannel(Channel):
             self.logger.error(f"停止店铺 {shop_id} 账号 {user_id} 时发生错误: {str(e)}")
 
 
-    async def init(self, shop_id: str, user_id: str, username: str, on_success: callable, on_failure: callable) -> None:
+    async def init(self, shop_id: str, user_id: str, username: str, on_success: Callable[[], None], on_failure: Callable[[str], None]) -> None:
         """
         初始化WebSocket连接和消息处理系统
         """
@@ -348,7 +358,7 @@ class PDDChannel(Channel):
     # WebSocket优化功能 - 自动重连和单次连接方法
     # ============================================================================
 
-    async def _connect_with_retry(self, shop_id: str, user_id: str, username: str, on_success: callable, on_failure: callable):
+    async def _connect_with_retry(self, shop_id: str, user_id: str, username: str, on_success: Callable[[], None], on_failure: Callable[[str], None]):
         """
         带重连机制的WebSocket连接
         """
@@ -406,7 +416,7 @@ class PDDChannel(Channel):
                     self.status_manager.update_status(shop_id, user_id, username, ConnectionState.DISCONNECTED)
                     return
 
-    async def _connect_single_attempt(self, shop_id: str, user_id: str, username: str, on_success: callable, on_failure: callable):
+    async def _connect_single_attempt(self, shop_id: str, user_id: str, username: str, on_success: Callable[[], None], on_failure: Callable[[str], None]):
         """
         单次WebSocket连接尝试
         """
@@ -444,9 +454,9 @@ class PDDChannel(Channel):
         """
         return self.status_manager.get_status(shop_id, user_id)
 
-    def configure_reconnect(self, max_attempts: int = None, initial_delay: float = None,
-                          max_delay: float = None, backoff_factor: float = None,
-                          enable_auto_reconnect: bool = None) -> None:
+    def configure_reconnect(self, max_attempts: Optional[int] = None, initial_delay: Optional[float] = None,
+                          max_delay: Optional[float] = None, backoff_factor: Optional[float] = None,
+                          enable_auto_reconnect: Optional[bool] = None) -> None:
         """
         配置重连参数 - 供外部模块调用
         Args:
@@ -471,8 +481,8 @@ class PDDChannel(Channel):
                         f"initial_delay={self.reconnect_config.initial_delay}, "
                         f"enable_auto_reconnect={self.reconnect_config.enable_auto_reconnect}")
 
-    def configure_heartbeat(self, enable_heartbeat: bool = None, heartbeat_interval: float = None,
-                           heartbeat_timeout: float = None, max_heartbeat_failures: int = None) -> None:
+    def configure_heartbeat(self, enable_heartbeat: Optional[bool] = None, heartbeat_interval: Optional[float] = None,
+                           heartbeat_timeout: Optional[float] = None, max_heartbeat_failures: Optional[int] = None) -> None:
         """
         配置心跳参数 - 供外部模块调用
         Args:
@@ -494,7 +504,7 @@ class PDDChannel(Channel):
                         f"heartbeat_interval={self.heartbeat_config.heartbeat_interval}, "
                         f"max_heartbeat_failures={self.heartbeat_config.max_heartbeat_failures}")
 
-    def get_heartbeat_status(self, shop_id: str, user_id: str) -> Dict[str, Optional[any]]:
+    def get_heartbeat_status(self, shop_id: str, user_id: str) -> Dict[str, Optional[Any]]:
         """
         获取心跳状态信息 - 供外部模块调用
         Args:
@@ -605,10 +615,10 @@ class PDDChannel(Channel):
                 self.processing_tasks.add(task)
                 task.add_done_callback(self.processing_tasks.discard)
 
-        except ws_exceptions.ConnectionClosed as cc:
-            self.logger.warning(f"WebSocket连接正常关闭: {shop_id}-{username}, 代码: {cc.code}")
         except ws_exceptions.ConnectionClosedError as cce:
             self.logger.error(f"WebSocket连接异常关闭: {shop_id}-{username}, 错误: {cce}")
+        except ws_exceptions.ConnectionClosed as cc:
+            self.logger.warning(f"WebSocket连接正常关闭: {shop_id}-{username}, 代码: {cc.code}")
         except Exception as e:
             self.logger.error(f"消息循环错误: {shop_id}-{username}, 错误: {str(e)}")
 
@@ -888,39 +898,9 @@ class PDDChannel(Channel):
                 # 转接消息
                 self.logger.info(f"转接消息: {context.content}")
                 send_message.send_text(recipient_uid,"[玫瑰]")
-                
+
         except Exception as e:
             self.logger.error(f"立即处理消息失败: {e}")
-    
-    async def _cleanup_resources(self, queue_name: str):
-        """
-        清理资源 - 优化版本支持完整资源管理
-        """
-        # 延迟导入，避免模块级循环依赖
-        from Message import message_consumer_manager
-
-        try:
-            # 清理处理任务
-            await self.cleanup_processing_tasks()
-
-            # 清理重连任务
-            await self._cleanup_reconnect_tasks()
-
-            # 清理心跳任务
-            await self._cleanup_heartbeat_tasks()
-
-            # 清理WebSocket资源
-            await self.resource_manager.cleanup_all()
-
-            # 停止消息消费者
-            await message_consumer_manager.stop_consumer(queue_name)
-            self.logger.debug(f"已停止消息消费者: {queue_name}")
-
-            # 清理WebSocket连接引用
-            self.ws = None
-
-        except Exception as e:
-            self.logger.error(f"清理资源失败: {e}")
 
     async def _cleanup_reconnect_tasks(self):
         """清理所有重连任务"""

@@ -142,10 +142,11 @@ class DebounceProcessorAdapter:
 
             if from_uid is None:
                 from_uid = "unknown"
-            if channel is None:
-                channel = "unknown"
 
-            if hasattr(channel, 'value'):
+            # 处理channel可能是字符串或枚举对象的情况
+            if channel is None:
+                channel_str = "unknown"
+            elif hasattr(channel, 'value'):
                 channel_str = str(channel.value)
             else:
                 channel_str = str(channel)

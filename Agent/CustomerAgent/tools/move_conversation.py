@@ -12,7 +12,6 @@ def transfer_conversation(shop_id: str, user_id: str, recipient_uid: str) -> str
     """
     try:
 
-        
         if not all([shop_id, user_id, recipient_uid]):
             return f"转接失败：缺少必要的会话信息 (shop_id={shop_id}, user_id={user_id}, recipient_uid={recipient_uid})"
 
@@ -28,13 +27,15 @@ def transfer_conversation(shop_id: str, user_id: str, recipient_uid: str) -> str
                 cs_uid = available_cs_uids[0]
                 # 转移会话
                 transfer_result = sender.move_conversation(recipient_uid, cs_uid)
-                
+
                 if transfer_result and transfer_result.get('success'):
-                    return True
+                    return f"转接成功，已转接给客服 {cs_uid}"
                 else:
-                    return False
+                    return f"转接失败：转移操作未成功"
             else:
-                return False
-       
+                return "转接失败：没有可用的人工客服"
+
+        return "转接失败：无法获取客服列表"
+
     except Exception as e:
         return f"转接过程中发生错误: {str(e)}"

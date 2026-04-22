@@ -1,3 +1,4 @@
+from typing import Optional
 from ..base_request import BaseRequest
 
 
@@ -7,7 +8,7 @@ class ProductManager(BaseRequest):
     提供商品列表查询和商品详情获取功能
     """
 
-    def __init__(self, shop_id: str = None, user_id: str = None, cookies=None):
+    def __init__(self, shop_id: Optional[str] = None, user_id: Optional[str] = None, cookies=None):
         """
         初始化商品管理器
 

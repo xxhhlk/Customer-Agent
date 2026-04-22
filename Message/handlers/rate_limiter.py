@@ -36,7 +36,7 @@ class CozeRateLimiter:
     DEFAULT_WINDOW_SIZE = 4 * 3600   # 默认4小时
     DEFAULT_MAX_REQUESTS = 10        # 默认最多10次请求
 
-    def __init__(self, window_size: float = None, max_requests: int = None):
+    def __init__(self, window_size: Optional[float] = None, max_requests: Optional[int] = None):
         """
         初始化限流器
 
@@ -67,7 +67,7 @@ class CozeRateLimiter:
     def max_requests(self, value: int):
         self._max_requests = value
 
-    def configure(self, window_size: float = None, max_requests: int = None):
+    def configure(self, window_size: Optional[float] = None, max_requests: Optional[int] = None):
         """
         动态更新限流配置（不会重置已有用户的窗口计数）
 

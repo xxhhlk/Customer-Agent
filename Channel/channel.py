@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Optional
 from database import db_manager
 from utils.logger_loguru import get_logger
 
@@ -7,13 +8,13 @@ class Channel:
     渠道基类
     """
     def __init__(self):
-        self.channel_name = None  # 渠道名称
-        self.shop_name = None  # 店铺名称
-        self.name = None  # 账号名称
-        self.password = None  # 密码
-        self.logger = get_logger("Channel")  
-    
-    async def add_shop(self, shop_id: str, shop_name: str,description: str = None) -> bool:
+        self.channel_name: Optional[str] = None  # 渠道名称
+        self.shop_name: Optional[str] = None  # 店铺名称
+        self.name: Optional[str] = None  # 账号名称
+        self.password: Optional[str] = None  # 密码
+        self.logger = get_logger("Channel")
+
+    async def add_shop(self, shop_id: str, shop_name: str, description: Optional[str] = None) -> bool:
         """
         添加店铺
         :param shop_id: 店铺ID

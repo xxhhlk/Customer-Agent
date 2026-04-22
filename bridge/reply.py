@@ -2,6 +2,7 @@
 回复类型枚举
 """
 from enum import Enum
+from typing import Optional, Any
 
 
 class ReplyType(Enum):
@@ -16,7 +17,7 @@ class ReplyType(Enum):
 
 
 class Reply:
-    def __init__(self, type: ReplyType = None, content=None):
+    def __init__(self, type: Optional[ReplyType] = None, content: Any = None):
         self.type = type
         self.content = content
 

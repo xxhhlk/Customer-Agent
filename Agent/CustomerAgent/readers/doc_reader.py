@@ -1,10 +1,13 @@
 from typing import List
 from pathlib import Path
 from agno.knowledge.document.base import Document
+
+# 尝试导入 Reader 基类，如果失败则定义一个 dummy 基类
 try:
-    from agno.knowledge.reader.base import Reader
+    from agno.knowledge.reader.base import Reader as BaseReader
 except Exception:
-    Reader = object
+    BaseReader = object  # type: ignore[misc,assignment]
+
 import shutil
 import subprocess
 import importlib
@@ -16,7 +19,7 @@ try:
 except Exception:
     textract = None
 
-class DocReader(Reader):
+class DocReader(BaseReader):  # type: ignore[misc,valid-type]
     def __init__(self, chunk_size: int = 4000):
         self.chunk_size = chunk_size
 

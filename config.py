@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from contextlib import contextmanager
 from agno.models.openai import OpenAILike
 from agno.knowledge.embedder.openai import OpenAIEmbedder
@@ -54,6 +54,13 @@ class BusinessHoursConfig(BaseModel):
         except ValueError:
             raise ValueError('时间格式必须为HH:MM，例如08:00')
 
+
+class RateLimitConfig(BaseModel):
+    """限流配置模型"""
+    window_hours: float = Field(default=1.0, description="限流窗口时间（小时）")
+    max_requests: int = Field(default=100, description="窗口内最大请求数")
+    fallback_reply: List[str] = Field(default_factory=list, description="兜底回复列表")
+
 class PromptConfig(BaseModel):
     """提示词配置模型"""
     description: str = Field(default="", description="角色描述")
@@ -83,6 +90,10 @@ class ConfigModel(BaseModel):
     prompt: PromptConfig = Field(
         default_factory=PromptConfig,
         description="提示词配置"
+    )
+    rate_limit: RateLimitConfig = Field(
+        default_factory=RateLimitConfig,
+        description="限流配置"
     )
     db_path: str = Field(default="", description="数据库路径")
 
@@ -254,6 +265,15 @@ class Config:
         """获取验证后的配置模型"""
         with self._lock:
             return self._validated_config or ConfigModel()
+
+    def get_rate_limit_config(self) -> Dict[str, Any]:
+        """获取限流配置"""
+        model = self.get_model()
+        return {
+            'window_hours': model.rate_limit.window_hours,
+            'max_requests': model.rate_limit.max_requests,
+            'fallback_reply': model.rate_limit.fallback_reply
+        }
 
     def __getitem__(self, key: str) -> Any:
         """支持使用字典方式访问配置"""
