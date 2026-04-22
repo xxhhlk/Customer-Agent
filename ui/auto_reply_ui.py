@@ -302,7 +302,12 @@ class SetStatusThread(QThread):
             if not cookies:
                 raise ValueError("账号缺少cookies，无法设置状态")
 
-            account_monitor = AccountMonitor(cookies)
+            account_monitor = AccountMonitor(
+                cookies=cookies,
+                shop_id=self.account_data.get("shop_id"),
+                user_id=self.account_data.get("user_id"),
+                channel_name=self.account_data.get("channel_name", "pinduoduo")
+            )
             
             api_success = account_monitor.set_csstatus(str(self.target_status))
 

@@ -2,9 +2,9 @@ from ..base_request import BaseRequest
 
 
 class AccountMonitor(BaseRequest):
-    def __init__(self, cookies=None):
-        # 如果直接传入cookies，不需要从数据库获取
-        super().__init__()
+    def __init__(self, cookies=None, shop_id=None, user_id=None, channel_name="pinduoduo"):
+        # 初始化基类，传递账号信息以便支持会话过期自动重新登录
+        super().__init__(shop_id=shop_id, user_id=user_id, channel_name=channel_name)
         if cookies:
             self.update_cookies(cookies)
     def set_csstatus(self, status: str):
