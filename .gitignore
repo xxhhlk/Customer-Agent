@@ -103,6 +103,10 @@ temp/
 tmp/
 *.tmp
 *.temp
+# 临时修复脚本
+fix_database.py
+fix_db_with_project.py
+add_missing_fields.py
 
 # 日志文件
 logs/
