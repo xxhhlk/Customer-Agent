@@ -71,6 +71,7 @@ class Keyword(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     keyword: Mapped[str] = mapped_column(String(100), nullable=False, comment='关键词')
     group_name: Mapped[str] = mapped_column(String(100), nullable=False, default='default', comment='分组名称')
+    match_type: Mapped[str] = mapped_column(String(20), nullable=False, default='partial', comment='匹配类型: exact-完全匹配, partial-部分匹配, regex-正则匹配, wildcard-通配符匹配')
     reply_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='回复内容')
     transfer_to_human: Mapped[bool] = mapped_column(Integer, default=0, comment='是否转人工: 0-否, 1-是')
     priority: Mapped[int] = mapped_column(Integer, default=0, comment='优先级，数值越大优先级越高')
@@ -78,4 +79,4 @@ class Keyword(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment='更新时间')
 
     def __repr__(self):
-        return f"<Keyword(keyword='{self.keyword}', group='{self.group_name}')>"
+        return f"<Keyword(keyword='{self.keyword}', group='{self.group_name}', match_type='{self.match_type}')>"

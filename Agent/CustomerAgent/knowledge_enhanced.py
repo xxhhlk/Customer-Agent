@@ -131,7 +131,7 @@ class LanceDbWithProgress(LanceDb):
                 break
 
             # 检查文档是否已存在
-            if self.doc_exists(document):
+            if hasattr(self, 'doc_exists') and self.doc_exists(document):  # type: ignore[union-attr]
                 logger.debug(f"文档已存在，跳过: {document.name}")
                 continue
 
@@ -214,7 +214,7 @@ class LanceDbWithProgress(LanceDb):
                 break
 
             # 检查文档是否已存在
-            if self.doc_exists(document):
+            if hasattr(self, 'doc_exists') and self.doc_exists(document):  # type: ignore[union-attr]
                 logger.debug(f"文档已存在，跳过: {document.name}")
                 continue
 

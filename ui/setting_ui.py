@@ -285,6 +285,71 @@ class PromptConfigCard(CardWidget):
             self.instructions_edit.setPlainText(instructions)
 
 
+class HumanReplyWaitCard(CardWidget):
+    """人工客服优先回复配置卡片"""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self) -> None:
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("人工客服优先回复")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 启用开关
+        from qfluentwidgets import SwitchButton
+        self.enable_switch = SwitchButton("启用")
+        self.enable_switch.setChecked(True)
+        form_layout.addRow("启用功能:", self.enable_switch)
+
+        # 等待时间
+        from qfluentwidgets import SpinBox
+        self.wait_seconds_spin = SpinBox()
+        self.wait_seconds_spin.setRange(5, 120)
+        self.wait_seconds_spin.setValue(30)
+        self.wait_seconds_spin.setSuffix(" 秒")
+        form_layout.addRow("等待时间:", self.wait_seconds_spin)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "启用后，收到客户消息时会优先等待人工客服回复。\n"
+            "如果人工客服在指定时间内回复，则取消AI自动回复。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        return {
+            "staff_reply_wait": {
+                "enable": self.enable_switch.isChecked(),
+                "wait_seconds": self.wait_seconds_spin.value()
+            }
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        staff_reply_wait = config.get("staff_reply_wait", {})
+        self.enable_switch.setChecked(staff_reply_wait.get("enable", True))
+        self.wait_seconds_spin.setValue(staff_reply_wait.get("wait_seconds", 30))
+
+
 class BusinessHoursCard(CardWidget):
     """业务时间配置卡片"""
 
@@ -472,6 +537,7 @@ class SettingUI(QFrame):
         self.knowledge_config_card = KnowledgeConfigCard()
         self.prompt_config_card = PromptConfigCard()
         self.business_hours_card = BusinessHoursCard()
+        self.human_reply_wait_card = HumanReplyWaitCard()
 
         # 添加到布局
         content_layout.addWidget(self.llm_config_card)
@@ -479,6 +545,7 @@ class SettingUI(QFrame):
         content_layout.addWidget(self.knowledge_config_card)
         content_layout.addWidget(self.prompt_config_card)
         content_layout.addWidget(self.business_hours_card)
+        content_layout.addWidget(self.human_reply_wait_card)
         content_layout.addStretch()
 
         # 设置容器样式
@@ -520,6 +587,10 @@ class SettingUI(QFrame):
                 "business_hours": {
                     "start": config.get("business_hours.start", "08:00"),
                     "end": config.get("business_hours.end", "23:00")
+                },
+                "staff_reply_wait": {
+                    "enable": config.get("staff_reply_wait.enable", True),
+                    "wait_seconds": config.get("staff_reply_wait.wait_seconds", 30)
                 }
             }
 
@@ -589,7 +660,8 @@ class SettingUI(QFrame):
                 "additional_context": "",
                 "instructions": []
             }),
-            "business_hours": config_data.get("business_hours", {"start": "08:00", "end": "23:00"})
+            "business_hours": config_data.get("business_hours", {"start": "08:00", "end": "23:00"}),
+            "staff_reply_wait": config_data.get("staff_reply_wait", {"enable": True, "wait_seconds": 30})
         }
 
         # 验证business_hours格式
@@ -603,6 +675,17 @@ class SettingUI(QFrame):
         if "end" not in business_hours:
             business_hours["end"] = "23:00"
 
+        # 验证staff_reply_wait格式
+        staff_reply_wait = validated_config["staff_reply_wait"]
+        if not isinstance(staff_reply_wait, dict):
+            staff_reply_wait = {"enable": True, "wait_seconds": 30}
+            validated_config["staff_reply_wait"] = staff_reply_wait
+
+        if "enable" not in staff_reply_wait:
+            staff_reply_wait["enable"] = True
+        if "wait_seconds" not in staff_reply_wait:
+            staff_reply_wait["wait_seconds"] = 30
+
         # 设置到界面
         self.llm_config_card.setConfig(validated_config["llm"])
         self.embedder_config_card.setConfig(validated_config["embedder"])
@@ -612,6 +695,10 @@ class SettingUI(QFrame):
         # 处理业务时间配置
         business_hours_config = validated_config["business_hours"]
         self.business_hours_card.setConfig({"business_hours": business_hours_config})
+
+        # 处理人工回复等待配置
+        staff_reply_wait_config = validated_config["staff_reply_wait"]
+        self.human_reply_wait_card.setConfig({"staff_reply_wait": staff_reply_wait_config})
     
     def onSaveConfig(self):
         """保存配置到config模块"""
@@ -622,6 +709,7 @@ class SettingUI(QFrame):
             knowledge_config = self.knowledge_config_card.getConfig()
             prompt_config = self.prompt_config_card.getConfig()
             business_config = self.business_hours_card.getConfig()
+            staff_reply_wait_config = self.human_reply_wait_card.getConfig()
 
             # 合并配置为新的结构
             new_config = {
@@ -630,6 +718,7 @@ class SettingUI(QFrame):
                 "knowledge_base": knowledge_config,
                 "prompt": prompt_config,
                 "business_hours": business_config.get("businessHours", {"start": "08:00", "end": "23:00"}),
+                "staff_reply_wait": staff_reply_wait_config.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
                 # 保持与旧配置的兼容性
                 "db_path": config.get("db_path", "")
             }

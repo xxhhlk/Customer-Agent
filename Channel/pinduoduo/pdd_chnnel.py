@@ -883,8 +883,11 @@ class PDDChannel(Channel):
                 self.logger.info(f"系统提示: {context.content}")
                 
             elif context.type == ContextType.MALL_CS:
-                # 其他客服消息，通常不需要回复
+                # 其他客服消息，通知人工回复事件管理器
                 self.logger.debug(f"收到客服消息: {context.content}")
+                # 通知人工客服已回复
+                from Message.handlers.staff_reply_event import staff_reply_event_manager
+                staff_reply_event_manager.notify_staff_reply(recipient_uid)
                 
             elif context.type == ContextType.SYSTEM_BIZ:
                 # 系统业务消息

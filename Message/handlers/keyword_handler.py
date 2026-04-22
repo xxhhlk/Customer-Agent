@@ -4,6 +4,7 @@
 from typing import Dict, Any, Optional, List
 from bridge.context import Context, ContextType
 from .base import BaseHandler
+from .keyword_matcher import matcher_factory
 from database.db_manager import db_manager
 from utils.logger_loguru import get_logger
 from Channel.pinduoduo.utils.API.send_message import SendMessage
@@ -15,6 +16,7 @@ class KeywordDetectionHandler(BaseHandler):
         super().__init__("KeywordDetectionHandler")
         self.logger = get_logger("KeywordDetectionHandler")
         self.keywords = self._load_keywords()
+        self.matcher_factory = matcher_factory
 
         # 记录加载的关键词数量
         self.logger.info(f"关键词检测处理器初始化完成，加载了 {len(self.keywords)} 个关键词")
@@ -40,14 +42,18 @@ class KeywordDetectionHandler(BaseHandler):
         if not context.content or not isinstance(context.content, str):
             return False
 
-        # 将消息内容转换为小写进行检测
-        content_lower = context.content.lower()
-
         # 检查是否包含任何关键词（优先级已在数据库查询时排序）
         for kw in self.keywords:
-            keyword = kw.get('keyword', '').lower()
-            if keyword and keyword in content_lower:
-                self.logger.debug(f"检测到关键词: '{keyword}' 在消息: '{context.content}'")
+            keyword = kw.get('keyword', '')
+            match_type = kw.get('match_type', 'partial')
+            
+            if not keyword:
+                continue
+                
+            # 使用匹配器工厂获取对应的匹配器
+            matcher = self.matcher_factory.get_matcher(match_type)
+            if matcher.match(keyword, context.content):
+                self.logger.debug(f"检测到关键词: '{keyword}' (匹配类型: {match_type}) 在消息: '{context.content}'")
                 return True
 
         return False
@@ -62,6 +68,7 @@ class KeywordDetectionHandler(BaseHandler):
             匹配的关键词信息，包含:
             - keyword: 关键词
             - group_name: 分组名称
+            - match_type: 匹配类型
             - reply_content: 回复内容
             - transfer_to_human: 是否转人工
             - priority: 优先级
@@ -70,15 +77,21 @@ class KeywordDetectionHandler(BaseHandler):
         if not message:
             return None
             
-        message_lower = message.lower()
-        
         # 按优先级匹配（数据库查询时已排序）
         for kw in self.keywords:
-            keyword = kw.get('keyword', '').lower()
-            if keyword and keyword in message_lower:
+            keyword = kw.get('keyword', '')
+            match_type = kw.get('match_type', 'partial')
+            
+            if not keyword:
+                continue
+                
+            # 使用匹配器工厂获取对应的匹配器
+            matcher = self.matcher_factory.get_matcher(match_type)
+            if matcher.match(keyword, message):
                 return {
                     'keyword': kw.get('keyword'),
                     'group_name': kw.get('group_name', 'default'),
+                    'match_type': kw.get('match_type', 'partial'),
                     'reply_content': kw.get('reply_content'),
                     'transfer_to_human': kw.get('transfer_to_human', False),
                     'priority': kw.get('priority', 0)
@@ -97,7 +110,7 @@ class KeywordDetectionHandler(BaseHandler):
                 return False
             
             # 匹配关键词
-            matched = self.match_keyword(context.content)
+            matched = self.match_keyword(context.content or "")
             if not matched:
                 return False
             

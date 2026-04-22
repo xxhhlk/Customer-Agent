@@ -28,8 +28,8 @@ class KeywordTableWidget(TableWidget):
     def setupTable(self):
         """设置表格"""
         # 设置列数和表头
-        self.setColumnCount(6)
-        self.setHorizontalHeaderLabels(['关键词', '分组', '回复内容', '转人工', '优先级', '操作'])
+        self.setColumnCount(7)
+        self.setHorizontalHeaderLabels(['关键词', '分组', '匹配类型', '回复内容', '转人工', '优先级', '操作'])
         
         # 设置表格属性
         self.setAlternatingRowColors(True)  # 交替行颜色
@@ -41,12 +41,13 @@ class KeywordTableWidget(TableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # 关键词列自动拉伸
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # 分组列
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # 回复内容列自动拉伸
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # 转人工列
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # 优先级列
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)   # 操作列固定宽度
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # 匹配类型列
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # 回复内容列自动拉伸
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # 转人工列
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # 优先级列
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)   # 操作列固定宽度
         
-        self.setColumnWidth(5, 250)  # 操作列
+        self.setColumnWidth(6, 250)  # 操作列
         
         # 设置行高
         self.verticalHeader().setDefaultSectionSize(50)
@@ -59,6 +60,7 @@ class KeywordTableWidget(TableWidget):
                 'id': int,
                 'keyword': str,
                 'group_name': str,
+                'match_type': str,
                 'reply_content': str,
                 'transfer_to_human': bool,
                 'priority': int
@@ -80,21 +82,33 @@ class KeywordTableWidget(TableWidget):
         group_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
         self.setItem(row, 1, group_item)
         
+        # 匹配类型
+        match_type_map = {
+            'exact': '完全匹配',
+            'partial': '部分匹配',
+            'regex': '正则匹配',
+            'wildcard': '通配符匹配'
+        }
+        match_type_text = match_type_map.get(keyword_data.get('match_type', 'partial'), '部分匹配')
+        match_type_item = QTableWidgetItem(match_type_text)
+        match_type_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        self.setItem(row, 2, match_type_item)
+        
         # 回复内容
         reply_item = QTableWidgetItem(keyword_data.get('reply_content', '') or '')
         reply_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-        self.setItem(row, 2, reply_item)
+        self.setItem(row, 3, reply_item)
         
         # 转人工
         transfer_text = '是' if keyword_data.get('transfer_to_human', False) else '否'
         transfer_item = QTableWidgetItem(transfer_text)
         transfer_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-        self.setItem(row, 3, transfer_item)
+        self.setItem(row, 4, transfer_item)
         
         # 优先级
         priority_item = QTableWidgetItem(str(keyword_data.get('priority', 0)))
         priority_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-        self.setItem(row, 4, priority_item)
+        self.setItem(row, 5, priority_item)
         
         # 操作按钮
         action_widget = QWidget()
@@ -117,7 +131,7 @@ class KeywordTableWidget(TableWidget):
         
         action_layout.addWidget(edit_btn)
         action_layout.addWidget(delete_btn)
-        self.setCellWidget(row, 5, action_widget)
+        self.setCellWidget(row, 6, action_widget)
         
     def clearTable(self):
         """清空表格"""
@@ -161,6 +175,21 @@ class KeywordDialog(QDialog):
         self.group_combo.setCurrentText(self.keyword_data.get('group_name', 'default'))
         layout.addRow('分组:', self.group_combo)
         
+        # 匹配类型选择
+        self.match_type_combo = QComboBox()
+        self.match_type_combo.addItem('完全匹配', 'exact')
+        self.match_type_combo.addItem('部分匹配', 'partial')
+        self.match_type_combo.addItem('正则匹配', 'regex')
+        self.match_type_combo.addItem('通配符匹配', 'wildcard')
+        
+        # 设置当前匹配类型
+        current_match_type = self.keyword_data.get('match_type', 'partial')
+        index = self.match_type_combo.findData(current_match_type)
+        if index >= 0:
+            self.match_type_combo.setCurrentIndex(index)
+        
+        layout.addRow('匹配类型:', self.match_type_combo)
+        
         # 回复内容
         self.reply_edit = QTextEdit()
         self.reply_edit.setPlaceholderText('输入回复内容（可选）')
@@ -195,6 +224,7 @@ class KeywordDialog(QDialog):
         return {
             'keyword': self.keyword_edit.text().strip(),
             'group_name': self.group_combo.currentText().strip() or 'default',
+            'match_type': self.match_type_combo.currentData(),
             'reply_content': self.reply_edit.toPlainText().strip() or None,
             'transfer_to_human': self.transfer_check.isChecked(),
             'priority': self.priority_spin.value()
@@ -294,6 +324,7 @@ class KeywordManagerWidget(QFrame):
                     "id": kw["id"],
                     "keyword": kw["keyword"],
                     "group_name": kw.get("group_name", "default"),
+                    "match_type": kw.get("match_type", "partial"),
                     "reply_content": kw.get("reply_content"),
                     "transfer_to_human": kw.get("transfer_to_human", False),
                     "priority": kw.get("priority", 0)
@@ -314,29 +345,29 @@ class KeywordManagerWidget(QFrame):
     def initializeSampleKeywords(self):
         """初始化示例关键词到数据库"""
         sample_keywords = [
-            {"keyword": "转人工", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "人工客服", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "真人", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "客服", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "人工", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "工单", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "好评", "group_name": "默认", "reply_content": "感谢您的好评！祝您生活愉快~", "priority": 5},
-            {"keyword": "取消订单", "group_name": "订单问题", "transfer_to_human": True, "priority": 8},
-            {"keyword": "改地址", "group_name": "订单问题", "transfer_to_human": True, "priority": 8},
-            {"keyword": "转售后客服", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "转售后", "group_name": "转人工", "transfer_to_human": True, "priority": 10},
-            {"keyword": "返现", "group_name": "售后", "transfer_to_human": True, "priority": 7},
-            {"keyword": "过敏", "group_name": "售后", "transfer_to_human": True, "priority": 9},
-            {"keyword": "退款", "group_name": "售后", "transfer_to_human": True, "priority": 8},
-            {"keyword": "没有效果", "group_name": "售后", "transfer_to_human": True, "priority": 7},
-            {"keyword": "骗人", "group_name": "投诉", "transfer_to_human": True, "priority": 9},
-            {"keyword": "投诉", "group_name": "投诉", "transfer_to_human": True, "priority": 10},
-            {"keyword": "纠纷", "group_name": "投诉", "transfer_to_human": True, "priority": 9},
-            {"keyword": "开发票", "group_name": "发票", "transfer_to_human": True, "priority": 6},
-            {"keyword": "开票", "group_name": "发票", "transfer_to_human": True, "priority": 6},
-            {"keyword": "烂", "group_name": "售后", "transfer_to_human": True, "priority": 7},
-            {"keyword": "取消", "group_name": "订单问题", "transfer_to_human": True, "priority": 7},
-            {"keyword": "备注", "group_name": "订单问题", "transfer_to_human": True, "priority": 6}
+            {"keyword": "转人工", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "人工客服", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "真人", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "客服", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "人工", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "工单", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "好评", "group_name": "默认", "match_type": "partial", "reply_content": "感谢您的好评！祝您生活愉快~", "priority": 5},
+            {"keyword": "取消订单", "group_name": "订单问题", "match_type": "partial", "transfer_to_human": True, "priority": 8},
+            {"keyword": "改地址", "group_name": "订单问题", "match_type": "partial", "transfer_to_human": True, "priority": 8},
+            {"keyword": "转售后客服", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "转售后", "group_name": "转人工", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "返现", "group_name": "售后", "match_type": "partial", "transfer_to_human": True, "priority": 7},
+            {"keyword": "过敏", "group_name": "售后", "match_type": "partial", "transfer_to_human": True, "priority": 9},
+            {"keyword": "退款", "group_name": "售后", "match_type": "partial", "transfer_to_human": True, "priority": 8},
+            {"keyword": "没有效果", "group_name": "售后", "match_type": "partial", "transfer_to_human": True, "priority": 7},
+            {"keyword": "骗人", "group_name": "投诉", "match_type": "partial", "transfer_to_human": True, "priority": 9},
+            {"keyword": "投诉", "group_name": "投诉", "match_type": "partial", "transfer_to_human": True, "priority": 10},
+            {"keyword": "纠纷", "group_name": "投诉", "match_type": "partial", "transfer_to_human": True, "priority": 9},
+            {"keyword": "开发票", "group_name": "发票", "match_type": "partial", "transfer_to_human": True, "priority": 6},
+            {"keyword": "开票", "group_name": "发票", "match_type": "partial", "transfer_to_human": True, "priority": 6},
+            {"keyword": "烂", "group_name": "售后", "match_type": "partial", "transfer_to_human": True, "priority": 7},
+            {"keyword": "取消", "group_name": "订单问题", "match_type": "partial", "transfer_to_human": True, "priority": 7},
+            {"keyword": "备注", "group_name": "订单问题", "match_type": "partial", "transfer_to_human": True, "priority": 6}
         ]
         
         # 将示例关键词添加到数据库
@@ -344,6 +375,7 @@ class KeywordManagerWidget(QFrame):
             if db_manager.add_keyword(
                 keyword=kw_data["keyword"],
                 group_name=kw_data.get("group_name", "default"),
+                match_type=kw_data.get("match_type", "partial"),
                 reply_content=kw_data.get("reply_content"),
                 transfer_to_human=kw_data.get("transfer_to_human", False),
                 priority=kw_data.get("priority", 0)
@@ -396,6 +428,7 @@ class KeywordManagerWidget(QFrame):
                 old_keyword=keyword_data['keyword'],
                 new_keyword=new_data['keyword'],
                 group_name=new_data['group_name'],
+                match_type=new_data['match_type'],
                 reply_content=new_data['reply_content'],
                 transfer_to_human=new_data['transfer_to_human'],
                 priority=new_data['priority']
@@ -465,6 +498,7 @@ class KeywordManagerWidget(QFrame):
             if db_manager.add_keyword(
                 keyword=keyword,
                 group_name=keyword_data.get('group_name', 'default'),
+                match_type=keyword_data.get('match_type', 'partial'),
                 reply_content=keyword_data.get('reply_content'),
                 transfer_to_human=keyword_data.get('transfer_to_human', False),
                 priority=keyword_data.get('priority', 0)

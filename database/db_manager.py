@@ -710,13 +710,14 @@ class DatabaseManager:
             session.close()
 
     # 关键词相关操作
-    def add_keyword(self, keyword: str, group_name: str = 'default', reply_content: Optional[str] = None, 
-                    transfer_to_human: bool = False, priority: int = 0) -> bool:
+    def add_keyword(self, keyword: str, group_name: str = 'default', match_type: str = 'partial',
+                    reply_content: Optional[str] = None, transfer_to_human: bool = False, priority: int = 0) -> bool:
         """添加关键词
         
         Args:
             keyword: 关键词
             group_name: 分组名称
+            match_type: 匹配类型 (exact/partial/regex/wildcard)
             reply_content: 回复内容
             transfer_to_human: 是否转人工
             priority: 优先级
@@ -736,6 +737,7 @@ class DatabaseManager:
             keyword_obj = Keyword(
                 keyword=keyword,
                 group_name=group_name,
+                match_type=match_type,
                 reply_content=reply_content,
                 transfer_to_human=1 if transfer_to_human else 0,
                 priority=priority
@@ -796,6 +798,7 @@ class DatabaseManager:
                     'id': keyword.id,
                     'keyword': keyword.keyword,
                     'group_name': keyword.group_name,
+                    'match_type': keyword.match_type,
                     'reply_content': keyword.reply_content,
                     'transfer_to_human': bool(keyword.transfer_to_human),
                     'priority': keyword.priority,
@@ -842,14 +845,15 @@ class DatabaseManager:
             session.close()
     
     def update_keyword(self, old_keyword: str, new_keyword: str, group_name: Optional[str] = None,
-                       reply_content: Optional[str] = None, transfer_to_human: Optional[bool] = None,
-                       priority: Optional[int] = None) -> bool:
+                       match_type: Optional[str] = None, reply_content: Optional[str] = None, 
+                       transfer_to_human: Optional[bool] = None, priority: Optional[int] = None) -> bool:
         """更新关键词
         
         Args:
             old_keyword: 原关键词
             new_keyword: 新关键词
             group_name: 分组名称
+            match_type: 匹配类型 (exact/partial/regex/wildcard)
             reply_content: 回复内容
             transfer_to_human: 是否转人工
             priority: 优先级
@@ -871,15 +875,17 @@ class DatabaseManager:
                 if existing:
                     self.logger.warning(f"关键词 {new_keyword} 已存在")
                     return False
-                    
+                
             # 更新关键词
             keyword_obj.keyword = new_keyword
             if group_name is not None:
                 keyword_obj.group_name = group_name
+            if match_type is not None:
+                keyword_obj.match_type = match_type
             if reply_content is not None:
                 keyword_obj.reply_content = reply_content
             if transfer_to_human is not None:
-                keyword_obj.transfer_to_human = 1 if transfer_to_human else 0
+                keyword_obj.transfer_to_human = transfer_to_human
             if priority is not None:
                 keyword_obj.priority = priority
                 
