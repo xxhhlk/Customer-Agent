@@ -188,6 +188,10 @@ class Config:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
 
+            # 调整配置路径（转换为绝对路径等）
+            from utils.runtime_path import adjust_config_for_runtime
+            config_data = adjust_config_for_runtime(config_data)
+
             # 验证配置格式
             validated_config = ConfigModel(**config_data)
             self._validated_config = validated_config
