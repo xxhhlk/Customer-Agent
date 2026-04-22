@@ -186,9 +186,15 @@ def adjust_config_for_runtime(config: dict) -> dict:
     # 创建新的配置副本
     adjusted_config = config.copy()
 
-    # 调整数据库路径
+    # 调整数据库路径 - 只有用户未配置时才使用默认路径
     if "db_path" in adjusted_config:
-        adjusted_config["db_path"] = str(get_database_path())
+        if not adjusted_config["db_path"]:  # 空字符串表示未配置
+            adjusted_config["db_path"] = str(get_database_path())
+        else:
+            # 用户已配置路径，转换为绝对路径
+            path = Path(adjusted_config["db_path"])
+            if not path.is_absolute():
+                adjusted_config["db_path"] = str(path.absolute())
 
     # 调整知识库相关路径
     if "knowledge_base" in adjusted_config:
