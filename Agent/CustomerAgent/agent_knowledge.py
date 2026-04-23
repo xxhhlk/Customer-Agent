@@ -96,9 +96,14 @@ class KnowledgeManager:
         logger.info(f"确保内容数据库目录存在: {contents_dir}")
 
         # 创建内容数据库
-        # 将 Windows 反斜杠转换为正斜杠，避免 SQLAlchemy URL 解析问题
-        contents_db_path_posix = contents_path.as_posix()
-        contents_db = SqliteDb(db_file=contents_db_path_posix)
+        # 手动创建 SQLAlchemy engine 引擎，正确处理 Windows 路径
+        from sqlalchemy import create_engine
+        contents_db_path_posix = contents_path.resolve().as_posix()
+        # Windows 绝对路径需要三个斜杠
+        db_url = f"sqlite:///{contents_db_path_posix}"
+        contents_engine = create_engine(db_url)
+        logger.info(f"创建数据库连接: {db_url}")
+        contents_db = SqliteDb(db_engine=contents_engine)
 
         # 确保向量数据库路径存在
         if not vector_db_path:
