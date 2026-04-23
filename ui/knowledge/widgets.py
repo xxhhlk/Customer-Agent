@@ -86,11 +86,12 @@ class KnowledgeCard(ElevatedCardWidget):
         初始化知识卡片
 
         Args:
-            parent: 父组件
+            parent: 父组件（应该是 KnowledgeUI）
             doc: 文档数据
         """
         super().__init__(parent)
         self.doc = doc
+        self._knowledge_ui = parent  # 保存对 KnowledgeUI 的引用
         self.current_dialog: Optional[Union[QDialog, Flyout]] = None
         self._delete_worker = None  # 删除工作线程
         self._setup_ui()
@@ -884,6 +885,13 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
     def _get_knowledge_manager(self):
         """获取知识库管理器"""
         if self._card:
+            # 方法1：从卡片保存的 KnowledgeUI 引用中获取
+            if hasattr(self._card, '_knowledge_ui') and hasattr(self._card._knowledge_ui, 'knowledge_manager'):
+                km = self._card._knowledge_ui.knowledge_manager
+                logger.debug(f"从卡片引用的 KnowledgeUI 获取知识库管理器: {km is not None}")
+                return km
+            
+            # 方法2：向上遍历父组件链
             parent = self._card.parent()
             logger.debug(f"开始查找知识库管理器，初始父组件: {type(parent).__name__ if parent else 'None'}")
             
@@ -897,7 +905,15 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
                 
                 parent = parent.parent()
             
-            logger.warning("未找到知识库管理器")
+            # 方法3：从顶层窗口查找
+            logger.warning("父组件链中未找到，尝试从顶层窗口查找")
+            top_widget = self._card.window()
+            if hasattr(top_widget, 'knowledge_manager'):
+                km = top_widget.knowledge_manager
+                logger.debug(f"从顶层窗口找到知识库管理器: {km is not None}")
+                return km
+            
+            logger.warning("所有查找方式都失败")
         else:
             logger.warning("卡片引用为空")
         
