@@ -197,25 +197,49 @@ class EnhancedMessageConsumer:
         user_key = self._extract_user_id(wrapper.context)
         context = wrapper.context
 
-        # 查找AI处理器
+        # 构建 metadata，补充渠道上下文
+        metadata = wrapper.to_metadata()
+        try:
+            kwargs = getattr(context, 'kwargs', None)
+            if kwargs:
+                metadata['shop_id'] = getattr(kwargs, 'shop_id', None)
+                metadata['user_id'] = getattr(kwargs, 'user_id', None)
+                metadata['from_uid'] = getattr(kwargs, 'from_uid', None)
+        except Exception:
+            pass
+        metadata['user_key'] = user_key
+
+        # 先尝试非AI处理器（关键词、转人工等）
         ai_handler = None
         for handler in self.handlers:
-            if handler.can_handle(context) and hasattr(handler, '_get_ai_reply'):
-                ai_handler = handler
-                break
+            # 检查是否是AI处理器
+            is_ai_handler = hasattr(handler, '_get_ai_reply')
+            
+            if handler.can_handle(context):
+                if is_ai_handler:
+                    # 记录AI处理器，稍后处理
+                    ai_handler = handler
+                else:
+                    # 非AI处理器，立即执行
+                    try:
+                        success = await handler.handle(context, metadata)
+                        if success:
+                            self.logger.debug(f"Message handled by {handler.__class__.__name__}")
+                            return  # 处理成功，直接返回
+                    except Exception as e:
+                        self.logger.error(f"Handler {handler.__class__.__name__} error: {e}")
 
-        # 如果没有AI处理器，直接处理
+        # 如果没有AI处理器，结束处理
         if not ai_handler:
-            await self._process_message_normal(wrapper)
             return
 
-        # 并行执行：AI处理 + 新消息监听
+        # 执行AI处理器（带超时中断机制）
         ai_start_time = time.time()
         from_uid_raw = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
         from_uid = from_uid_raw if from_uid_raw else "unknown"
 
         # 创建任务
-        ai_task = asyncio.create_task(ai_handler.handle(context, wrapper.to_metadata()))
+        ai_task = asyncio.create_task(ai_handler.handle(context, metadata))
         queue_task = asyncio.create_task(self._user_queues[user_key].get())
 
         # 人工回复监听任务
