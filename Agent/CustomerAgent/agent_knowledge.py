@@ -65,29 +65,40 @@ class KnowledgeManager:
     def __init__(self):
         import os
         from pathlib import Path
+        
+        # 优先导入工具函数
         from utils.runtime_path import get_contents_db_path, get_vector_db_path
         
-        config = Config()
-
-        # 获取内容数据库路径并确保目录存在
-        contents_db_path = config.get("knowledge_base.contents_db_path")
+        # 默认使用默认路径
+        contents_db_path = None
+        vector_db_path = None
         
-        # 如果没有配置，使用默认路径
+        # 尝试从配置读取，如果失败则完全使用默认路径
+        try:
+            config = Config()
+            kb_config = config.get("knowledge_base")
+            if kb_config and isinstance(kb_config, dict):
+                contents_db_path = kb_config.get("contents_db_path")
+                vector_db_path = kb_config.get("vector_db_path")
+        except Exception:
+            # 配置读取失败，完全使用默认路径
+            pass
+        
+        # 确保内容数据库路径存在
         if not contents_db_path:
             contents_db_path = str(get_contents_db_path())
             logger.info(f"使用默认内容数据库路径: {contents_db_path}")
         
-        # 确保目录存在
-        db_dir = os.path.dirname(contents_db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-            logger.info(f"确保内容数据库目录存在: {db_dir}")
+        # 确保内容数据库目录存在
+        contents_path = Path(contents_db_path)
+        contents_dir = contents_path.parent
+        contents_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"确保内容数据库目录存在: {contents_dir}")
 
         # 创建内容数据库
         contents_db = SqliteDb(db_file=contents_db_path)
 
-        # 获取向量数据库路径
-        vector_db_path = config.get("knowledge_base.vector_db_path")
+        # 确保向量数据库路径存在
         if not vector_db_path:
             vector_db_path = str(get_vector_db_path())
             logger.info(f"使用默认向量数据库路径: {vector_db_path}")
