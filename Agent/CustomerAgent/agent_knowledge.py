@@ -98,11 +98,27 @@ class KnowledgeManager:
         # 创建内容数据库
         # 手动创建 SQLAlchemy engine 引擎，正确处理 Windows 路径
         from sqlalchemy import create_engine
+        import sqlite3
+        contents_db_path_abs = str(contents_path.resolve())
+        logger.info(f"内容数据库绝对路径: {contents_db_path_abs}")
+        logger.info(f"目录存在: {contents_dir.exists()}, 绝对路径: {contents_dir.resolve()}")
+        
+        # 先测试直接用 sqlite3 连接，验证路径
+        try:
+            test_conn = sqlite3.connect(contents_db_path_abs)
+            test_conn.close()
+            logger.info(f"✅ sqlite3 直接连接成功: {contents_db_path_abs}")
+        except Exception as e:
+            logger.error(f"❌ sqlite3 连接失败: {e}")
+        
+        # 构建 SQLAlchemy URL
         contents_db_path_posix = contents_path.resolve().as_posix()
-        # Windows 绝对路径需要三个斜杠
         db_url = f"sqlite:///{contents_db_path_posix}"
+        logger.info(f"SQLAlchemy URL: {db_url}")
+        
         contents_engine = create_engine(db_url)
-        logger.info(f"创建数据库连接: {db_url}")
+        logger.info(f"✅ 数据库引擎创建成功")
+        
         contents_db = SqliteDb(db_engine=contents_engine)
 
         # 确保向量数据库路径存在
