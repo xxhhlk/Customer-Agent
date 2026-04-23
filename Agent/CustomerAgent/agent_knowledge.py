@@ -5,6 +5,7 @@ from agno.models.openai import OpenAILike
 from agno.knowledge.knowledge import Knowledge
 from typing import Optional
 import logging
+import os
 
 # 导入自定义的火山引擎嵌入模型
 from Agent.CustomerAgent.volcengine_embedder import VolcengineEmbedder
@@ -170,7 +171,13 @@ class KnowledgeManager:
         try:
             logger.info(f"开始导入文件: {file_path}")
 
-            # 使用正确的API添加内容
+            file_ext = os.path.splitext(file_path)[1].lower()
+
+            # CSV 文件特殊处理，正确解析带引号的多行字段
+            if file_ext == '.csv':
+                return await self._import_csv_file(file_path)
+
+            # 其他文件使用 agno 框架的导入方法
             result = await self.knowledge.add_content_async(
                 path=file_path,
                 skip_if_exists=False
@@ -195,6 +202,104 @@ class KnowledgeManager:
         except Exception as e:
             logger.error(f"导入文件失败 {file_path}: {str(e)}")
             raise
+
+    async def _import_csv_file(self, file_path: str) -> int:
+        """
+        导入 CSV 文件，正确处理带引号的多行字段
+
+        Args:
+            file_path: CSV 文件路径
+
+        Returns:
+            导入的内容数量
+        """
+        import csv
+
+        logger.info(f"开始导入 CSV 文件: {file_path}")
+
+        # 检测文件编码
+        from utils.encoding_helper import EncodingConverter
+        temp_path, encoding = EncodingConverter.ensure_utf8(file_path)
+        actual_path = temp_path if temp_path else file_path
+        logger.info(f"CSV 文件编码: {encoding}")
+
+        imported_count = 0
+
+        try:
+            with open(actual_path, 'r', encoding='utf-8', newline='') as f:
+                # 使用 csv 模块正确解析带引号的多行字段
+                reader = csv.DictReader(f)
+
+                # 检查必需的列
+                if reader.fieldnames is None:
+                    raise ValueError("CSV 文件为空或格式不正确")
+
+                # 支持多种列名格式
+                title_col = None
+                content_col = None
+
+                for field in reader.fieldnames:
+                    field_lower = field.lower().strip()
+                    if field_lower in ['标题', 'title', 'name']:
+                        title_col = field
+                    elif field_lower in ['内容', 'content', 'text', '正文']:
+                        content_col = field
+
+                if not title_col or not content_col:
+                    raise ValueError(f"CSV 文件缺少必需的列。需要'标题'和'内容'列，当前列: {reader.fieldnames}")
+
+                logger.info(f"CSV 列映射: 标题='{title_col}', 内容='{content_col}'")
+
+                # 逐行读取并添加到知识库
+                for row_num, row in enumerate(reader, start=2):  # 从第2行开始（第1行是表头）
+                    try:
+                        title = row.get(title_col, '').strip()
+                        content = row.get(content_col, '').strip()
+
+                        if not title or not content:
+                            logger.warning(f"第 {row_num} 行: 标题或内容为空，跳过")
+                            continue
+
+                        # 添加到知识库
+                        await self._add_single_content(title, content)
+                        imported_count += 1
+                        logger.debug(f"第 {row_num} 行导入成功: {title}")
+
+                    except Exception as row_err:
+                        logger.warning(f"第 {row_num} 行导入失败: {row_err}")
+                        continue
+
+            logger.info(f"CSV 文件导入完成: {file_path}, 成功导入 {imported_count} 条")
+
+        finally:
+            # 清理临时文件
+            if actual_path != file_path and os.path.exists(actual_path):
+                try:
+                    os.remove(actual_path)
+                except:
+                    pass
+
+        return imported_count
+
+    async def _add_single_content(self, title: str, content: str) -> None:
+        """
+        添加单条内容到知识库
+
+        Args:
+            title: 标题
+            content: 内容
+        """
+        from agno.knowledge import Content
+
+        # 创建内容对象
+        new_content = Content(
+            name=title,
+            content=content,
+            meta_data={"source": "csv_import"}
+        )
+
+        # 添加到知识库
+        await self.knowledge.async_insert(new_content)
 
     def search_knowledge(self, query: str, limit: Optional[int] = None) -> list:
         """
