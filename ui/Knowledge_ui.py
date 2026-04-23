@@ -164,9 +164,10 @@ class AddKnowledgeWorker(QThread):
 
     async def _add_async(self) -> None:
         """异步添加知识内容"""
-        formatted_content = f"标题: {self.title}\n\n内容:\n{self.content}"
+        # 直接存储原始内容，metadata 中已有 title
         await self.knowledge_manager.knowledge.add_content_async(
-            text_content=formatted_content,
+            name=self.title,  # 使用标题作为 name，确保每个文档有唯一的 ID
+            text_content=self.content,
             metadata={
                 'title': self.title,
                 'source': 'manual_input',
