@@ -6,7 +6,7 @@ from PyQt6.QtGui import QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow,qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
-from qfluentwidgets import Action
+from qfluentwidgets import Action, setTheme, Theme
 from utils.logger_loguru import get_logger
 import time
 
@@ -37,6 +37,10 @@ class Widget(QFrame):
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
+        
+        # 自动跟随系统主题（深色/浅色）
+        setTheme(Theme.AUTO)
+        
         t = time.perf_counter()
         self.setWindowTitle('拼多多AI客服助手')
         self.setWindowIcon(QIcon("icon/icon.ico"))

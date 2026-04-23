@@ -12,6 +12,7 @@ from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
 from database.db_manager import db_manager
 from utils.logger_loguru import get_logger
 from Channel.pinduoduo.utils.API.Set_up_online import AccountMonitor
+from config import config
 import threading
 import requests
 
@@ -644,6 +645,11 @@ class AutoReplyUI(QFrame):
         if not self._loaded_once and self.isVisible():
             self._loaded_once = True
             self.loadAccountsFromDB()
+            
+            # 检查是否启用启动时自动开始回复
+            if config.get("auto_start_on_launch", False):
+                # 延迟执行，确保 UI 完全加载
+                QTimer.singleShot(500, self._autoStartAllReply)
 
     def setupUI(self):
         """设置主界面UI"""
@@ -901,6 +907,36 @@ class AutoReplyUI(QFrame):
     def reloadAccounts(self):
         """重新加载账号"""
         self.loadAccountsFromDB()
+    
+    def _autoStartAllReply(self):
+        """启动时自动开始所有符合条件的账号的自动回复"""
+        try:
+            # 筛选出可以启动的账号（在线且未在回复中）
+            eligible_accounts = [
+                acc_data for acc_data in self.accounts_data
+                if acc_data.get("status") == 1 and not auto_reply_manager.is_running(acc_data)
+            ]
+
+            if not eligible_accounts:
+                self.logger.info("启动时自动回复：没有符合条件的账号")
+                return
+
+            # 循环启动，不需要确认对话框
+            started_count = 0
+            for account_data in eligible_accounts:
+                success = auto_reply_manager.start_auto_reply(account_data)
+                if success:
+                    started_count += 1
+                    self._connect_auto_reply_signals(account_data)
+
+            # 更新UI
+            self._update_all_cards_auto_reply_status()
+            self.updateStats()
+
+            self.logger.info(f"启动时自动回复：已为 {started_count} 个账号启动自动回复")
+
+        except Exception as e:
+            self.logger.error(f"启动时自动回复失败: {str(e)}")
     
     def onStartAllAutoReply(self):
         """开始所有符合条件的账号的自动回复"""

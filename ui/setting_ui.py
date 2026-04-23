@@ -426,6 +426,58 @@ class BusinessHoursCard(CardWidget):
             self.end_time_picker.setTime(end_time)
 
 
+class AutoStartCard(CardWidget):
+    """自动启动配置卡片"""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self) -> None:
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("启动设置")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 启用开关
+        from qfluentwidgets import SwitchButton
+        self.auto_start_switch = SwitchButton("启用")
+        self.auto_start_switch.setChecked(False)
+        form_layout.addRow("启动时自动开始回复:", self.auto_start_switch)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "启用后，应用启动时会自动为所有在线状态的账号开始自动回复。\n"
+            "无需手动逐个点击开始按钮。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        return {
+            "auto_start_on_launch": self.auto_start_switch.isChecked()
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        self.auto_start_switch.setChecked(config.get("auto_start_on_launch", False))
+
+
 class SettingUI(QFrame):
     """设置界面"""
 
@@ -538,6 +590,7 @@ class SettingUI(QFrame):
         self.prompt_config_card = PromptConfigCard()
         self.business_hours_card = BusinessHoursCard()
         self.human_reply_wait_card = HumanReplyWaitCard()
+        self.auto_start_card = AutoStartCard()
 
         # 添加到布局
         content_layout.addWidget(self.llm_config_card)
@@ -546,6 +599,7 @@ class SettingUI(QFrame):
         content_layout.addWidget(self.prompt_config_card)
         content_layout.addWidget(self.business_hours_card)
         content_layout.addWidget(self.human_reply_wait_card)
+        content_layout.addWidget(self.auto_start_card)
         content_layout.addStretch()
 
         # 设置容器样式
@@ -591,7 +645,8 @@ class SettingUI(QFrame):
                 "staff_reply_wait": {
                     "enable": config.get("staff_reply_wait.enable", True),
                     "wait_seconds": config.get("staff_reply_wait.wait_seconds", 30)
-                }
+                },
+                "auto_start_on_launch": config.get("auto_start_on_launch", False)
             }
 
             # 验证并设置配置
@@ -699,6 +754,10 @@ class SettingUI(QFrame):
         # 处理人工回复等待配置
         staff_reply_wait_config = validated_config["staff_reply_wait"]
         self.human_reply_wait_card.setConfig({"staff_reply_wait": staff_reply_wait_config})
+
+        # 处理自动启动配置
+        auto_start = config_data.get("auto_start_on_launch", False)
+        self.auto_start_card.setConfig({"auto_start_on_launch": auto_start})
     
     def onSaveConfig(self):
         """保存配置到config模块"""
@@ -710,6 +769,7 @@ class SettingUI(QFrame):
             prompt_config = self.prompt_config_card.getConfig()
             business_config = self.business_hours_card.getConfig()
             staff_reply_wait_config = self.human_reply_wait_card.getConfig()
+            auto_start_config = self.auto_start_card.getConfig()
 
             # 合并配置为新的结构
             new_config = {
@@ -719,6 +779,7 @@ class SettingUI(QFrame):
                 "prompt": prompt_config,
                 "business_hours": business_config.get("businessHours", {"start": "08:00", "end": "23:00"}),
                 "staff_reply_wait": staff_reply_wait_config.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
+                "auto_start_on_launch": auto_start_config.get("auto_start_on_launch", False),
                 # 保持与旧配置的兼容性
                 "db_path": config.get("db_path", "")
             }

@@ -128,6 +128,7 @@ config_base = {
         "enable": True,
         "wait_seconds": 30
     },
+    "auto_start_on_launch": False,
     "db_path": ""
 }
 
