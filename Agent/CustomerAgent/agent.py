@@ -51,10 +51,16 @@ class CustomerAgent(Bot):
             description = get_config("prompt.description", "")
             instructions = get_config("prompt.instructions", [])
             additional_context = get_config("prompt.additional_context", "")
+            thinking_config = get_config("llm.thinking", None)
 
             # 验证必要配置
             if not api_key:
                 raise ValueError("LLM API密钥未配置")
+
+            # 构建 extra_body 参数（用于火山引擎 thinking 配置）
+            extra_body = None
+            if thinking_config:
+                extra_body = {"thinking": thinking_config}
 
             # 创建Agent实例
             self._agent = Agent(
@@ -65,6 +71,7 @@ class CustomerAgent(Bot):
                     api_key=api_key,
                     base_url=api_base,
                     temperature=0.7,
+                    extra_body=extra_body,
                 ),
                 tools=[transfer_conversation, send_goods_link],
                 search_knowledge= True,

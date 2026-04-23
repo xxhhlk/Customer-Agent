@@ -709,16 +709,17 @@ class PDDChannel(Channel):
         设置消息消费者和处理器链
         """
         # 延迟导入，避免模块级循环依赖
-        from Message import message_consumer_manager, queue_manager, handler_chain
+        from Message.core.enhanced_consumer import enhanced_message_consumer_manager
+        from Message import queue_manager, handler_chain
         from Agent.CustomerAgent.agent import CustomerAgent
 
         try:
             # 检查消费者是否已存在
-            existing_consumer = message_consumer_manager.get_consumer(queue_name)
+            existing_consumer = enhanced_message_consumer_manager.get_consumer(queue_name)
             if existing_consumer:
                 self.logger.info(f"消费者 {queue_name} 已存在，先停止并重新创建以绑定当前事件循环")
                 try:
-                    await message_consumer_manager.stop_consumer(queue_name)
+                    await enhanced_message_consumer_manager.stop_consumer(queue_name)
                 except Exception as e:
                     self.logger.warning(f"停止旧消费者失败: {queue_name}, {e}")
                 # 重新创建队列，避免事件循环绑定错误
@@ -727,8 +728,8 @@ class PDDChannel(Channel):
                 except Exception as e:
                     self.logger.warning(f"重新创建队列失败: {queue_name}, {e}")
 
-            # 创建新的消费者
-            consumer = message_consumer_manager.create_consumer(queue_name, max_concurrent=10)
+            # 创建新的消费者（增强版，支持防抖）
+            consumer = enhanced_message_consumer_manager.create_consumer(queue_name, max_concurrent=10)
 
             # 添加处理器链（注入AI Bot）
             try:
@@ -740,7 +741,7 @@ class PDDChannel(Channel):
             for handler in handlers:
                 consumer.add_handler(handler)
 
-            await message_consumer_manager.start_consumer(queue_name)
+            await enhanced_message_consumer_manager.start_consumer(queue_name)
             self.logger.debug(f"消息消费者已启动: {queue_name}")
 
         except Exception as e:
@@ -948,7 +949,7 @@ class PDDChannel(Channel):
         清理资源 - 优化版本支持完整资源管理
         """
         # 延迟导入，避免模块级循环依赖
-        from Message import message_consumer_manager
+        from Message.core.enhanced_consumer import enhanced_message_consumer_manager
 
         try:
             # 清理处理任务
@@ -965,7 +966,7 @@ class PDDChannel(Channel):
 
             # 停止消息消费者
             try:
-                await message_consumer_manager.stop_consumer(queue_name)
+                await enhanced_message_consumer_manager.stop_consumer(queue_name)
                 self.logger.debug(f"已停止消息消费者: {queue_name}")
             except asyncio.InvalidStateError:
                 self.logger.debug(f"消息消费者已在其他事件循环中停止: {queue_name}")
