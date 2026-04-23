@@ -885,10 +885,22 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         """获取知识库管理器"""
         if self._card:
             parent = self._card.parent()
+            logger.debug(f"开始查找知识库管理器，初始父组件: {type(parent).__name__ if parent else 'None'}")
+            
             while parent:
+                logger.debug(f"检查父组件: {type(parent).__name__}, hasattr knowledge_manager: {hasattr(parent, 'knowledge_manager')}")
+                
                 if hasattr(parent, 'knowledge_manager'):
-                    return parent.knowledge_manager
+                    km = parent.knowledge_manager
+                    logger.debug(f"找到知识库管理器: {km is not None}")
+                    return km
+                
                 parent = parent.parent()
+            
+            logger.warning("未找到知识库管理器")
+        else:
+            logger.warning("卡片引用为空")
+        
         return None
 
     def _update_vector_info(self) -> None:
