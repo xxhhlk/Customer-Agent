@@ -116,19 +116,26 @@ class KeywordDetectionHandler(BaseHandler):
             # 匹配关键词
             matched = self.match_keyword(context.content or "")
             if not matched:
+                self.logger.debug(f"未匹配到关键词: {context.content}")
                 return False
+            
+            self.logger.info(f"匹配到关键词: {matched}")
             
             # 如果需要转人工
             if matched.get('transfer_to_human', False):
+                self.logger.info(f"转人工: {matched.get('keyword')}")
                 return await self._transfer_to_human(shop_id, user_id, from_uid)
             
             # 如果有回复内容，发送回复
-            if matched.get('reply_content'):
+            reply_content = matched.get('reply_content')
+            if reply_content:
+                self.logger.info(f"发送关键词回复: {reply_content}")
                 sender = SendMessage(shop_id, user_id)
-                sender.send_text(from_uid, matched['reply_content'])
-                self.logger.info(f"已发送关键词回复: {matched['reply_content']}")
+                sender.send_text(from_uid, reply_content)
+                self.logger.info(f"已发送关键词回复: {reply_content}")
                 return True
             
+            self.logger.warning(f"关键词匹配成功但没有回复内容: {matched.get('keyword')}")
             return False
             
         except Exception as e:
