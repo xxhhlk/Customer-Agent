@@ -120,7 +120,7 @@ class KnowledgeCard(ElevatedCardWidget):
         # 文档ID
         if self.doc.id:
             cid = QLabel(f"ID: {self.doc.id[:self.ID_DISPLAY_LENGTH]}...")
-            cid.setStyleSheet("color: #999; font-size: 10px;")
+            cid.setStyleSheet("font-size: 10px;")
             cid.setMaximumHeight(15)
             vbox.addWidget(cid)
 
@@ -130,7 +130,7 @@ class KnowledgeCard(ElevatedCardWidget):
             if len(content_preview) > self.PREVIEW_LENGTH:
                 content_preview = content_preview[:self.PREVIEW_LENGTH] + "..."
             self._content_label = QLabel(content_preview)
-            self._content_label.setStyleSheet("color: #666; font-size: 12px;")
+            self._content_label.setStyleSheet("font-size: 12px;")
             self._content_label.setWordWrap(True)
             self._content_label.setMaximumHeight(36)
             vbox.addWidget(self._content_label)
@@ -141,7 +141,7 @@ class KnowledgeCard(ElevatedCardWidget):
         # 文档长度信息
         if self.doc.content:
             length_label = QLabel(f"{len(self.doc.content)}字")
-            length_label.setStyleSheet("color: #999; font-size: 10px;")
+            length_label.setStyleSheet("font-size: 10px;")
             info_layout.addWidget(length_label)
 
         # 元数据信息
@@ -149,7 +149,7 @@ class KnowledgeCard(ElevatedCardWidget):
             for key in ['row_number', 'sheet_name', 'section']:
                 if key in self.doc.metadata:
                     meta_label = QLabel(f"{self.doc.metadata[key]}")
-                    meta_label.setStyleSheet("color: #999; font-size: 10px;")
+                    meta_label.setStyleSheet("font-size: 10px;")
                     info_layout.addWidget(meta_label)
                     break
 
@@ -169,7 +169,7 @@ class KnowledgeCard(ElevatedCardWidget):
         delete_btn.setIcon(FluentIcon.DELETE)
 
         # 设置删除按钮样式为红色
-        delete_btn.setStyleSheet(delete_btn.styleSheet() + "QPushButton { color: #ff4757; }")
+        delete_btn.setStyleSheet(delete_btn.styleSheet() + "QPushButton { color: #d32f2f; }")
 
         btn_bar.addWidget(view_btn)
         btn_bar.addWidget(delete_btn)
@@ -536,7 +536,7 @@ class AddKnowledgeDialog(QDialog):
 
         # 标题
         title_label = QLabel("知识标题")
-        title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333;")
+        title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(title_label)
 
         self.title_edit = QLineEdit()
@@ -546,7 +546,7 @@ class AddKnowledgeDialog(QDialog):
 
         # 内容
         content_label = QLabel("知识内容")
-        content_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333;")
+        content_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(content_label)
 
         self.content_edit = QTextEdit()
@@ -556,7 +556,7 @@ class AddKnowledgeDialog(QDialog):
 
         # 提示信息
         hint_label = QLabel("提示：内容将自动进行分块和向量化处理")
-        hint_label.setStyleSheet("color: #999; font-size: 12px;")
+        hint_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(hint_label)
 
         # 按钮栏
@@ -675,7 +675,7 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         title_layout.setContentsMargins(0, 0, 0, 0)
 
         self._title_label = QLabel(self._title)
-        self._title_label.setStyleSheet("font-weight: 600; font-size: 16px; color: #333;")
+        self._title_label.setStyleSheet("font-weight: 600; font-size: 16px;")
 
         self._title_edit = QLineEdit(self._title)
         self._title_edit.setStyleSheet("font-size: 16px; padding: 4px;")
@@ -689,7 +689,7 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
 
         # 向量信息区域
         self._vector_info_label = QLabel("📋 正在加载向量信息...")
-        self._vector_info_label.setStyleSheet("font-size: 12px; color: #666; padding: 8px; background-color: #f5f5f5; border-radius: 4px;")
+        self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px;")
         self._vector_info_label.setWordWrap(True)
         main_layout.addWidget(self._vector_info_label)
 
@@ -697,7 +697,7 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._line = QFrame()
         self._line.setFrameShape(QFrame.Shape.HLine)
         self._line.setFrameShadow(QFrame.Shadow.Sunken)
-        self._line.setStyleSheet("color: #e0e0e0;")
+        self._line.setStyleSheet("")
         main_layout.addWidget(self._line)
 
         # 内容区域（支持编辑模式切换）
@@ -713,7 +713,7 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
             QTextEdit {
                 border: none;
                 background-color: transparent;
-                color: #333;
+                
                 font-size: 13px;
                 font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
             }
@@ -727,8 +727,8 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._content_edit.setStyleSheet("""
             QTextEdit {
                 border: 1px solid #0078d4;
-                background-color: #fff;
-                color: #333;
+                
+                
                 font-size: 13px;
             }
         """)
@@ -943,15 +943,15 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
                 self._vector_info_label.setText(
                     f"✅ 向量状态: 正常 | 维度: {dimension} | 前5个值: [{sample_str}, ...]"
                 )
-                self._vector_info_label.setStyleSheet("font-size: 12px; color: #2e7d32; padding: 8px; background-color: #e8f5e9; border-radius: 4px;")
+                self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px;")
             else:
                 self._vector_info_label.setText("❌ 向量状态: 缺失 | 该文档未生成向量嵌入")
-                self._vector_info_label.setStyleSheet("font-size: 12px; color: #c62828; padding: 8px; background-color: #ffebee; border-radius: 4px;")
+                self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px;")
 
         except Exception as e:
             logger.error(f"更新向量信息失败: {e}")
             self._vector_info_label.setText(f"⚠️ 获取向量信息失败: {str(e)}")
-            self._vector_info_label.setStyleSheet("font-size: 12px; color: #f57c00; padding: 8px; background-color: #fff3e0; border-radius: 4px;")
+            self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px;")
 
     def _copy_content(self) -> None:
         """复制内容到剪贴板"""

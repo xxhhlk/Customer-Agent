@@ -404,7 +404,7 @@ class AutoReplyCard(CardWidget):
         self.logo_label = QLabel()
         self.logo_label.setFixedSize(65, 65)
         self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.logo_label.setStyleSheet("border-radius: 30px; border: 1px solid #e0e0e0; background-color: #f5f5f5;")
+        # 移除硬编码背景色，使用主题感知样式
         self.logo_label.setText("加载中...")
         return self.logo_label
         
@@ -424,7 +424,6 @@ class AutoReplyCard(CardWidget):
         # 店铺名称
         shop_name_label = StrongBodyLabel(self.shop_name)
         shop_name_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        shop_name_label.setStyleSheet("color: #2c3e50;")
         
         # 平台标签
         platform_badge = InfoBadge.info(self.platform, self)
@@ -457,12 +456,10 @@ class AutoReplyCard(CardWidget):
         
         # 标签
         label = CaptionLabel(label_text)
-        label.setStyleSheet("color: #7f8c8d; font-weight: 500;")
         label.setFixedWidth(60)
         
         # 值
         value = BodyLabel(value_text)
-        value.setStyleSheet("color: #34495e;")
         
         row_layout.addWidget(label)
         row_layout.addWidget(value)
@@ -689,7 +686,7 @@ class AutoReplyUI(QFrame):
         self.stats_label = CaptionLabel("共 0 个账号")
         # 运行状态统计
         self.running_stats_label = CaptionLabel("运行中: 0 个")
-        self.running_stats_label.setStyleSheet("color: #28a745; font-weight: bold;")
+        self.running_stats_label.setStyleSheet("font-weight: bold;")
         
         # 左侧标题区域
         title_area = QWidget()

@@ -67,7 +67,7 @@ class LLMConfigCard(CardWidget):
             "配置LLM模型的连接参数。\n"
             "支持OpenAI兼容的API接口，包括豆包、通义千问等模型。"
         )
-        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
 
     def getConfig(self) -> dict:
@@ -132,7 +132,7 @@ class EmbedderConfigCard(CardWidget):
             "配置向量嵌入模型参数。\n"
             "用于知识库的语义搜索和相似度匹配。"
         )
-        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
 
     def getConfig(self) -> dict:
@@ -192,7 +192,7 @@ class KnowledgeConfigCard(CardWidget):
             "配置知识库的存储路径。\n"
             "内容数据库存储结构化数据，向量数据库存储嵌入向量。"
         )
-        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
 
     def getConfig(self) -> dict:
@@ -261,7 +261,7 @@ class PromptConfigCard(CardWidget):
             "配置AI助手的行为和回复风格。\n"
             "清晰的提示词可以帮助AI提供更准确和有用的回复。"
         )
-        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
 
     def getConfig(self) -> dict:
@@ -331,7 +331,7 @@ class HumanReplyWaitCard(CardWidget):
             "启用后，收到客户消息时会优先等待人工客服回复。\n"
             "如果人工客服在指定时间内回复，则取消AI自动回复。"
         )
-        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
 
     def getConfig(self) -> dict:
@@ -392,7 +392,7 @@ class BusinessHoursCard(CardWidget):
             "设置AI客服的工作时间。在工作时间内，系统将自动响应客户消息。\n"
             "在非工作时间，系统将不会自动回复。"
         )
-        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
     
     def getConfig(self) -> dict:
@@ -464,7 +464,7 @@ class AutoStartCard(CardWidget):
             "启用后，应用启动时会自动为所有在线状态的账号开始自动回复。\n"
             "无需手动逐个点击开始按钮。"
         )
-        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
 
     def getConfig(self) -> dict:
@@ -524,7 +524,7 @@ class SettingUI(QFrame):
         
         # 描述
         description_label = CaptionLabel("配置AI客服的基本参数和工作时间")
-        description_label.setStyleSheet("color: #666;")
+        description_label.setStyleSheet("padding: 8px 0;")
         
         # 左侧标题区域
         title_area = QWidget()

@@ -152,7 +152,7 @@ class AccountCard(CardWidget):
         self.logo_label = QLabel()
         self.logo_label.setFixedSize(65, 65)
         self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.logo_label.setStyleSheet("border-radius: 30px; border: 1px solid #e0e0e0; background-color: #f5f5f5;")
+        self.logo_label.setStyleSheet("border-radius: 30px; border: 1px solid rgba(0, 0, 0, 0.1);")
         self.logo_label.setText("加载中...")
         return self.logo_label
     
@@ -191,7 +191,6 @@ class AccountCard(CardWidget):
         # 店铺名称
         shop_name_label = StrongBodyLabel(self.shop_name)
         shop_name_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        shop_name_label.setStyleSheet("color: #2c3e50;")
         
         # 平台标签
         platform_badge = InfoBadge.info(self.platform, self)
@@ -225,12 +224,10 @@ class AccountCard(CardWidget):
         
         # 标签
         label = CaptionLabel(label_text)
-        label.setStyleSheet("color: #7f8c8d; font-weight: 500;")
         label.setFixedWidth(60)
         
         # 值
         value = BodyLabel(value_text)
-        value.setStyleSheet("color: #34495e;")
         
         row_layout.addWidget(label)
         row_layout.addWidget(value)
@@ -796,13 +793,11 @@ class EditAccountDialog(QDialog):
         
         # 渠道信息（只读）
         self.channel_label = QLabel(self.account_data["channel_name"])
-        self.channel_label.setStyleSheet("color: #666; font-weight: bold;")
         layout.addRow("渠道:", self.channel_label)
         
         # 店铺信息（只读）
         shop_info = f"{self.account_data['shop_name']} ({self.account_data['shop_id']})"
         self.shop_label = QLabel(shop_info)
-        self.shop_label.setStyleSheet("color: #666; font-weight: bold;")
         layout.addRow("店铺:", self.shop_label)
         
         # 用户名（可编辑）

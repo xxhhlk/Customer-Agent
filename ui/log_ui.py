@@ -322,12 +322,11 @@ class LogTableView(QTableView):
         self.setColumnWidth(3, 200)  # 文件
         # 消息列自动拉伸
 
-        # 设置样式
+        # 设置样式（移除硬编码背景色，使用主题感知）
         self.setStyleSheet("""
             QTableView {
-                background-color: #ffffff;
-                alternate-background-color: #f8f9fa;
-                gridline-color: #e9ecef;
+                alternate-background-color: rgba(0, 0, 0, 0.03);
+                gridline-color: rgba(0, 0, 0, 0.1);
                 selection-background-color: #007bff;
                 selection-color: white;
             }
@@ -340,11 +339,10 @@ class LogTableView(QTableView):
                 color: white;
             }
             QHeaderView::section {
-                background-color: #e9ecef;
                 padding: 8px;
                 border: none;
-                border-right: 1px solid #dee2e6;
-                border-bottom: 1px solid #dee2e6;
+                border-right: 1px solid rgba(0, 0, 0, 0.1);
+                border-bottom: 1px solid rgba(0, 0, 0, 0.1);
                 font-weight: bold;
             }
         """)

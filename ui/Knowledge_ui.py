@@ -345,7 +345,7 @@ class KnowledgeUI(QWidget):
         self.toolbar.addStretch(1)
 
         self.status_label = QLabel(f"共 {len(self.docs)} 条记录")
-        self.status_label.setStyleSheet("color: #666; font-size: 12px;")
+        self.status_label.setStyleSheet("font-size: 12px;")
         self.toolbar.addWidget(self.status_label)
 
         self.mainLayout.addLayout(self.toolbar)
@@ -370,7 +370,7 @@ class KnowledgeUI(QWidget):
         self.loading_icon = QLabel("⠋")
         self.loading_icon.setStyleSheet("""
             QLabel {
-                color: #0078d4;
+                
                 font-size: 24px;
                 font-weight: normal;
             }
@@ -381,7 +381,7 @@ class KnowledgeUI(QWidget):
         self.loading_text = QLabel("正在导入")
         self.loading_text.setStyleSheet("""
             QLabel {
-                color: #0078d4;
+                
                 font-size: 14px;
                 font-weight: bold;
             }
@@ -392,7 +392,7 @@ class KnowledgeUI(QWidget):
         self.loading_dots = QLabel("...")
         self.loading_dots.setStyleSheet("""
             QLabel {
-                color: #0078d4;
+                
                 font-size: 14px;
                 font-weight: bold;
             }
@@ -414,11 +414,9 @@ class KnowledgeUI(QWidget):
         tip_label = QLabel("💡 提示：导入或添加知识后需重启应用才可生效哦")
         tip_label.setStyleSheet("""
             QLabel {
-                background-color: #fff3cd;
-                border: 1px solid #ffeaa7;
+                border: 1px solid rgba(255, 193, 7, 0.5);
                 border-radius: 4px;
                 padding: 8px 12px;
-                color: #856404;
                 font-size: 13px;
             }
         """)
@@ -463,7 +461,7 @@ class KnowledgeUI(QWidget):
 
         # 页码显示
         self.page_label = QLabel("第 1 / 1 页")
-        self.page_label.setStyleSheet("color: #666; font-size: 13px; font-weight: bold;")
+        self.page_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pagination_layout.addWidget(self.page_label)
 
@@ -477,7 +475,7 @@ class KnowledgeUI(QWidget):
 
         # 每页数量选择
         page_size_label = QLabel("每页:")
-        page_size_label.setStyleSheet("color: #666; font-size: 12px;")
+        page_size_label.setStyleSheet("font-size: 12px;")
         pagination_layout.addWidget(page_size_label)
 
         self.page_size_combo = ComboBox()
@@ -491,7 +489,7 @@ class KnowledgeUI(QWidget):
         # 显示总记录数
         pagination_layout.addStretch(1)
         total_label = QLabel(f"共 {len(self.docs)} 条记录")
-        total_label.setStyleSheet("color: #999; font-size: 12px;")
+        total_label.setStyleSheet("font-size: 12px;")
         pagination_layout.addWidget(total_label)
 
         self.mainLayout.addWidget(pagination_container)
@@ -568,7 +566,7 @@ class KnowledgeUI(QWidget):
             if self.knowledge_manager is None:
                 no_data_label = QLabel("知识库未初始化，打开该页时将自动加载")
                 no_data_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                no_data_label.setStyleSheet("color: #888; font-size: 14px; padding: 40px;")
+                no_data_label.setStyleSheet("font-size: 14px; padding: 40px;")
                 self.gridLayout.addWidget(no_data_label, 0, 0)
                 self._layout_initialized = True
                 return
@@ -616,7 +614,7 @@ class KnowledgeUI(QWidget):
 
         no_data_label = QLabel(f"加载失败: {error}\n请刷新页面重试")
         no_data_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        no_data_label.setStyleSheet("color: #d63031; font-size: 14px; padding: 40px;")
+        no_data_label.setStyleSheet("font-size: 14px; padding: 40px;")
         self.gridLayout.addWidget(no_data_label, 0, 0)
         self._layout_initialized = True
 
@@ -924,7 +922,7 @@ class KnowledgeUI(QWidget):
             self.clear_grid_layout()
             no_data_label = QLabel(f"刷新失败: {error}\n请重试")
             no_data_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            no_data_label.setStyleSheet("color: #d63031; font-size: 14px; padding: 40px;")
+            no_data_label.setStyleSheet("font-size: 14px; padding: 40px;")
             self.gridLayout.addWidget(no_data_label, 0, 0)
 
     def _show_message(
@@ -1045,7 +1043,7 @@ class KnowledgeUI(QWidget):
                     # 当前页没有数据（异常情况）
                     no_data_label = QLabel("当前页没有数据")
                 no_data_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                no_data_label.setStyleSheet("color: #888; font-size: 14px; padding: 40px;")
+                no_data_label.setStyleSheet("font-size: 14px; padding: 40px;")
                 self.gridLayout.addWidget(no_data_label, 0, 0)
                 self._layout_initialized = True
                 return
