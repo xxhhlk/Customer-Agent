@@ -167,12 +167,16 @@ class KnowledgeCard(ElevatedCardWidget):
         )
 
         # 使用Flyout控件显示
-        self.current_dialog = Flyout.make(
+        flyout = Flyout.make(
             flyout_view,
             self,
             self.parentWidget(),
             isDeleteOnClose=False
         )
+
+        # 设置 Flyout 引用，使关闭按钮能正常工作
+        flyout_view.set_flyout(flyout)
+        self.current_dialog = flyout
 
     def delete_document(self) -> None:
         """
@@ -588,7 +592,17 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         super().__init__()
         self._title = title
         self._content_markdown = content_markdown
+        self._flyout = None  # 保存 Flyout 实例的引用
         self._setup_ui()
+
+    def set_flyout(self, flyout) -> None:
+        """
+        设置 Flyout 实例引用
+
+        Args:
+            flyout: Flyout 实例
+        """
+        self._flyout = flyout
 
     def _setup_ui(self) -> None:
         """初始化UI"""
@@ -649,8 +663,7 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
 
         # 连接信号
         copy_btn.clicked.connect(self._copy_content)
-        parent_widget = self.parent()
-        close_btn.clicked.connect(lambda: Flyout.close(parent_widget) if parent_widget else None)  # type: ignore[arg-type]
+        close_btn.clicked.connect(self._close_flyout)
 
         btn_bar.addStretch(1)
         btn_bar.addWidget(copy_btn)
@@ -665,3 +678,8 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         """复制内容到剪贴板"""
         self._text_edit.selectAll()
         self._text_edit.copy()
+
+    def _close_flyout(self) -> None:
+        """关闭 Flyout 弹窗"""
+        if self._flyout:
+            Flyout.close(self._flyout)
