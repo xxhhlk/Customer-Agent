@@ -788,28 +788,48 @@ class DatabaseManager:
             session.close()
     
     def get_all_keywords(self) -> List[Dict[str, Any]]:
-        """获取所有关键词
+        """获取所有关键词，关联分组表获取回复内容
         
         Returns:
-            List[Dict]: 关键词列表
+            List[Dict]: 关键词列表，包含分组的回复内容
         """
         session = self.get_session()
         try:
-            keywords = session.query(Keyword).order_by(Keyword.priority.desc()).all()
-            return [
-                {
-                    'id': keyword.id,
-                    'keyword': keyword.keyword,
-                    'group_name': keyword.group_name,
-                    'match_type': keyword.match_type,
-                    'reply_content': keyword.reply_content,
-                    'transfer_to_human': bool(keyword.transfer_to_human),
-                    'priority': keyword.priority,
-                    'created_at': keyword.created_at.isoformat() if keyword.created_at else None,
-                    'updated_at': keyword.updated_at.isoformat() if keyword.updated_at else None
-                }
-                for keyword in keywords
-            ]
+            from database.models import KeywordGroup
+            from sqlalchemy.orm import joinedload
+            
+            # 使用 joinedload 预加载分组信息
+            keywords = session.query(Keyword).options(
+                joinedload(Keyword.group)
+            ).order_by(Keyword.priority.desc()).all()
+            
+            result = []
+            for kw in keywords:
+                # 优先使用关键词自身的回复，如果没有则使用分组的回复
+                reply_content = kw.reply_content
+                transfer_to_human = bool(kw.transfer_to_human)
+                
+                # 如果关键词没有单独设置回复，从分组获取
+                if kw.group:
+                    if not reply_content:
+                        reply_content = kw.group.reply
+                    if not transfer_to_human:
+                        transfer_to_human = bool(kw.group.is_transfer)
+                
+                result.append({
+                    'id': kw.id,
+                    'keyword': kw.keyword,
+                    'group_id': kw.group_id,
+                    'group_name': kw.group.group_name if kw.group else kw.group_name,
+                    'match_type': kw.match_type,
+                    'reply_content': reply_content,
+                    'transfer_to_human': transfer_to_human,
+                    'priority': kw.priority,
+                    'created_at': kw.created_at.isoformat() if kw.created_at else None,
+                    'updated_at': kw.updated_at.isoformat() if kw.updated_at else None
+                })
+            
+            return result
         except SQLAlchemyError as e:
             self.logger.error(f"获取关键词列表失败: {str(e)}")
             return []
