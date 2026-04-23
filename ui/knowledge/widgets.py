@@ -160,10 +160,12 @@ class KnowledgeCard(ElevatedCardWidget):
         doc_title = DocumentTitleExtractor.extract(self.doc)
         detail_markdown = MarkdownConverter.doc_to_markdown(doc_title, self.doc)
 
-        # 创建Flyout弹窗
+        # 创建Flyout弹窗，传递文档ID和原始内容
         flyout_view = KnowledgeDetailFlyout(
             title=doc_title,
-            content_markdown=detail_markdown
+            content_markdown=detail_markdown,
+            doc_id=self.doc.id or "",
+            doc_content=self.doc.content or ""
         )
 
         # 使用Flyout控件显示
@@ -174,8 +176,9 @@ class KnowledgeCard(ElevatedCardWidget):
             isDeleteOnClose=False
         )
 
-        # 设置 Flyout 引用，使关闭按钮能正常工作
+        # 设置引用
         flyout_view.set_flyout(flyout)
+        flyout_view.set_card(self)
         self.current_dialog = flyout
 
     def delete_document(self) -> None:
@@ -570,43 +573,46 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
     """
     知识详情弹窗视图
 
-    显示文档的完整详情内容。
+    显示文档的完整详情内容，支持编辑功能。
     """
 
     # 类常量
     FLYOUT_WIDTH = 800
     FLYOUT_HEIGHT = 600
     CONTENT_MIN_HEIGHT = 400
-    BUTTON_WIDTH_COPY = 120
-    BUTTON_WIDTH_CLOSE = 100
+    BUTTON_WIDTH = 100
     BUTTON_HEIGHT = 36
 
-    def __init__(self, title: str, content_markdown: str):
+    def __init__(self, title: str, content_markdown: str, doc_id: str = "", doc_content: str = ""):
         """
         初始化详情弹窗
 
         Args:
             title: 文档标题
-            content_markdown: Markdown格式的内容
+            content_markdown: Markdown格式的内容（用于显示）
+            doc_id: 文档ID（用于编辑保存）
+            doc_content: 原始内容（用于编辑）
         """
         super().__init__()
         self._title = title
         self._content_markdown = content_markdown
-        self._flyout = None  # 保存 Flyout 实例的引用
+        self._doc_id = doc_id
+        self._doc_content = doc_content
+        self._flyout = None
+        self._card = None  # 卡片引用，用于保存后刷新
+        self._is_editing = False
         self._setup_ui()
 
     def set_flyout(self, flyout) -> None:
-        """
-        设置 Flyout 实例引用
-
-        Args:
-            flyout: Flyout 实例
-        """
+        """设置 Flyout 实例引用"""
         self._flyout = flyout
+
+    def set_card(self, card) -> None:
+        """设置卡片引用，用于保存后刷新"""
+        self._card = card
 
     def _setup_ui(self) -> None:
         """初始化UI"""
-        # 设置弹窗大小
         self.setFixedSize(self.FLYOUT_WIDTH, self.FLYOUT_HEIGHT)
 
         # 主布局
@@ -614,27 +620,39 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(12)
 
-        # 标题
-        title_label = QLabel(self._title)
-        title_label.setStyleSheet("font-weight: 600; font-size: 16px; color: #333;")
-        main_layout.addWidget(title_label)
+        # 标题区域（支持编辑模式切换）
+        self._title_container = QWidget()
+        title_layout = QHBoxLayout(self._title_container)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._title_label = QLabel(self._title)
+        self._title_label.setStyleSheet("font-weight: 600; font-size: 16px; color: #333;")
+
+        self._title_edit = QLineEdit(self._title)
+        self._title_edit.setStyleSheet("font-size: 16px; padding: 4px;")
+        self._title_edit.setVisible(False)
+
+        title_layout.addWidget(self._title_label)
+        title_layout.addWidget(self._title_edit)
+        title_layout.addStretch(1)
+
+        main_layout.addWidget(self._title_container)
 
         # 分隔线
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        line.setStyleSheet("color: #e0e0e0;")
-        main_layout.addWidget(line)
+        self._line = QFrame()
+        self._line.setFrameShape(QFrame.Shape.HLine)
+        self._line.setFrameShadow(QFrame.Shadow.Sunken)
+        self._line.setStyleSheet("color: #e0e0e0;")
+        main_layout.addWidget(self._line)
 
-        # 可滚动内容
-        text_edit = QTextEdit()
-        text_edit.setHtml(MarkdownConverter.to_html(self._content_markdown))
-        text_edit.setReadOnly(True)
-        text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        text_edit.setMinimumHeight(self.CONTENT_MIN_HEIGHT)
-        text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        text_edit.setStyleSheet("""
+        # 内容区域（支持编辑模式切换）
+        # 查看模式：HTML 渲染
+        self._text_edit = QTextEdit()
+        self._text_edit.setHtml(MarkdownConverter.to_html(self._content_markdown))
+        self._text_edit.setReadOnly(True)
+        self._text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._text_edit.setMinimumHeight(self.CONTENT_MIN_HEIGHT)
+        self._text_edit.setStyleSheet("""
             QTextEdit {
                 border: none;
                 background-color: transparent;
@@ -644,42 +662,214 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
             }
         """)
 
-        main_layout.addWidget(text_edit, 1)
+        # 编辑模式：纯文本编辑
+        self._content_edit = QTextEdit()
+        self._content_edit.setPlainText(self._doc_content)
+        self._content_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._content_edit.setMinimumHeight(self.CONTENT_MIN_HEIGHT)
+        self._content_edit.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid #0078d4;
+                background-color: #fff;
+                color: #333;
+                font-size: 13px;
+            }
+        """)
+        self._content_edit.setVisible(False)
+
+        main_layout.addWidget(self._text_edit, 1)
+        main_layout.addWidget(self._content_edit, 1)
 
         # 底部按钮栏
         btn_bar = QHBoxLayout()
         btn_bar.setSpacing(12)
         btn_bar.setContentsMargins(0, 10, 0, 0)
 
-        copy_btn = PrimaryPushButton("复制内容")
-        copy_btn.setFixedWidth(self.BUTTON_WIDTH_COPY)
-        copy_btn.setFixedHeight(self.BUTTON_HEIGHT)
-        copy_btn.setIcon(FluentIcon.COPY)
+        # 编辑/保存按钮
+        self._edit_btn = PushButton("编辑")
+        self._edit_btn.setFixedWidth(self.BUTTON_WIDTH)
+        self._edit_btn.setFixedHeight(self.BUTTON_HEIGHT)
+        self._edit_btn.setIcon(FluentIcon.EDIT)
+        self._edit_btn.clicked.connect(self._toggle_edit_mode)
+
+        self._save_btn = PrimaryPushButton("保存")
+        self._save_btn.setFixedWidth(self.BUTTON_WIDTH)
+        self._save_btn.setFixedHeight(self.BUTTON_HEIGHT)
+        self._save_btn.setIcon(FluentIcon.SAVE)
+        self._save_btn.clicked.connect(self._save_edit)
+        self._save_btn.setVisible(False)
+
+        # 复制/取消按钮
+        self._copy_btn = PushButton("复制")
+        self._copy_btn.setFixedWidth(self.BUTTON_WIDTH)
+        self._copy_btn.setFixedHeight(self.BUTTON_HEIGHT)
+        self._copy_btn.setIcon(FluentIcon.COPY)
+        self._copy_btn.clicked.connect(self._copy_content)
+
+        self._cancel_btn = PushButton("取消")
+        self._cancel_btn.setFixedWidth(self.BUTTON_WIDTH)
+        self._cancel_btn.setFixedHeight(self.BUTTON_HEIGHT)
+        self._cancel_btn.clicked.connect(self._cancel_edit)
+        self._cancel_btn.setVisible(False)
 
         close_btn = PushButton("关闭")
-        close_btn.setFixedWidth(self.BUTTON_WIDTH_CLOSE)
+        close_btn.setFixedWidth(self.BUTTON_WIDTH)
         close_btn.setFixedHeight(self.BUTTON_HEIGHT)
         close_btn.setIcon(FluentIcon.CLOSE)
-
-        # 连接信号
-        copy_btn.clicked.connect(self._copy_content)
         close_btn.clicked.connect(self._close_flyout)
 
         btn_bar.addStretch(1)
-        btn_bar.addWidget(copy_btn)
+        btn_bar.addWidget(self._edit_btn)
+        btn_bar.addWidget(self._save_btn)
+        btn_bar.addWidget(self._copy_btn)
+        btn_bar.addWidget(self._cancel_btn)
         btn_bar.addWidget(close_btn)
 
         main_layout.addLayout(btn_bar)
 
-        # 保存引用
-        self._text_edit = text_edit
+    def _toggle_edit_mode(self) -> None:
+        """切换编辑模式"""
+        self._is_editing = True
+
+        # 切换标题显示
+        self._title_label.setVisible(False)
+        self._title_edit.setVisible(True)
+        self._title_edit.setText(self._title)
+
+        # 切换内容显示
+        self._text_edit.setVisible(False)
+        self._content_edit.setVisible(True)
+        self._content_edit.setPlainText(self._doc_content)
+
+        # 切换按钮显示
+        self._edit_btn.setVisible(False)
+        self._save_btn.setVisible(True)
+        self._copy_btn.setVisible(False)
+        self._cancel_btn.setVisible(True)
+
+    def _cancel_edit(self) -> None:
+        """取消编辑"""
+        self._is_editing = False
+
+        # 恢复标题显示
+        self._title_label.setVisible(True)
+        self._title_edit.setVisible(False)
+
+        # 恢复内容显示
+        self._text_edit.setVisible(True)
+        self._content_edit.setVisible(False)
+
+        # 恢复按钮显示
+        self._edit_btn.setVisible(True)
+        self._save_btn.setVisible(False)
+        self._copy_btn.setVisible(True)
+        self._cancel_btn.setVisible(False)
+
+    def _save_edit(self) -> None:
+        """保存编辑"""
+        new_title = self._title_edit.text().strip()
+        new_content = self._content_edit.toPlainText().strip()
+
+        if not new_title:
+            self._show_message('warning', "提示", "标题不能为空")
+            return
+
+        if not new_content:
+            self._show_message('warning', "提示", "内容不能为空")
+            return
+
+        # 执行保存（异步）
+        self._execute_save(new_title, new_content)
+
+    def _execute_save(self, title: str, content: str) -> None:
+        """执行保存操作"""
+        import asyncio
+        from threading import Thread
+
+        def run_save():
+            try:
+                # 获取知识库管理器
+                knowledge_manager = self._get_knowledge_manager()
+                if not knowledge_manager:
+                    self._show_message('error', "错误", "无法获取知识库管理器")
+                    return
+
+                # 创建新的事件循环
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                # 执行更新
+                success = loop.run_until_complete(
+                    knowledge_manager.update_document_content(self._doc_id, title, content)
+                )
+                loop.close()
+
+                if success:
+                    # 更新本地数据
+                    self._title = title
+                    self._doc_content = content
+                    self._content_markdown = f"# {title}\n\n{content}"
+
+                    # 刷新显示
+                    self._title_label.setText(title)
+                    self._text_edit.setHtml(MarkdownConverter.to_html(self._content_markdown))
+
+                    # 退出编辑模式
+                    self._cancel_edit()
+
+                    # 刷新卡片显示
+                    if self._card and hasattr(self._card, 'doc'):
+                        self._card.doc.title = title
+                        self._card.doc.content = content
+
+                    self._show_message('success', "成功", "文档已更新")
+                else:
+                    self._show_message('error', "失败", "保存文档失败")
+
+            except Exception as e:
+                logger.error(f"保存文档失败: {e}")
+                self._show_message('error', "错误", f"保存失败: {str(e)}")
+
+        # 在后台线程执行
+        thread = Thread(target=run_save, daemon=True)
+        thread.start()
+
+    def _get_knowledge_manager(self):
+        """获取知识库管理器"""
+        if self._card:
+            parent = self._card.parent()
+            while parent:
+                if hasattr(parent, 'knowledge_manager'):
+                    return parent.knowledge_manager
+                parent = parent.parent()
+        return None
 
     def _copy_content(self) -> None:
         """复制内容到剪贴板"""
-        self._text_edit.selectAll()
-        self._text_edit.copy()
+        if self._is_editing:
+            self._content_edit.selectAll()
+            self._content_edit.copy()
+        else:
+            self._text_edit.selectAll()
+            self._text_edit.copy()
+        self._show_message('success', "成功", "内容已复制到剪贴板")
 
     def _close_flyout(self) -> None:
         """关闭 Flyout 弹窗"""
         if self._flyout:
+            Flyout.close(self._flyout)
+
+    def _show_message(self, level: str, title: str, content: str, duration: int = 2000) -> None:
+        """显示消息提示"""
+        try:
+            info_method = getattr(InfoBar, level)
+            info_method(
+                title=title,
+                content=content,
+                orient=InfoBarPosition.TOP,
+                duration=duration,
+                parent=self
+            )
+        except Exception as e:
+            logger.error(f"显示消息失败: {e}")
             Flyout.close(self._flyout)

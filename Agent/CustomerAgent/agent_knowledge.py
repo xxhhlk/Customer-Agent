@@ -317,6 +317,47 @@ class KnowledgeManager:
             return False
 
     
+    async def update_document_content(self, doc_id: str, title: str, content: str) -> bool:
+        """
+        异步更新文档内容（删除旧的，添加新的）
+
+        Args:
+            doc_id: 文档ID
+            title: 新标题
+            content: 新内容
+
+        Returns:
+            是否更新成功
+        """
+        try:
+            if not doc_id or not title or not content:
+                logger.warning("文档ID、标题或内容为空，无法更新")
+                return False
+
+            logger.info(f"正在更新文档: {doc_id}")
+
+            # 1. 删除旧文档
+            self.knowledge.remove_content_by_id(doc_id)
+
+            # 2. 添加新内容
+            formatted_content = f"标题: {title}\n\n内容:\n{content}"
+            await self.knowledge.add_content_async(
+                text_content=formatted_content,
+                metadata={
+                    'title': title,
+                    'source': 'manual_edit',
+                    'filename': f"{title}.txt"
+                },
+                skip_if_exists=False
+            )
+
+            logger.info(f"成功更新文档: {title}")
+            return True
+
+        except Exception as e:
+            logger.error(f"更新文档失败 {doc_id}: {str(e)}")
+            return False
+
     def modify_document(self, doc_id: str, file_path: str) -> bool:
         """修改指定文档的内容（通过文件）"""
         try:
