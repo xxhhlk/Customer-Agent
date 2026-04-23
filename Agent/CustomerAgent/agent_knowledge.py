@@ -6,6 +6,9 @@ from agno.knowledge.knowledge import Knowledge
 from typing import Optional
 import logging
 
+# 导入自定义的火山引擎嵌入模型
+from Agent.CustomerAgent.volcengine_embedder import VolcengineEmbedder
+
 # 导入知识库增强类
 from Agent.CustomerAgent.knowledge_enhanced import (
     LanceDbWithProgress,
@@ -94,26 +97,27 @@ class KnowledgeManager:
         
         # 尝试读取配置
         embedder_config = {
-            "dimensions": 2560,
-            "id": "",
+            "id": "doubao-embedding-vision-251215",
+            "dimensions": 1024,  # 火山引擎多模态嵌入维度
             "api_key": "",
-            "base_url": ""
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
         }
         try:
             config = Config()
             embedder_config = {
-                "dimensions": 2560,
-                "id": config.get("embedder.model_name", ""),
+                "id": config.get("embedder.model_name", "doubao-embedding-vision-251215"),
+                "dimensions": 1024,
                 "api_key": config.get("embedder.api_key", ""),
-                "base_url": config.get("embedder.api_base", "")
+                "base_url": "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
             }
         except Exception as e:
             print(f"[DEBUG] 配置读取失败: {e}")
         
+        # 使用火山引擎多模态嵌入模型
         vector_db = LanceDbWithProgress(
                 table_name="customer_knowledge",
                 uri=str(vector_path),
-                embedder=OpenAIEmbedder(**embedder_config),
+                embedder=VolcengineEmbedder(**embedder_config),
                 search_type=SearchType.hybrid
             )
         print(f"[DEBUG] ✅ 向量数据库创建成功")
