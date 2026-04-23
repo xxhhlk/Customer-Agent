@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 class SaveDocumentWorker(QThread):
     """保存文档的工作线程"""
 
-    success = pyqtSignal(str, str)  # title, content
+    success = pyqtSignal(str, str, str)  # doc_id, title, content
     failed = pyqtSignal(str)  # error message
 
     def __init__(self, knowledge_manager, doc_id: str, title: str, content: str):
@@ -38,6 +38,7 @@ class SaveDocumentWorker(QThread):
     def run(self):
         """在子线程中执行保存操作"""
         import asyncio
+        import hashlib
 
         try:
             if not self.knowledge_manager:
@@ -55,7 +56,9 @@ class SaveDocumentWorker(QThread):
             loop.close()
 
             if success:
-                self.success.emit(self.title, self.content)
+                # 计算新的文档ID（基于内容hash）
+                new_doc_id = hashlib.md5(self.content.encode()).hexdigest()
+                self.success.emit(new_doc_id, self.title, self.content)
             else:
                 self.failed.emit("保存文档失败")
 
@@ -681,6 +684,13 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
 
         main_layout.addWidget(self._title_container)
 
+        # 向量信息区域
+        self._vector_info_label = QLabel()
+        self._vector_info_label.setStyleSheet("font-size: 12px; color: #666; padding: 8px; background-color: #f5f5f5; border-radius: 4px;")
+        self._vector_info_label.setWordWrap(True)
+        self._update_vector_info()  # 初始化向量信息
+        main_layout.addWidget(self._vector_info_label)
+
         # 分隔线
         self._line = QFrame()
         self._line.setFrameShape(QFrame.Shape.HLine)
@@ -839,9 +849,10 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._save_worker.failed.connect(self._on_save_failed)
         self._save_worker.start()
 
-    def _on_save_success(self, title: str, content: str) -> None:
+    def _on_save_success(self, doc_id: str, title: str, content: str) -> None:
         """保存成功回调（在主线程中执行）"""
-        # 更新本地数据
+        # 更新本地数据（包括新的文档ID）
+        self._doc_id = doc_id
         self._title = title
         self._doc_content = content
         self._content_markdown = f"# {title}\n\n{content}"
@@ -851,6 +862,9 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         # 使用 <pre> 标签保留原始格式，不进行 Markdown 转换
         escaped_content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         self._text_edit.setHtml(f"<h1>{title}</h1><hr><pre style='white-space: pre-wrap; font-family: inherit;'>{escaped_content}</pre>")
+
+        # 更新向量信息
+        self._update_vector_info()
 
         # 退出编辑模式
         self._cancel_edit()
@@ -876,6 +890,39 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
                     return parent.knowledge_manager
                 parent = parent.parent()
         return None
+
+    def _update_vector_info(self) -> None:
+        """更新向量信息显示"""
+        try:
+            if not self._doc_id:
+                self._vector_info_label.setText("📋 文档ID为空，无法获取向量信息")
+                return
+
+            knowledge_manager = self._get_knowledge_manager()
+            if not knowledge_manager:
+                self._vector_info_label.setText("📋 无法获取知识库管理器")
+                return
+
+            # 获取向量信息
+            vector_info = knowledge_manager.get_document_vector_info(self._doc_id)
+
+            if vector_info["has_vector"]:
+                dimension = vector_info["vector_dimension"]
+                sample = vector_info["vector_sample"]
+                sample_str = ", ".join([f"{v:.4f}" for v in sample[:5]])  # 只显示前5个值
+                
+                self._vector_info_label.setText(
+                    f"✅ 向量状态: 正常 | 维度: {dimension} | 前5个值: [{sample_str}, ...]"
+                )
+                self._vector_info_label.setStyleSheet("font-size: 12px; color: #2e7d32; padding: 8px; background-color: #e8f5e9; border-radius: 4px;")
+            else:
+                self._vector_info_label.setText("❌ 向量状态: 缺失 | 该文档未生成向量嵌入")
+                self._vector_info_label.setStyleSheet("font-size: 12px; color: #c62828; padding: 8px; background-color: #ffebee; border-radius: 4px;")
+
+        except Exception as e:
+            logger.error(f"更新向量信息失败: {e}")
+            self._vector_info_label.setText(f"⚠️ 获取向量信息失败: {str(e)}")
+            self._vector_info_label.setStyleSheet("font-size: 12px; color: #f57c00; padding: 8px; background-color: #fff3e0; border-radius: 4px;")
 
     def _copy_content(self) -> None:
         """复制内容到剪贴板"""

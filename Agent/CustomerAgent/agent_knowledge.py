@@ -394,3 +394,66 @@ class KnowledgeManager:
         except Exception as e:
             logger.error(f"修改文档失败: {str(e)}")
             return False
+
+    def get_document_vector_info(self, doc_id: str) -> dict:
+        """
+        获取文档的向量信息
+
+        Args:
+            doc_id: 文档ID
+
+        Returns:
+            包含向量信息的字典，包括：
+            - has_vector: 是否有向量
+            - vector_dimension: 向量维度
+            - vector_sample: 向量前10个值（用于验证）
+        """
+        try:
+            import lancedb
+            import numpy as np
+
+            if not self.knowledge.vector_db:
+                logger.warning("向量数据库未初始化")
+                return {"has_vector": False, "vector_dimension": 0, "vector_sample": None}
+
+            # 连接到 LanceDB
+            db = lancedb.connect(self.knowledge.vector_db.uri)
+            table = db.open_table("customer_knowledge")
+
+            # 查询文档
+            results = table.search().select(["id", "vector"]).limit(1000).to_pandas()
+
+            # 找到对应的文档
+            doc_row = results[results["id"] == doc_id]
+
+            if doc_row.empty:
+                logger.warning(f"未找到文档: {doc_id}")
+                return {"has_vector": False, "vector_dimension": 0, "vector_sample": None}
+
+            # 获取向量
+            vector_data = doc_row.iloc[0]["vector"]
+
+            if vector_data is None:
+                logger.warning(f"文档向量为空: {doc_id}")
+                return {"has_vector": False, "vector_dimension": 0, "vector_sample": None}
+
+            # 转换为 numpy 数组
+            if hasattr(vector_data, 'tolist'):
+                vector_list = vector_data.tolist()
+            else:
+                vector_list = list(vector_data)
+
+            dimension = len(vector_list)
+            sample = vector_list[:10]  # 前10个值
+
+            logger.info(f"文档 {doc_id} 向量信息: 维度={dimension}, 前10个值={sample}")
+
+            return {
+                "has_vector": True,
+                "vector_dimension": dimension,
+                "vector_sample": sample
+            }
+
+        except Exception as e:
+            logger.error(f"获取文档向量信息失败 {doc_id}: {str(e)}")
+            return {"has_vector": False, "vector_dimension": 0, "vector_sample": None}
