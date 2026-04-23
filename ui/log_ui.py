@@ -311,8 +311,9 @@ class LogTableView(QTableView):
 
         # 设置表头
         header = self.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
+        if header is not None:
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            header.setStretchLastSection(True)
 
         # 设置列宽
         self.setColumnWidth(0, 160)  # 时间
@@ -353,7 +354,9 @@ class LogTableView(QTableView):
         delegate = self.itemDelegate()
         if isinstance(delegate, LogTableDelegate):
             delegate.set_highlight(text)
-            self.viewport().update()
+            viewport = self.viewport()
+            if viewport is not None:
+                viewport.update()
 
 
 class LogDisplayWidget(QWidget):

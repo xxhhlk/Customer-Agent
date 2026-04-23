@@ -872,4 +872,5 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
             )
         except Exception as e:
             logger.error(f"显示消息失败: {e}")
-            Flyout.close(self._flyout)
+            if self._flyout is not None:
+                Flyout.close(self._flyout)

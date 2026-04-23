@@ -26,10 +26,11 @@ class VolcengineEmbedder(Embedder):
     所以需要逐个文本请求。
     """
     id: str = "doubao-embedding-vision-251215"
-    dimensions: Optional[int] = 1024  # 火山引擎多模态嵌入维度
+    dimensions: Optional[int] = 2048  # 火山引擎多模态嵌入维度
     api_key: Optional[str] = None
     base_url: Optional[str] = "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
     request_params: Optional[Dict[str, Any]] = None
+    enable_batch: bool = True  # 支持批量嵌入
     
     def _get_headers(self) -> Dict[str, str]:
         """获取请求头"""
@@ -67,9 +68,13 @@ class VolcengineEmbedder(Embedder):
     
     def get_embedding_and_usage(self, text: str) -> Tuple[List[float], Optional[Dict]]:
         """获取单个文本的嵌入向量和用量信息"""
+        logger.debug(f"get_embedding_and_usage() 被调用，文本长度: {len(text)}")
         embeddings, usages = self.get_embeddings_batch_and_usage([text])
+        logger.debug(f"get_embeddings_batch_and_usage() 返回: embeddings 数量={len(embeddings)}, usages 数量={len(usages)}")
         if embeddings and usages:
+            logger.debug(f"返回第一个嵌入，维度: {len(embeddings[0])}")
             return embeddings[0], usages[0]
+        logger.warning(f"embeddings 或 usages 为空，返回 ([], None)")
         return [], None
     
     def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
@@ -106,8 +111,11 @@ class VolcengineEmbedder(Embedder):
                 # 解析响应 - data 是对象，不是数组
                 if response and "data" in response:
                     data = response["data"]
+                    logger.debug(f"响应 data 类型: {type(data).__name__}")
                     if isinstance(data, dict) and "embedding" in data:
-                        all_embeddings.append(data["embedding"])
+                        embedding = data["embedding"]
+                        logger.info(f"成功获取嵌入向量，维度: {len(embedding)}")
+                        all_embeddings.append(embedding)
                         
                         # 用量信息
                         usage = response.get("usage")
@@ -139,6 +147,10 @@ class VolcengineEmbedder(Embedder):
         logger.debug(f"请求 URL: {self.base_url}")
         logger.debug(f"请求 body: {json.dumps(body, ensure_ascii=False)[:200]}...")
         
+        # 检查 base_url 是否为 None
+        if self.base_url is None:
+            raise ValueError("base_url 不能为 None")
+        
         try:
             with httpx.Client(timeout=60.0) as client:
                 response = client.post(
@@ -150,7 +162,11 @@ class VolcengineEmbedder(Embedder):
                 if response.status_code != 200:
                     logger.error(f"响应内容: {response.text[:500]}")
                 response.raise_for_status()
-                return response.json()
+                
+                # 打印完整响应用于调试
+                response_json = response.json()
+                logger.debug(f"响应包含 data: {'data' in response_json}, usage: {'usage' in response_json}")
+                return response_json
                 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP 错误: {e.response.status_code} - {e.response.text}")
@@ -200,19 +216,22 @@ class VolcengineEmbedder(Embedder):
                 # 解析响应 - data 是对象，不是数组
                 if response and "data" in response:
                     data = response["data"]
+                    logger.debug(f"异步响应 data 类型: {type(data).__name__}")
                     if isinstance(data, dict) and "embedding" in data:
-                        all_embeddings.append(data["embedding"])
+                        embedding = data["embedding"]
+                        logger.info(f"成功获取异步嵌入向量，维度: {len(embedding)}")
+                        all_embeddings.append(embedding)
                         
                         # 用量信息
                         usage = response.get("usage")
                         usage_dict = usage if isinstance(usage, dict) else None
                         all_usage.append(usage_dict)
                     else:
-                        logger.warning(f"响应 data 格式异常: {data}")
+                        logger.warning(f"异步响应 data 格式异常: {data}")
                         all_embeddings.append([])
                         all_usage.append(None)
                 else:
-                    logger.warning(f"响应格式异常: {response}")
+                    logger.warning(f"异步响应格式异常: {response}")
                     all_embeddings.append([])
                     all_usage.append(None)
                     
@@ -227,6 +246,10 @@ class VolcengineEmbedder(Embedder):
         """异步发送 HTTP 请求"""
         headers = self._get_headers()
         body = self._build_request_body(texts)
+        
+        # 检查 base_url 是否为 None
+        if self.base_url is None:
+            raise ValueError("base_url 不能为 None")
         
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:

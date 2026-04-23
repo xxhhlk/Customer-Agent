@@ -321,8 +321,10 @@ class AccountCard(CardWidget):
         layout = self.action_widget.layout()
         if layout is not None:
             old_badge = layout.itemAt(0)
-            if old_badge and old_badge.widget():
-                old_badge.widget().deleteLater()
+            if old_badge is not None:
+                widget = old_badge.widget()
+                if widget is not None:
+                    widget.deleteLater()
 
             new_badge = self.createStatusBadge()
             # QBoxLayout.insertWidget for QHBoxLayout/QVBoxLayout
@@ -529,8 +531,11 @@ class UserManagerWidget(QFrame):
         """清空账号列表"""
         while self.accounts_layout.count():
             child = self.accounts_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+            if child is None:
+                continue
+            widget = child.widget()
+            if widget is not None:
+                widget.deleteLater()
     
     def updateStats(self):
         """更新统计信息"""
@@ -546,7 +551,10 @@ class UserManagerWidget(QFrame):
         # 找到对应的账号卡片
         account_card = None
         for i in range(self.accounts_layout.count() - 1):  # -1 因为最后一个是stretch
-            widget = self.accounts_layout.itemAt(i).widget()
+            item = self.accounts_layout.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
             if isinstance(widget, AccountCard) and widget.account_data == account_data:
                 account_card = widget
                 break

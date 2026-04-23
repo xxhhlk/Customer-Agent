@@ -540,6 +540,8 @@ class KnowledgeUI(QWidget):
         """清空网格布局中的所有控件"""
         while self.gridLayout.count():
             item = self.gridLayout.takeAt(0)
+            if item is None:
+                continue
             w = item.widget()
             if w is not None:
                 w.setParent(None)
@@ -633,6 +635,9 @@ class KnowledgeUI(QWidget):
             # 尝试直接从LanceDB获取数据
             try:
                 import lancedb
+                if self.knowledge_manager.knowledge.vector_db is None:
+                    logger.warning("向量数据库未初始化")
+                    return
                 db_path = self.knowledge_manager.knowledge.vector_db.uri
                 db = lancedb.connect(db_path)
                 table = db.open_table("customer_knowledge")
@@ -687,8 +692,12 @@ class KnowledgeUI(QWidget):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     self
                 )
-                confirm_box.button(QMessageBox.StandardButton.Yes).setText("添加")
-                confirm_box.button(QMessageBox.StandardButton.No).setText("取消")
+                yes_btn = confirm_box.button(QMessageBox.StandardButton.Yes)
+                no_btn = confirm_box.button(QMessageBox.StandardButton.No)
+                if yes_btn is not None:
+                    yes_btn.setText("添加")
+                if no_btn is not None:
+                    no_btn.setText("取消")
 
                 if confirm_box.exec() == QMessageBox.StandardButton.Yes:
                     # 使用工作线程执行添加

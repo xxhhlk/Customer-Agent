@@ -90,7 +90,7 @@ class KnowledgeManager:
         # 创建内容数据库 - 直接传 db_file，让 agno 处理！
         print(f"[DEBUG] 准备创建 SqliteDb")
         contents_db = SqliteDb(db_file=str(contents_path))
-        print(f"[DEBUG] ✅ SqliteDb 创建成功")
+        print(f"[DEBUG] [OK] SqliteDb 创建成功")
         
         # 创建向量数据库
         print(f"[DEBUG] 准备创建向量数据库")
@@ -122,7 +122,7 @@ class KnowledgeManager:
                 embedder=VolcengineEmbedder(**embedder_config),
                 search_type=SearchType.hybrid
             )
-        print(f"[DEBUG] ✅ 向量数据库创建成功")
+        print(f"[DEBUG] [OK] 向量数据库创建成功")
             
 
         # 准备可用的读取器
@@ -153,7 +153,7 @@ class KnowledgeManager:
             max_results=3,
             readers=readers  # 只添加可用的读取器
         )
-        print(f"[DEBUG] ✅ KnowledgeWithProgress 创建成功")
+        print(f"[DEBUG] [OK] KnowledgeWithProgress 创建成功")
         logger.info("使用增强版 Knowledge")
 
 
@@ -279,12 +279,15 @@ class KnowledgeManager:
             # 2. 额外确保从向量数据库删除（防止残留）
             try:
                 import lancedb
-                db = lancedb.connect(self.knowledge.vector_db.uri)
-                table = db.open_table("customer_knowledge")
-                
-                # LanceDB 使用 id 列来删除
-                table.delete(f"id == '{doc_id}'")
-                logger.info(f"从向量数据库删除文档: {doc_id}")
+                if self.knowledge.vector_db is not None:
+                    db = lancedb.connect(self.knowledge.vector_db.uri)
+                    table = db.open_table("customer_knowledge")
+                    
+                    # LanceDB 使用 id 列来删除
+                    table.delete(f"id == '{doc_id}'")
+                    logger.info(f"从向量数据库删除文档: {doc_id}")
+                else:
+                    logger.warning("向量数据库未初始化，跳过删除")
                 
             except Exception as e:
                 logger.warning(f"从向量数据库删除失败（可能已不存在）: {e}")

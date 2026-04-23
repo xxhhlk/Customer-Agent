@@ -96,13 +96,16 @@ def get_logger(name=None):
     if name is None:
         # 获取调用者的模块名
         import inspect
-        frame = inspect.currentframe().f_back
-        name = frame.f_globals.get('__name__', 'unknown')
+        frame = inspect.currentframe()
+        if frame is not None and frame.f_back is not None:
+            name = frame.f_back.f_globals.get('__name__', 'unknown')
 
-        # 如果是__main__, 使用文件名
-        if name == '__main__':
-            filename = frame.f_globals.get('__file__', 'main')
-            name = os.path.splitext(os.path.basename(filename))[0]
+            # 如果是__main__, 使用文件名
+            if name == '__main__':
+                filename = frame.f_back.f_globals.get('__file__', 'main')
+                name = os.path.splitext(os.path.basename(filename))[0]
+        else:
+            name = 'unknown'
 
     # 绑定模块名称到logger
     return logger.bind(module=name)

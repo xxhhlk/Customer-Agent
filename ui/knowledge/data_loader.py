@@ -68,6 +68,10 @@ class KnowledgeDataLoader:
         """
         import lancedb
 
+        if self.knowledge_manager.knowledge.vector_db is None:
+            logger.warning("向量数据库未初始化")
+            return []
+        
         db_path = self.knowledge_manager.knowledge.vector_db.uri
         db = lancedb.connect(db_path)
         table = db.open_table("customer_knowledge")

@@ -846,8 +846,11 @@ class AutoReplyUI(QFrame):
         """清空账号列表"""
         while self.accounts_layout.count():
             child = self.accounts_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+            if child is None:
+                continue
+            widget = child.widget()
+            if widget is not None:
+                widget.deleteLater()
     
     def updateStats(self):
         """更新统计信息"""
@@ -862,7 +865,10 @@ class AutoReplyUI(QFrame):
             updated_count = 0
 
             for i in range(self.accounts_layout.count() - 1):  # -1 因为最后一个是stretch
-                widget = self.accounts_layout.itemAt(i).widget()
+                item = self.accounts_layout.itemAt(i)
+                if item is None:
+                    continue
+                widget = item.widget()
                 if isinstance(widget, AutoReplyCard):
                     # 重新检查实际的运行状态
                     is_running = auto_reply_manager.is_running(widget.account_data)
@@ -979,7 +985,10 @@ class AutoReplyUI(QFrame):
         """更新所有卡片的自动回复状态"""
         try:
             for i in range(self.accounts_layout.count() - 1):  # -1 因为最后一个是stretch
-                widget = self.accounts_layout.itemAt(i).widget()
+                item = self.accounts_layout.itemAt(i)
+                if item is None:
+                    continue
+                widget = item.widget()
                 if isinstance(widget, AutoReplyCard):
                     # 检查实际运行状态
                     is_running = auto_reply_manager.is_running(widget.account_data)
@@ -1035,7 +1044,10 @@ class AutoReplyUI(QFrame):
     def findAccountCard(self, account_data: dict):
         """查找对应的账号卡片"""
         for i in range(self.accounts_layout.count() - 1):  # -1 因为最后一个是stretch
-            widget = self.accounts_layout.itemAt(i).widget()
+            item = self.accounts_layout.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
             if isinstance(widget, AutoReplyCard) and widget.account_data == account_data:
                 return widget
         return None
@@ -1220,7 +1232,10 @@ class AutoReplyUI(QFrame):
     def updateCardStatus(self, account_data: dict, new_status: int):
         """更新卡片状态"""
         for i in range(self.accounts_layout.count() - 1):  # -1 因为最后一个是stretch
-            widget = self.accounts_layout.itemAt(i).widget()
+            item = self.accounts_layout.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
             if isinstance(widget, AutoReplyCard) and widget.account_data == account_data:
                 widget.updateStatus(new_status)
                 break 

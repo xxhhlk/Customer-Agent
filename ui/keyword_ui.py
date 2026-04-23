@@ -35,22 +35,27 @@ class KeywordTableWidget(TableWidget):
         self.setAlternatingRowColors(True)  # 交替行颜色
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)  # 选择整行
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)  # 单选
-        self.verticalHeader().setVisible(False)  # 隐藏行号
+        vertical_header = self.verticalHeader()
+        if vertical_header is not None:
+            vertical_header.setVisible(False)  # 隐藏行号
         
         # 设置列宽
         header = self.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # 关键词列自动拉伸
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # 分组列
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # 匹配类型列
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # 回复内容列自动拉伸
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # 转人工列
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # 优先级列
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)   # 操作列固定宽度
+        if header is not None:
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # 关键词列自动拉伸
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # 分组列
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # 匹配类型列
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # 回复内容列自动拉伸
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # 转人工列
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # 优先级列
+            header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)   # 操作列固定宽度
         
         self.setColumnWidth(6, 250)  # 操作列
         
         # 设置行高
-        self.verticalHeader().setDefaultSectionSize(50)
+        vertical_header = self.verticalHeader()
+        if vertical_header is not None:
+            vertical_header.setDefaultSectionSize(50)
         
     def addKeyword(self, keyword_data: dict):
         """添加关键词到表格

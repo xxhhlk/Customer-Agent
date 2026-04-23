@@ -100,7 +100,7 @@ class CustomerAgent(Bot):
             # 确保dependencies中的值是安全的类型
             dependencies = {
                 "shop_name": str(context.kwargs.shop_name),
-                "channel_type": str(context.channel_type.value),
+                "channel_type": str(context.channel_type.value if context.channel_type else ""),
                 "shop_id": str(context.kwargs.shop_id),
                 "user_id": str(context.kwargs.user_id),
                 "from_uid": str(context.kwargs.from_uid),

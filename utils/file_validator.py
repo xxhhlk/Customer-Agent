@@ -116,7 +116,7 @@ class ExcelValidator(FileValidator):
             )
 
         # 检查文件大小
-        if result.file_info["size"] == 0:
+        if result.file_info is not None and result.file_info["size"] == 0:
             return ValidationResult(
                 is_valid=False,
                 error_type="EMPTY_FILE",
