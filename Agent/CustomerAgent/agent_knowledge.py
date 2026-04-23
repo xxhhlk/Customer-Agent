@@ -96,7 +96,9 @@ class KnowledgeManager:
         logger.info(f"确保内容数据库目录存在: {contents_dir}")
 
         # 创建内容数据库
-        contents_db = SqliteDb(db_file=contents_db_path)
+        # 将 Windows 反斜杠转换为正斜杠，避免 SQLAlchemy URL 解析问题
+        contents_db_path_posix = contents_path.as_posix()
+        contents_db = SqliteDb(db_file=contents_db_path_posix)
 
         # 确保向量数据库路径存在
         if not vector_db_path:
@@ -118,9 +120,11 @@ class KnowledgeManager:
             "base_url": config.get("embedder.api_base")
         }
 
+        # 将 Windows 反斜杠转换为正斜杠
+        vector_db_path_posix = vector_path.as_posix()
         vector_db = LanceDbWithProgress(
                 table_name="customer_knowledge",
-                uri=vector_db_path,
+                uri=vector_db_path_posix,
                 embedder=OpenAIEmbedder(**embedder_config),
                 search_type=SearchType.hybrid
             )
