@@ -657,6 +657,8 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
     def set_card(self, card) -> None:
         """设置卡片引用，用于保存后刷新"""
         self._card = card
+        # 设置卡片引用后，更新向量信息
+        self._update_vector_info()
 
     def _setup_ui(self) -> None:
         """初始化UI"""
@@ -686,10 +688,9 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         main_layout.addWidget(self._title_container)
 
         # 向量信息区域
-        self._vector_info_label = QLabel()
+        self._vector_info_label = QLabel("📋 正在加载向量信息...")
         self._vector_info_label.setStyleSheet("font-size: 12px; color: #666; padding: 8px; background-color: #f5f5f5; border-radius: 4px;")
         self._vector_info_label.setWordWrap(True)
-        self._update_vector_info()  # 初始化向量信息
         main_layout.addWidget(self._vector_info_label)
 
         # 分隔线
