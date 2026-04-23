@@ -118,7 +118,17 @@ config_base = {
     "knowledge_base": {
         "contents_db_path": "",
         "vector_db_path": ""
-    }
+    },
+    "rate_limit": {
+        "window_hours": 4,
+        "max_requests": 10,
+        "fallback_reply": []
+    },
+    "staff_reply_wait": {
+        "enable": True,
+        "wait_seconds": 30
+    },
+    "db_path": ""
 }
 
 
