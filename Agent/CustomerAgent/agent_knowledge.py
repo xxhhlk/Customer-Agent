@@ -267,8 +267,21 @@ class KnowledgeManager:
 
             logger.info(f"正在删除文档: {doc_id}")
 
-            # 使用框架方法，同时删除向量数据库和内容数据库
+            # 1. 使用框架方法删除内容数据库记录
             self.knowledge.remove_content_by_id(doc_id)
+
+            # 2. 额外确保从向量数据库删除（防止残留）
+            try:
+                import lancedb
+                db = lancedb.connect(self.knowledge.vector_db.uri)
+                table = db.open_table("customer_knowledge")
+                
+                # LanceDB 使用 id 列来删除
+                table.delete(f"id == '{doc_id}'")
+                logger.info(f"从向量数据库删除文档: {doc_id}")
+                
+            except Exception as e:
+                logger.warning(f"从向量数据库删除失败（可能已不存在）: {e}")
 
             logger.info(f"成功删除文档: {doc_id}")
             return True
