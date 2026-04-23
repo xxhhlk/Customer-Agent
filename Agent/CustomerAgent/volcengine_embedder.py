@@ -21,15 +21,15 @@ class VolcengineEmbedder(Embedder):
         "model": "doubao-embedding-vision-251215",
         "input": [{"type": "text", "text": "文本内容"}]
     }
+    
+    注意：火山引擎多模态嵌入 API 每次请求返回一个合并的 embedding，
+    所以需要逐个文本请求。
     """
     id: str = "doubao-embedding-vision-251215"
     dimensions: Optional[int] = 1024  # 火山引擎多模态嵌入维度
     api_key: Optional[str] = None
     base_url: Optional[str] = "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
     request_params: Optional[Dict[str, Any]] = None
-    
-    # 批处理参数
-    batch_size: int = 4  # 火山引擎建议单次不超过4条文本
     
     def _get_headers(self) -> Dict[str, str]:
         """获取请求头"""
@@ -83,6 +83,9 @@ class VolcengineEmbedder(Embedder):
         """
         批量获取嵌入向量和用量信息
         
+        注意：火山引擎多模态嵌入 API 每次请求返回一个合并的 embedding，
+        所以我们需要逐个文本请求（或每批一个文本）。
+        
         Args:
             texts: 文本列表
             
@@ -92,37 +95,37 @@ class VolcengineEmbedder(Embedder):
         all_embeddings: List[List[float]] = []
         all_usage: List[Optional[Dict]] = []
         
-        logger.info(f"正在获取 {len(texts)} 条文本的嵌入向量（批次大小: {self.batch_size}）")
+        logger.info(f"正在获取 {len(texts)} 条文本的嵌入向量")
         
-        # 分批处理
-        for i in range(0, len(texts), self.batch_size):
-            batch_texts = texts[i : i + self.batch_size]
-            
+        # 火山引擎多模态嵌入 API 每次请求返回一个 embedding
+        # 所以需要逐个处理
+        for text in texts:
             try:
-                response = self._make_request(batch_texts)
+                response = self._make_request([text])
                 
-                # 解析响应
+                # 解析响应 - data 是对象，不是数组
                 if response and "data" in response:
-                    # 按 index 排序
-                    sorted_data = sorted(response["data"], key=lambda x: x.get("index", 0))
-                    batch_embeddings = [item["embedding"] for item in sorted_data]
-                    all_embeddings.extend(batch_embeddings)
-                    
-                    # 用量信息
-                    usage = response.get("usage")
-                    usage_dict = usage if isinstance(usage, dict) else None
-                    all_usage.extend([usage_dict] * len(batch_embeddings))
+                    data = response["data"]
+                    if isinstance(data, dict) and "embedding" in data:
+                        all_embeddings.append(data["embedding"])
+                        
+                        # 用量信息
+                        usage = response.get("usage")
+                        usage_dict = usage if isinstance(usage, dict) else None
+                        all_usage.append(usage_dict)
+                    else:
+                        logger.warning(f"响应 data 格式异常: {data}")
+                        all_embeddings.append([])
+                        all_usage.append(None)
                 else:
                     logger.warning(f"响应格式异常: {response}")
-                    # 填充空结果
-                    all_embeddings.extend([[] for _ in batch_texts])
-                    all_usage.extend([None for _ in batch_texts])
+                    all_embeddings.append([])
+                    all_usage.append(None)
                     
             except Exception as e:
                 logger.error(f"获取嵌入向量失败: {e}")
-                # 填充空结果
-                all_embeddings.extend([[] for _ in batch_texts])
-                all_usage.extend([None for _ in batch_texts])
+                all_embeddings.append([])
+                all_usage.append(None)
         
         return all_embeddings, all_usage
     
@@ -173,36 +176,44 @@ class VolcengineEmbedder(Embedder):
     ) -> Tuple[List[List[float]], List[Optional[Dict]]]:
         """
         异步批量获取嵌入向量和用量信息
+        
+        注意：火山引擎多模态嵌入 API 每次请求返回一个合并的 embedding，
+        所以我们需要逐个文本请求。
         """
         all_embeddings: List[List[float]] = []
         all_usage: List[Optional[Dict]] = []
         
-        logger.info(f"正在异步获取 {len(texts)} 条文本的嵌入向量（批次大小: {self.batch_size}）")
+        logger.info(f"正在异步获取 {len(texts)} 条文本的嵌入向量")
         
-        # 分批处理
-        for i in range(0, len(texts), self.batch_size):
-            batch_texts = texts[i : i + self.batch_size]
-            
+        # 火山引擎多模态嵌入 API 每次请求返回一个 embedding
+        # 所以需要逐个处理
+        for text in texts:
             try:
-                response = await self._async_make_request(batch_texts)
+                response = await self._async_make_request([text])
                 
+                # 解析响应 - data 是对象，不是数组
                 if response and "data" in response:
-                    sorted_data = sorted(response["data"], key=lambda x: x.get("index", 0))
-                    batch_embeddings = [item["embedding"] for item in sorted_data]
-                    all_embeddings.extend(batch_embeddings)
-                    
-                    usage = response.get("usage")
-                    usage_dict = usage if isinstance(usage, dict) else None
-                    all_usage.extend([usage_dict] * len(batch_embeddings))
+                    data = response["data"]
+                    if isinstance(data, dict) and "embedding" in data:
+                        all_embeddings.append(data["embedding"])
+                        
+                        # 用量信息
+                        usage = response.get("usage")
+                        usage_dict = usage if isinstance(usage, dict) else None
+                        all_usage.append(usage_dict)
+                    else:
+                        logger.warning(f"响应 data 格式异常: {data}")
+                        all_embeddings.append([])
+                        all_usage.append(None)
                 else:
                     logger.warning(f"响应格式异常: {response}")
-                    all_embeddings.extend([[] for _ in batch_texts])
-                    all_usage.extend([None for _ in batch_texts])
+                    all_embeddings.append([])
+                    all_usage.append(None)
                     
             except Exception as e:
                 logger.error(f"异步获取嵌入向量失败: {e}")
-                all_embeddings.extend([[] for _ in batch_texts])
-                all_usage.extend([None for _ in batch_texts])
+                all_embeddings.append([])
+                all_usage.append(None)
         
         return all_embeddings, all_usage
     
