@@ -226,6 +226,8 @@ class EnhancedMessageConsumer:
                         if success:
                             self.logger.debug(f"Message handled by {handler.__class__.__name__}")
                             return  # 处理成功，直接返回
+                        else:
+                            self.logger.debug(f"Handler {handler.__class__.__name__} returned False, continuing...")
                     except Exception as e:
                         self.logger.error(f"Handler {handler.__class__.__name__} error: {e}")
 

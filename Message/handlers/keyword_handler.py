@@ -106,7 +106,11 @@ class KeywordDetectionHandler(BaseHandler):
             user_id = context.kwargs.user_id
             from_uid = context.kwargs.from_uid
             
-            if not all([shop_id, user_id, from_uid]):
+            self.logger.debug(f"关键词处理器收到参数: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
+            
+            # 检查必要参数（空字符串也视为无效）
+            if not shop_id or not user_id or not from_uid:
+                self.logger.warning(f"关键词处理器缺少必要参数: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
                 return False
             
             # 匹配关键词
