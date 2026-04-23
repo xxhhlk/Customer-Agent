@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 class EncodingConverter:
     """编码转换工具类"""
 
-    # 常见中文编码列表
-    ENCODINGS = ['utf-8', 'gbk', 'gb18030', 'gb2312', 'big5', 'shift_jis']
+    # 常见中文编码列表（utf-8-sig 优先，处理 BOM）
+    ENCODINGS = ['utf-8-sig', 'utf-8', 'gbk', 'gb18030', 'gb2312', 'big5', 'shift_jis']
 
     @staticmethod
     def ensure_utf8(file_path: str) -> Tuple[str, str]:
@@ -33,11 +33,20 @@ class EncodingConverter:
             with open(file_path, 'rb') as f:
                 raw_data = f.read()
 
+            # 检测 BOM 标记
+            has_bom = raw_data.startswith(b'\xef\xbb\xbf')
+            if has_bom:
+                logger.info("检测到 UTF-8 BOM 标记")
+
             # 尝试不同编码
             content, detected_encoding = EncodingConverter._try_decode(raw_data)
 
-            # 如果已经是UTF-8，直接返回
-            if detected_encoding == 'utf-8':
+            # 如果是 UTF-8（无 BOM）或 UTF-8-sig（有 BOM 但已处理），直接返回
+            if detected_encoding in ('utf-8', 'utf-8-sig'):
+                # 如果有 BOM，需要创建无 BOM 的临时文件
+                if has_bom:
+                    logger.info("创建无 BOM 的 UTF-8 临时文件")
+                    return EncodingConverter._create_temp_file(content, file_path), 'utf-8-sig'
                 return file_path, 'utf-8'
 
             # 创建临时文件
