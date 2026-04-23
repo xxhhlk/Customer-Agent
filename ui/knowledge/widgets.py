@@ -5,7 +5,7 @@
 """
 
 from typing import Optional, Any, Union
-from PyQt6.QtCore import Qt, QEvent, QObject, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QEvent, QObject, QTimer, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSizePolicy, QFrame, QTextEdit, QDialog, QLineEdit, QGraphicsOpacityEffect
@@ -20,6 +20,48 @@ from .models import SimpleDocument, DocumentTitleExtractor, MarkdownConverter
 from utils.logger_loguru import get_logger
 
 logger = get_logger(__name__)
+
+
+class SaveDocumentWorker(QThread):
+    """保存文档的工作线程"""
+
+    success = pyqtSignal(str, str)  # title, content
+    failed = pyqtSignal(str)  # error message
+
+    def __init__(self, knowledge_manager, doc_id: str, title: str, content: str):
+        super().__init__()
+        self.knowledge_manager = knowledge_manager
+        self.doc_id = doc_id
+        self.title = title
+        self.content = content
+
+    def run(self):
+        """在子线程中执行保存操作"""
+        import asyncio
+
+        try:
+            if not self.knowledge_manager:
+                self.failed.emit("无法获取知识库管理器")
+                return
+
+            # 创建新的事件循环
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # 执行更新
+            success = loop.run_until_complete(
+                self.knowledge_manager.update_document_content(self.doc_id, self.title, self.content)
+            )
+            loop.close()
+
+            if success:
+                self.success.emit(self.title, self.content)
+            else:
+                self.failed.emit("保存文档失败")
+
+        except Exception as e:
+            logger.error(f"保存文档失败: {e}")
+            self.failed.emit(str(e))
 
 
 class KnowledgeCard(ElevatedCardWidget):
@@ -601,6 +643,7 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._flyout = None
         self._card = None  # 卡片引用，用于保存后刷新
         self._is_editing = False
+        self._save_worker = None  # 保存工作线程
         self._setup_ui()
 
     def set_flyout(self, flyout) -> None:
@@ -646,9 +689,11 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         main_layout.addWidget(self._line)
 
         # 内容区域（支持编辑模式切换）
-        # 查看模式：HTML 渲染
+        # 查看模式：使用 <pre> 标签保留原始格式
         self._text_edit = QTextEdit()
-        self._text_edit.setHtml(MarkdownConverter.to_html(self._content_markdown))
+        # 使用 <pre> 标签保留换行和空格，不进行 Markdown 转换
+        escaped_content = self._doc_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        self._text_edit.setHtml(f"<h1>{self._title}</h1><hr><pre style='white-space: pre-wrap; font-family: inherit; margin: 10px 0;'>{escaped_content}</pre>")
         self._text_edit.setReadOnly(True)
         self._text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._text_edit.setMinimumHeight(self.CONTENT_MIN_HEIGHT)
@@ -782,57 +827,45 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._execute_save(new_title, new_content)
 
     def _execute_save(self, title: str, content: str) -> None:
-        """执行保存操作"""
-        import asyncio
-        from threading import Thread
+        """执行保存操作（使用 QThread 避免线程安全问题）"""
+        # 创建保存工作线程
+        self._save_worker = SaveDocumentWorker(
+            self._get_knowledge_manager(),
+            self._doc_id,
+            title,
+            content
+        )
+        self._save_worker.success.connect(self._on_save_success)
+        self._save_worker.failed.connect(self._on_save_failed)
+        self._save_worker.start()
 
-        def run_save():
-            try:
-                # 获取知识库管理器
-                knowledge_manager = self._get_knowledge_manager()
-                if not knowledge_manager:
-                    self._show_message('error', "错误", "无法获取知识库管理器")
-                    return
+    def _on_save_success(self, title: str, content: str) -> None:
+        """保存成功回调（在主线程中执行）"""
+        # 更新本地数据
+        self._title = title
+        self._doc_content = content
+        self._content_markdown = f"# {title}\n\n{content}"
 
-                # 创建新的事件循环
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+        # 刷新显示
+        self._title_label.setText(title)
+        # 使用 <pre> 标签保留原始格式，不进行 Markdown 转换
+        escaped_content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        self._text_edit.setHtml(f"<h1>{title}</h1><hr><pre style='white-space: pre-wrap; font-family: inherit;'>{escaped_content}</pre>")
 
-                # 执行更新
-                success = loop.run_until_complete(
-                    knowledge_manager.update_document_content(self._doc_id, title, content)
-                )
-                loop.close()
+        # 退出编辑模式
+        self._cancel_edit()
 
-                if success:
-                    # 更新本地数据
-                    self._title = title
-                    self._doc_content = content
-                    self._content_markdown = f"# {title}\n\n{content}"
+        # 刷新卡片显示
+        if self._card and hasattr(self._card, 'doc'):
+            self._card.doc.title = title
+            self._card.doc.content = content
 
-                    # 刷新显示
-                    self._title_label.setText(title)
-                    self._text_edit.setHtml(MarkdownConverter.to_html(self._content_markdown))
+        self._show_message('success', "成功", "文档已更新")
 
-                    # 退出编辑模式
-                    self._cancel_edit()
-
-                    # 刷新卡片显示
-                    if self._card and hasattr(self._card, 'doc'):
-                        self._card.doc.title = title
-                        self._card.doc.content = content
-
-                    self._show_message('success', "成功", "文档已更新")
-                else:
-                    self._show_message('error', "失败", "保存文档失败")
-
-            except Exception as e:
-                logger.error(f"保存文档失败: {e}")
-                self._show_message('error', "错误", f"保存失败: {str(e)}")
-
-        # 在后台线程执行
-        thread = Thread(target=run_save, daemon=True)
-        thread.start()
+    def _on_save_failed(self, error: str) -> None:
+        """保存失败回调（在主线程中执行）"""
+        logger.error(f"保存文档失败: {error}")
+        self._show_message('error', "错误", f"保存失败: {error}")
 
     def _get_knowledge_manager(self):
         """获取知识库管理器"""
