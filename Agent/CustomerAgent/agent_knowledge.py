@@ -64,62 +64,59 @@ logger = logging.getLogger(__name__)
 class KnowledgeManager:
     def __init__(self):
         import os
+        import sys
         from pathlib import Path
         
-        # 优先导入工具函数
-        from utils.runtime_path import get_contents_db_path, get_vector_db_path
+        print(f"[DEBUG] 开始初始化 KnowledgeManager")
+        print(f"[DEBUG] 脚本位置: {__file__}")
+        print(f"[DEBUG] 当前目录: {os.getcwd()}")
         
-        # 默认使用默认路径
-        contents_db_path = None
-        vector_db_path = None
+        # 默认使用 data 目录，避免 temp 权限问题！
+        project_root = Path(__file__).resolve().parent.parent.parent
+        data_dir = project_root / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[DEBUG] 使用 data 目录: {data_dir}")
         
-        # 尝试从配置读取，如果失败则完全使用默认路径
+        contents_path = data_dir / "contents.db"
+        vector_path = data_dir / "vector_db"
+        vector_path.mkdir(parents=True, exist_ok=True)
+        
+        print(f"[DEBUG] 内容数据库: {contents_path}")
+        print(f"[DEBUG] 向量数据库目录: {vector_path}")
+        
+        # 创建内容数据库 - 直接传 db_file，让 agno 处理！
+        print(f"[DEBUG] 准备创建 SqliteDb")
+        contents_db = SqliteDb(db_file=str(contents_path))
+        print(f"[DEBUG] ✅ SqliteDb 创建成功")
+        
+        # 创建向量数据库
+        print(f"[DEBUG] 准备创建向量数据库")
+        
+        # 尝试读取配置
+        embedder_config = {
+            "dimensions": 2560,
+            "id": "",
+            "api_key": "",
+            "base_url": ""
+        }
         try:
             config = Config()
-            kb_config = config.get("knowledge_base")
-            if kb_config and isinstance(kb_config, dict):
-                contents_db_path = kb_config.get("contents_db_path")
-                vector_db_path = kb_config.get("vector_db_path")
-        except Exception:
-            # 配置读取失败，完全使用默认路径
-            pass
-        
-        # 确保内容数据库路径存在
-        if not contents_db_path:
-            contents_db_path = str(get_contents_db_path())
-            logger.info(f"使用默认内容数据库路径: {contents_db_path}")
-        
-        # 确保内容数据库目录存在
-        contents_path = Path(contents_db_path)
-        contents_dir = contents_path.parent
-        contents_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"确保内容数据库目录存在: {contents_dir}")
-
-        # 创建内容数据库
-        # 手动创建 SQLAlchemy engine 引擎，正确处理 Windows 路径
-        from sqlalchemy import create_engine
-        import sqlite3
-        contents_db_path_abs = str(contents_path.resolve())
-        logger.info(f"内容数据库绝对路径: {contents_db_path_abs}")
-        logger.info(f"目录存在: {contents_dir.exists()}, 绝对路径: {contents_dir.resolve()}")
-        
-        # 先测试直接用 sqlite3 连接，验证路径
-        try:
-            test_conn = sqlite3.connect(contents_db_path_abs)
-            test_conn.close()
-            logger.info(f"✅ sqlite3 直接连接成功: {contents_db_path_abs}")
+            embedder_config = {
+                "dimensions": 2560,
+                "id": config.get("embedder.model_name", ""),
+                "api_key": config.get("embedder.api_key", ""),
+                "base_url": config.get("embedder.api_base", "")
+            }
         except Exception as e:
-            logger.error(f"❌ sqlite3 连接失败: {e}")
+            print(f"[DEBUG] 配置读取失败: {e}")
         
-        # 构建 SQLAlchemy URL
-        contents_db_path_posix = contents_path.resolve().as_posix()
-        db_url = f"sqlite:///{contents_db_path_posix}"
-        logger.info(f"SQLAlchemy URL: {db_url}")
-        
-        contents_engine = create_engine(db_url)
-        logger.info(f"✅ 数据库引擎创建成功")
-        
-        contents_db = SqliteDb(db_engine=contents_engine)
+        vector_db = LanceDbWithProgress(
+                table_name="customer_knowledge",
+                uri=str(vector_path),
+                embedder=OpenAIEmbedder(**embedder_config),
+                search_type=SearchType.hybrid
+            )
+        print(f"[DEBUG] ✅ 向量数据库创建成功")
 
         # 确保向量数据库路径存在
         if not vector_db_path:
