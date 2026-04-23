@@ -141,25 +141,19 @@ class LanceDbWithProgress(LanceDb):
                 meta_data.update(filters)
                 document.meta_data = meta_data
 
-            # 嵌入文档（同步）
-            try:
-                logger.debug(f"正在嵌入文档 {idx+1}/{len(documents)}: {document.name}")
-                document.embed(embedder=self.embedder)
-                processed_count += 1
+            # 注意：不在这里嵌入，让父类的 insert() 方法来处理
+            # 这样避免重复嵌入
+            processed_count += 1
 
-                # 报告进度
-                if self.progress_callback:
-                    self.progress_callback(
-                        ImportStage.EMBEDDING,
-                        idx + 1,
-                        len(documents),
-                        f"已处理: {document.name}",
-                        metadata={"doc_name": document.name}
-                    )
-
-            except Exception as e:
-                logger.error(f"嵌入文档失败 {document.name}: {e}")
-                continue
+            # 报告进度
+            if self.progress_callback:
+                self.progress_callback(
+                    ImportStage.EMBEDDING,
+                    idx + 1,
+                    len(documents),
+                    f"准备处理: {document.name}",
+                    metadata={"doc_name": document.name}
+                )
 
         # 调用父类的 insert 方法保存
         try:
@@ -224,25 +218,19 @@ class LanceDbWithProgress(LanceDb):
                 meta_data.update(filters)
                 document.meta_data = meta_data
 
-            # 嵌入文档（异步）
-            try:
-                logger.debug(f"正在异步嵌入文档 {idx+1}/{len(documents)}: {document.name}")
-                await document.async_embed(embedder=self.embedder)
-                processed_count += 1
+            # 注意：不在这里嵌入，让父类的 async_insert() 方法来处理
+            # 这样避免重复嵌入
+            processed_count += 1
 
-                # 报告进度
-                if self.progress_callback:
-                    self.progress_callback(
-                        ImportStage.EMBEDDING,
-                        idx + 1,
-                        len(documents),
-                        f"已处理: {document.name}",
-                        metadata={"doc_name": document.name}
-                    )
-
-            except Exception as e:
-                logger.error(f"嵌入文档失败 {document.name}: {e}")
-                continue
+            # 报告进度
+            if self.progress_callback:
+                self.progress_callback(
+                    ImportStage.EMBEDDING,
+                    idx + 1,
+                    len(documents),
+                    f"准备处理: {document.name}",
+                    metadata={"doc_name": document.name}
+                )
 
         # 调用父类的 insert 方法保存
         # 注意：文档已经 embed 过了，所以直接调用父类的 insert

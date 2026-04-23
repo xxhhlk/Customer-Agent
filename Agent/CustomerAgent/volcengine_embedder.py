@@ -136,6 +136,9 @@ class VolcengineEmbedder(Embedder):
         headers = self._get_headers()
         body = self._build_request_body(texts)
         
+        logger.debug(f"请求 URL: {self.base_url}")
+        logger.debug(f"请求 body: {json.dumps(body, ensure_ascii=False)[:200]}...")
+        
         try:
             with httpx.Client(timeout=60.0) as client:
                 response = client.post(
@@ -143,6 +146,9 @@ class VolcengineEmbedder(Embedder):
                     headers=headers,
                     json=body,
                 )
+                logger.debug(f"响应状态码: {response.status_code}")
+                if response.status_code != 200:
+                    logger.error(f"响应内容: {response.text[:500]}")
                 response.raise_for_status()
                 return response.json()
                 

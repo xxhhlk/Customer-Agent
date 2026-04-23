@@ -98,17 +98,19 @@ class KnowledgeManager:
         # 尝试读取配置
         embedder_config = {
             "id": "doubao-embedding-vision-251215",
-            "dimensions": 1024,  # 火山引擎多模态嵌入维度
+            "dimensions": 2048,  # 火山引擎多模态嵌入维度
             "api_key": "",
             "base_url": "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
         }
         try:
             config = Config()
+            # 拼接 base_url: api_base + /embeddings/multimodal
+            api_base = config.get("embedder.api_base", "https://ark.cn-beijing.volces.com/api/v3")
             embedder_config = {
                 "id": config.get("embedder.model_name", "doubao-embedding-vision-251215"),
-                "dimensions": 1024,
+                "dimensions": 2048,
                 "api_key": config.get("embedder.api_key", ""),
-                "base_url": "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal"
+                "base_url": f"{api_base.rstrip('/')}/embeddings/multimodal"
             }
         except Exception as e:
             print(f"[DEBUG] 配置读取失败: {e}")
