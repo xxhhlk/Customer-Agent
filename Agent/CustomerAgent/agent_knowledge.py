@@ -117,35 +117,6 @@ class KnowledgeManager:
                 search_type=SearchType.hybrid
             )
         print(f"[DEBUG] ✅ 向量数据库创建成功")
-
-        # 确保向量数据库路径存在
-        if not vector_db_path:
-            vector_db_path = str(get_vector_db_path())
-            logger.info(f"使用默认向量数据库路径: {vector_db_path}")
-        
-        # 确保向量数据库目录存在
-        vector_path = Path(vector_db_path)
-        vector_dir = vector_path.parent if vector_path.suffix else vector_path
-        vector_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"确保向量数据库目录存在: {vector_dir}")
-
-        # 创建向量数据库 - 使用增强版本（如果可用）
-        # 配置嵌入器
-        embedder_config = {
-            "dimensions": 2560,
-            "id": config.get("embedder.model_name"),
-            "api_key": config.get("embedder.api_key"),
-            "base_url": config.get("embedder.api_base")
-        }
-
-        # 将 Windows 反斜杠转换为正斜杠
-        vector_db_path_posix = vector_path.as_posix()
-        vector_db = LanceDbWithProgress(
-                table_name="customer_knowledge",
-                uri=vector_db_path_posix,
-                embedder=OpenAIEmbedder(**embedder_config),
-                search_type=SearchType.hybrid
-            )
             
 
         # 准备可用的读取器
@@ -168,6 +139,7 @@ class KnowledgeManager:
         logger.info(f"启用的读取器: {[type(r).__name__ for r in readers]}")
 
         # 创建知识库实例 - 使用增强版本
+        print(f"[DEBUG] 准备创建 KnowledgeWithProgress")
         self.knowledge = KnowledgeWithProgress(
             description="客户代理知识库，包含产品介绍、使用方法和常见问题解答。",
             contents_db=contents_db,
@@ -175,6 +147,7 @@ class KnowledgeManager:
             max_results=3,
             readers=readers  # 只添加可用的读取器
         )
+        print(f"[DEBUG] ✅ KnowledgeWithProgress 创建成功")
         logger.info("使用增强版 Knowledge")
 
 
