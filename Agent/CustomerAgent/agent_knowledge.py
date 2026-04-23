@@ -295,12 +295,9 @@ class KnowledgeManager:
 
             logger.info(f"正在添加文本内容: {title}")
 
-            # 格式化内容（添加标题前缀，便于检索）
-            formatted_content = f"标题: {title}\n\n内容:\n{content}"
-
-            # 使用异步方法添加内容
+            # 直接存储原始内容，metadata 中已有 title
             await self.knowledge.add_content_async(
-                text_content=formatted_content,
+                text_content=content,
                 metadata={
                     'title': title,
                     'source': 'manual_input',
@@ -339,10 +336,9 @@ class KnowledgeManager:
             # 1. 删除旧文档
             self.knowledge.remove_content_by_id(doc_id)
 
-            # 2. 添加新内容
-            formatted_content = f"标题: {title}\n\n内容:\n{content}"
+            # 2. 添加新内容（直接存储原始内容，不添加格式前缀）
             await self.knowledge.add_content_async(
-                text_content=formatted_content,
+                text_content=content,
                 metadata={
                     'title': title,
                     'source': 'manual_edit',
