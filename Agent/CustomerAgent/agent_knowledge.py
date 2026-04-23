@@ -289,17 +289,13 @@ class KnowledgeManager:
             title: 标题
             content: 内容
         """
-        from agno.knowledge import Content
-
-        # 创建内容对象
-        new_content = Content(
+        # 直接使用 add_content_async 方法，传入 text_content 参数
+        await self.knowledge.add_content_async(
             name=title,
-            content=content,
-            meta_data={"source": "csv_import"}
+            text_content=content,
+            metadata={"source": "csv_import"},
+            skip_if_exists=False
         )
-
-        # 添加到知识库
-        await self.knowledge.async_insert(new_content)
 
     def search_knowledge(self, query: str, limit: Optional[int] = None) -> list:
         """
