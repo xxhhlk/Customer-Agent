@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from utils.logger_loguru import get_logger
 from bridge.context import Context, ContextType
 from .queue import queue_manager
-from .handlers import MessageHandler
+from .handlers import MessageHandler, CatchAllHandler
 from ..models.queue_models import MessageWrapper
 from ..handlers.debounce_adapter import DebounceProcessorAdapter
 from ..handlers.staff_reply_event import StaffReplyEventManager
@@ -211,16 +211,23 @@ class EnhancedMessageConsumer:
 
         # 先尝试非AI处理器（关键词、转人工等）
         ai_handler = None
+        catch_all_handler = None
+
         for handler in self.handlers:
             # 检查是否是AI处理器
             is_ai_handler = hasattr(handler, '_get_ai_reply')
+            # 检查是否是CatchAllHandler
+            is_catch_all = isinstance(handler, CatchAllHandler)
             
             if handler.can_handle(context):
                 if is_ai_handler:
                     # 记录AI处理器，稍后处理
                     ai_handler = handler
+                elif is_catch_all:
+                    # 记录CatchAllHandler，作为最后的兜底
+                    catch_all_handler = handler
                 else:
-                    # 非AI处理器，立即执行
+                    # 其他非AI处理器，立即执行
                     try:
                         success = await handler.handle(context, metadata)
                         if success:
@@ -231,8 +238,10 @@ class EnhancedMessageConsumer:
                     except Exception as e:
                         self.logger.error(f"Handler {handler.__class__.__name__} error: {e}")
 
-        # 如果没有AI处理器，结束处理
+        # 如果没有AI处理器，执行CatchAllHandler
         if not ai_handler:
+            if catch_all_handler:
+                await catch_all_handler.handle(context, metadata)
             return
 
         # 执行AI处理器（带超时中断机制）

@@ -887,8 +887,10 @@ class PDDChannel(Channel):
                 # 其他客服消息，通知人工回复事件管理器
                 self.logger.debug(f"收到客服消息: {context.content}")
                 # 通知人工客服已回复
+                # 注意：人工客服消息的from_uid是店铺ID，to_uid才是买家ID
+                buyer_uid = context.kwargs.to_uid
                 from Message.handlers.staff_reply_event import staff_reply_event_manager
-                staff_reply_event_manager.notify_staff_reply(recipient_uid)
+                staff_reply_event_manager.notify_staff_reply(buyer_uid)
                 
             elif context.type == ContextType.SYSTEM_BIZ:
                 # 系统业务消息
