@@ -327,6 +327,16 @@ class KnowledgeUI(QWidget):
         """更新所有标签样式以适配当前主题"""
         is_dark = isDarkTheme()
         
+        # 更新整体背景色
+        if is_dark:
+            self.setStyleSheet("""
+                QWidget#Knowledge-UI {
+                    background-color: #1e1e1e;
+                }
+            """)
+        else:
+            self.setStyleSheet("")
+        
         # 更新状态标签
         if is_dark:
             self.status_label.setStyleSheet("font-size: 12px; color: #cccccc;")
@@ -400,6 +410,14 @@ class KnowledgeUI(QWidget):
         # 主布局
         self.mainLayout = QVBoxLayout(self)
         self.setLayout(self.mainLayout)
+
+        # 设置整体背景色（深色模式适配）
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QWidget#Knowledge-UI {
+                    background-color: #1e1e1e;
+                }
+            """)
 
         # 顶部工具栏
         self.toolbar = QHBoxLayout()

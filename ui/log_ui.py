@@ -590,8 +590,18 @@ class LogUI(QFrame):
         """更新标签样式以适配当前主题"""
         try:
             if isDarkTheme():
+                # 更新整体背景色
+                self.setStyleSheet("""
+                    QFrame#log-ui {
+                        background-color: #1e1e1e;
+                    }
+                """)
+                # 更新标题标签
                 self.title_label.setStyleSheet("color: #ffffff;")
             else:
+                # 清除背景色样式
+                self.setStyleSheet("")
+                # 清除标题标签样式
                 self.title_label.setStyleSheet("")
         except Exception as e:
             self.logger.warning(f"更新标签样式失败: {e}")
@@ -601,6 +611,14 @@ class LogUI(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
+        
+        # 设置整体背景色（深色模式适配）
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QFrame#log-ui {
+                    background-color: #1e1e1e;
+                }
+            """)
         
         # 标题
         self.title_label = SubtitleLabel("日志管理")
