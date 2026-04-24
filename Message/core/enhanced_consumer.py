@@ -134,24 +134,63 @@ class EnhancedMessageConsumer:
             user_key = self._extract_user_id(wrapper.context)
             context = wrapper.context
 
-            # 1. 防抖合并
-            merged_wrapper = await self.debounce_processor.process_with_debounce(
-                wrapper, 
-                self._user_queues.get(user_key)
-            )
+            # 提前获取买家ID，用于人工回复监听
+            from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
+            
+            # 检查是否需要监听人工回复（白天时段且配置开启）
+            should_watch_staff_reply = False
+            if from_uid:
+                current_hour = time.localtime().tm_hour
+                is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
+                if not is_night:
+                    from config import get_config
+                    staff_wait_config = get_config("staff_reply_wait", {})
+                    enable_staff_wait = staff_wait_config.get("enable", True)
+                    if enable_staff_wait:
+                        should_watch_staff_reply = True
+            
+            # 如果需要监听人工回复，在防抖等待前创建等待事件
+            event_id = None
+            if should_watch_staff_reply:
+                event_id = self.staff_reply_manager.start_waiting(from_uid)
+                self.logger.debug(f"提前创建等待事件: {from_uid}, event_id={event_id}")
 
-            if not merged_wrapper:
-                # 消息被合并，直接返回
-                return
+            try:
+                # 1. 防抖合并
+                merged_wrapper = await self.debounce_processor.process_with_debounce(
+                    wrapper, 
+                    self._user_queues.get(user_key)
+                )
 
-            # 2. 检查人工回复（白天时段）
-            staff_replied = await self._check_staff_reply(merged_wrapper.context)
-            if staff_replied:
-                self.logger.info(f"User {user_key} staff replied, skip AI")
-                return
+                if not merged_wrapper:
+                    # 消息被合并，清理等待事件并返回
+                    if event_id:
+                        self.staff_reply_manager.stop_waiting(from_uid, event_id)
+                    return
 
-            # 3. 处理消息（带AI超时中断）
-            await self._process_message_with_ai_timeout(merged_wrapper)
+                # 2. 检查人工回复（使用提前创建的等待事件）
+                if event_id:
+                    staff_replied = await self._check_staff_reply_with_event(
+                        merged_wrapper.context, 
+                        from_uid, 
+                        event_id
+                    )
+                    if staff_replied:
+                        self.logger.info(f"User {user_key} staff replied, skip AI")
+                        return
+                else:
+                    # 夜间或配置关闭，直接处理
+                    staff_replied = await self._check_staff_reply(merged_wrapper.context)
+                    if staff_replied:
+                        self.logger.info(f"User {user_key} staff replied, skip AI")
+                        return
+
+                # 3. 处理消息（带AI超时中断）
+                await self._process_message_with_ai_timeout(merged_wrapper)
+            finally:
+                # 清理等待事件
+                if event_id:
+                    self.staff_reply_manager.stop_waiting(from_uid, event_id)
 
         except Exception as e:
             self.logger.error(f"Failed to process message with debounce: {e}")
@@ -191,6 +230,31 @@ class EnhancedMessageConsumer:
             return staff_replied
         finally:
             self.staff_reply_manager.stop_waiting(from_uid, event_id)
+
+    async def _check_staff_reply_with_event(
+        self, 
+        context: Context, 
+        from_uid: str, 
+        event_id: str
+    ) -> bool:
+        """检查人工客服是否已回复（使用提前创建的等待事件）"""
+        # 检查配置
+        from config import get_config
+        staff_wait_config = get_config("staff_reply_wait", {})
+        wait_seconds = staff_wait_config.get("wait_seconds", 30)
+
+        self.logger.info(f"Waiting for staff reply (max {wait_seconds}s, event_id={event_id})")
+
+        try:
+            staff_replied = await self.staff_reply_manager.wait_for_staff_reply(
+                from_uid, 
+                event_id,
+                timeout=wait_seconds
+            )
+            return staff_replied
+        finally:
+            # 注意：这里不清理事件，由调用者清理
+            pass
 
     async def _process_message_with_ai_timeout(self, wrapper: MessageWrapper):
         """带AI超时中断的消息处理"""
