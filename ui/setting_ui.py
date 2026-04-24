@@ -210,11 +210,25 @@ class KnowledgeConfigCard(CardWidget):
         self.vector_db_edit.setPlaceholderText("向量数据库路径")
         form_layout.addRow("向量数据库路径:", self.vector_db_edit)
 
+        # Max Results - 搜索返回的最大结果数
+        from qfluentwidgets import SpinBox
+        self.max_results_spin = SpinBox()
+        self.max_results_spin.setRange(1, 20)
+        self.max_results_spin.setValue(3)
+        self.max_results_spin.setSuffix(" 条")
+        self.max_results_spin.setToolTip(
+            "知识库搜索时返回的最大结果数量。\n"
+            "• 值越大，返回的相关文档越多，但响应可能变慢\n"
+            "• 值越小，响应越快，但可能遗漏相关信息\n"
+            "• 建议值：3-5"
+        )
+        form_layout.addRow("搜索结果数量:", self.max_results_spin)
+
         layout.addLayout(form_layout)
 
         # 说明文本
         description_label = CaptionLabel(
-            "配置知识库的存储路径。\n"
+            "配置知识库的存储路径和搜索参数。\n"
             "内容数据库存储结构化数据，向量数据库存储嵌入向量。"
         )
         description_label.setStyleSheet("padding: 8px 0;")
@@ -224,13 +238,15 @@ class KnowledgeConfigCard(CardWidget):
         """获取配置"""
         return {
             "contents_db_path": self.contents_db_edit.text().strip(),
-            "vector_db_path": self.vector_db_edit.text().strip()
+            "vector_db_path": self.vector_db_edit.text().strip(),
+            "max_results": self.max_results_spin.value()
         }
 
     def setConfig(self, config: dict):
         """设置配置"""
         self.contents_db_edit.setText(config.get("contents_db_path", ""))
         self.vector_db_edit.setText(config.get("vector_db_path", ""))
+        self.max_results_spin.setValue(config.get("max_results", 3))
 
 
 class PromptConfigCard(CardWidget):
@@ -657,7 +673,8 @@ class SettingUI(QFrame):
                 },
                 "knowledge_base": {
                     "contents_db_path": config.get("knowledge_base.contents_db_path", ""),
-                    "vector_db_path": config.get("knowledge_base.vector_db_path", "")
+                    "vector_db_path": config.get("knowledge_base.vector_db_path", ""),
+                    "max_results": config.get("knowledge_base.max_results", 3)
                 },
                 "prompt": {
                     "description": config.get("prompt.description", ""),
@@ -736,7 +753,8 @@ class SettingUI(QFrame):
             }),
             "knowledge_base": config_data.get("knowledge_base", {
                 "contents_db_path": "",
-                "vector_db_path": ""
+                "vector_db_path": "",
+                "max_results": 3
             }),
             "prompt": config_data.get("prompt", {
                 "description": "",

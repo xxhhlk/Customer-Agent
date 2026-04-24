@@ -38,6 +38,7 @@ class KnowledgeConfig(BaseModel):
     """知识库配置模型"""
     contents_db_path: str = Field(default="", description="内容数据库路径")
     vector_db_path: str = Field(default="", description="向量数据库路径")
+    max_results: int = Field(default=3, description="知识库搜索返回的最大结果数", ge=1, le=20)
 
 class BusinessHoursConfig(BaseModel):
     """营业时间配置模型"""
@@ -117,7 +118,8 @@ config_base = {
     },
     "knowledge_base": {
         "contents_db_path": "",
-        "vector_db_path": ""
+        "vector_db_path": "",
+        "max_results": 3
     },
     "rate_limit": {
         "window_hours": 4,

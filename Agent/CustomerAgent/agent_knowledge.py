@@ -147,15 +147,27 @@ class KnowledgeManager:
 
         # 创建知识库实例 - 使用增强版本
         print(f"[DEBUG] 准备创建 KnowledgeWithProgress")
+        
+        # 从配置中读取 max_results，默认为 3
+        max_results = 3
+        try:
+            config = Config()
+            max_results = config.get("knowledge_base.max_results", 3)
+            if not isinstance(max_results, int) or max_results < 1:
+                max_results = 3
+            print(f"[DEBUG] 知识库搜索结果数量: {max_results}")
+        except Exception as e:
+            print(f"[DEBUG] 读取 max_results 配置失败: {e}, 使用默认值 3")
+        
         self.knowledge = KnowledgeWithProgress(
             description="客户代理知识库，包含产品介绍、使用方法和常见问题解答。",
             contents_db=contents_db,
             vector_db=vector_db,
-            max_results=3,
+            max_results=max_results,
             readers=readers  # 只添加可用的读取器
         )
         print(f"[DEBUG] [OK] KnowledgeWithProgress 创建成功")
-        logger.info("使用增强版 Knowledge")
+        logger.info(f"使用增强版 Knowledge，max_results={max_results}")
 
 
     async def add_content_from_file(self, file_path: str) -> int:

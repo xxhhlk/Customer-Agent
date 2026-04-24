@@ -1,12 +1,12 @@
 import sys
 from typing import Optional, TYPE_CHECKING
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 from PyQt6.QtGui import QFont, QIcon, QPixmap
-from qfluentwidgets import FluentWindow,qrouter, NavigationItemPosition
+from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
-from qfluentwidgets import Action, setTheme, Theme
+from qfluentwidgets import Action, setTheme, Theme, isDarkTheme
 from utils.logger_loguru import get_logger
 import time
 
@@ -148,8 +148,25 @@ class MainWindow(FluentWindow):
         # 设置默认尺寸（避免几何冲突）
         self.resize(1400, 800)
         
+        # 设置标题栏文字颜色，确保深色模式下清晰可见
+        self._update_title_bar_color()
+        
         # 最后最大化显示
         self.showMaximized()
+    
+    def _update_title_bar_color(self):
+        """更新标题栏文字颜色，适配深色/浅色模式"""
+        try:
+            # 获取标题栏标签
+            title_label = self.titleBar.titleLabel
+            if isDarkTheme():
+                # 深色模式：使用白色文字
+                title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+            else:
+                # 浅色模式：使用深色文字
+                title_label.setStyleSheet("color: black; font-size: 14px; font-weight: bold;")
+        except Exception as e:
+            self.logger.warning(f"设置标题栏颜色失败: {e}")
 
 
     def showQRCode(self):
@@ -184,4 +201,12 @@ class MainWindow(FluentWindow):
             pass
 
         if a0 is not None:
-            super().closeEvent(a0) 
+            super().closeEvent(a0)
+    
+    def changeEvent(self, event):
+        """监听主题切换事件，更新标题栏颜色"""
+        super().changeEvent(event)
+        
+        # 当调色板改变时（主题切换会触发此事件），更新标题栏颜色
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_title_bar_color() 
