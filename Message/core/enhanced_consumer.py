@@ -287,6 +287,24 @@ class EnhancedMessageConsumer:
             # 注意：这里不清理事件，由调用者清理
             pass
 
+    def _merge_messages(self, wrappers: list) -> MessageWrapper:
+        """合并多条消息"""
+        # 使用最后一条消息的上下文
+        last_wrapper = wrappers[-1]
+        merged_context = last_wrapper.context
+
+        # 合并消息内容
+        if merged_context.type.name == "TEXT":
+            texts = []
+            for w in wrappers:
+                if w.context.type.name == "TEXT" and w.context.content:
+                    texts.append(w.context.content)
+            
+            if texts:
+                merged_context.content = "\n".join(texts)
+
+        return last_wrapper
+
     async def _process_message_with_ai_timeout(self, wrapper: MessageWrapper):
         """带AI超时中断的消息处理"""
         user_key = self._extract_user_id(wrapper.context)
