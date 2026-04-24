@@ -137,6 +137,12 @@ class EnhancedMessageConsumer:
             # 提前获取买家ID，用于人工回复监听
             from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
             
+            # 检查是否在冷却期内且有人在等待人工回复（跳过新消息，让它们合并到下一条）
+            if from_uid and isinstance(from_uid, str):
+                if self.staff_reply_manager.is_in_cooldown(from_uid) and self.staff_reply_manager.is_waiting(from_uid):
+                    self.logger.info(f"User {user_key} in cooldown and has waiting event, skip this message (will merge to next)")
+                    return
+            
             # 检查是否需要监听人工回复（白天时段且配置开启）
             should_watch_staff_reply = False
             if from_uid and isinstance(from_uid, str):
