@@ -1,6 +1,7 @@
 """
 关键词检测处理器 - 检测转人工关键词并触发转人工流程
 """
+import re
 from typing import Dict, Any, Optional, List
 from bridge.context import Context, ContextType
 from .base import BaseHandler
@@ -137,8 +138,24 @@ class KeywordDetectionHandler(BaseHandler):
                 
                 # 如果 pass_to_ai 为 True，发送回复后继续传递给AI
                 if matched.get('pass_to_ai', False):
-                    self.logger.info(f"关键词 pass_to_ai=True，继续传递给AI处理")
-                    return False
+                    self.logger.info(f"关键词 pass_to_ai=True，检查是否有有意义的内容传递给AI")
+                    
+                    # 从消息中移除关键词，用于判断是否有有意义的内容
+                    original_content = context.content or ""
+                    cleaned_content = self._remove_keyword_from_message(
+                        original_content,
+                        matched.get('keyword', ''),
+                        matched.get('match_type', 'partial')
+                    )
+                    
+                    # 检查移除后是否还有有意义的内容
+                    if self._has_meaningful_content(cleaned_content):
+                        self.logger.info(f"移除关键词后仍有有意义的内容，传递给AI（原始消息）: '{original_content}'")
+                        # 不修改 context.content，传递原始完整消息给AI
+                        return False  # 继续传递给AI
+                    else:
+                        self.logger.info(f"移除关键词后无有意义的内容，不传递给AI")
+                        return True  # 终止处理，不传递给AI
                 
                 return True
             
@@ -148,6 +165,91 @@ class KeywordDetectionHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"关键词处理失败: {e}")
             return False
+    
+    def _remove_keyword_from_message(self, message: str, keyword: str, match_type: str) -> str:
+        """从消息中移除关键词
+        
+        Args:
+            message: 原始消息
+            keyword: 匹配的关键词
+            match_type: 匹配类型
+            
+        Returns:
+            移除关键词后的消息
+        """
+        if not message or not keyword:
+            return message
+        
+        try:
+            if match_type == 'exact':
+                # 完全匹配：直接替换整个消息
+                return ""
+            elif match_type == 'partial':
+                # 部分匹配：替换消息中的关键词部分
+                result = message.replace(keyword, "")
+                return result.strip()
+            elif match_type == 'regex':
+                # 正则匹配：使用正则替换
+                result = re.sub(keyword, "", message, flags=re.IGNORECASE)
+                return result.strip()
+            elif match_type == 'wildcard':
+                # 通配符匹配：将通配符转换为正则，然后替换
+                pattern = self._wildcard_to_regex(keyword)
+                result = re.sub(pattern, "", message, flags=re.IGNORECASE)
+                return result.strip()
+            else:
+                # 默认：部分匹配
+                result = message.replace(keyword, "")
+                return result.strip()
+        except Exception as e:
+            self.logger.warning(f"移除关键词失败: {e}，返回原始消息")
+            return message
+    
+    def _wildcard_to_regex(self, pattern: str) -> str:
+        """将通配符模式转换为正则表达式
+        
+        Args:
+            pattern: 通配符模式（* 匹配任意字符，? 匹配单个字符）
+            
+        Returns:
+            正则表达式字符串
+        """
+        # 转义正则特殊字符
+        result = re.escape(pattern)
+        # 将转义后的通配符转换回正则
+        result = result.replace(r'\*', '.*').replace(r'\?', '.')
+        return f'^{result}$'
+    
+    def _has_meaningful_content(self, content: str) -> bool:
+        """检查内容是否有意义（非空白、非纯标点等）
+        
+        Args:
+            content: 待检查的内容
+            
+        Returns:
+            是否有意义
+        """
+        if not content:
+            return False
+        
+        # 去除空白字符
+        stripped = content.strip()
+        if not stripped:
+            return False
+        
+        # 检查是否全是标点符号或特殊字符
+        # 中文标点：，。！？、；：""''（）【】《》
+        # 英文标点：,.!?;:'"()[]{}
+        punctuation_pattern = r'^[，。！？、；：""''（）【】《》\s,.!?;:\'"()\[\]{}]+$'
+        if re.match(punctuation_pattern, stripped):
+            return False
+        
+        # 至少包含一个字母、数字或中文字符
+        meaningful_pattern = r'[a-zA-Z0-9\u4e00-\u9fa5]'
+        if re.search(meaningful_pattern, stripped):
+            return True
+        
+        return False
     
     async def _transfer_to_human(self, shop_id: str, user_id: str, from_uid: str) -> bool:
         """转接到人工客服"""

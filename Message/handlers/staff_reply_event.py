@@ -98,17 +98,22 @@ class StaffReplyEventManager:
                 return False
 
             event_list = self._waiting_events[from_uid]
+            logger.debug(f"买家 {from_uid} 有 {len(event_list)} 个等待事件")
+            
             for event_info in event_list:
                 event = event_info.get("event")
+                event_id = event_info.get("event_id")
+                logger.debug(f"检查事件 {event_id}: event={event}, is_set={event.is_set() if event else None}")
 
                 if event is None:
                     # 事件对象还未创建，说明等待还没开始
-                    logger.debug(f"买家 {from_uid} 的事件 {event_info['event_id']} 对象未创建，跳过通知")
+                    logger.debug(f"买家 {from_uid} 的事件 {event_id} 对象未创建，跳过通知")
                     continue
 
                 # 设置事件，通知等待者
                 event.set()
                 notified_count += 1
+                logger.debug(f"已通知事件 {event_id}")
 
             if notified_count > 0:
                 logger.info(f"人工客服已回复，通知 {from_uid} 的 {notified_count} 个等待事件")
