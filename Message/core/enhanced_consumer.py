@@ -12,7 +12,7 @@ from .queue import queue_manager
 from .handlers import MessageHandler, CatchAllHandler
 from ..models.queue_models import MessageWrapper
 from ..handlers.debounce_adapter import DebounceProcessorAdapter
-from ..handlers.staff_reply_event import StaffReplyEventManager
+from ..handlers.staff_reply_event import staff_reply_event_manager  # 使用全局单例
 from ..handlers.rate_limiter import CozeRateLimiter
 
 
@@ -48,8 +48,8 @@ class EnhancedMessageConsumer:
         # 防抖处理器
         self.debounce_processor = DebounceProcessorAdapter()
 
-        # 人工回复事件管理器
-        self.staff_reply_manager = StaffReplyEventManager()
+        # 人工回复事件管理器（使用全局单例）
+        self.staff_reply_manager = staff_reply_event_manager
 
         # 限流器
         self.rate_limiter = CozeRateLimiter()
