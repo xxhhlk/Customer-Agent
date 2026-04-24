@@ -6,7 +6,7 @@ from PyQt6.QtGui import QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
-from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, SystemThemeListener
+from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, SystemThemeListener, qconfig
 from utils.logger_loguru import get_logger
 import time
 
@@ -166,28 +166,39 @@ class MainWindow(FluentWindow):
             title_label = getattr(self.titleBar, "titleLabel", None)
             if title_label is None:
                 return
+            
+            # 只设置标题文字颜色，不干扰按钮的主题适配
             if isDarkTheme():
-                # 深色模式：使用白色文字
                 title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
-                # 设置标题栏按钮颜色
-                self.titleBar.setStyleSheet("""
-                    QWidget {
-                        color: white;
-                    }
-                    QPushButton {
-                        color: white;
-                    }
-                """)
             else:
-                # 浅色模式：使用深色文字
                 title_label.setStyleSheet("color: black; font-size: 14px; font-weight: bold;")
-                self.titleBar.setStyleSheet("")
         except Exception as e:
             self.logger.warning(f"设置标题栏颜色失败: {e}")
     
     def _on_theme_changed(self):
         """主题切换时更新标题栏颜色"""
+        # 强制重新应用主题
+        try:
+            current_theme = qconfig.theme
+            setTheme(Theme.LIGHT)
+            setTheme(current_theme)
+        except Exception:
+            pass
+        
         self._update_title_bar_color()
+        
+        # 强制更新标题栏按钮
+        try:
+            # 获取标题栏的所有子控件并更新
+            self.titleBar.update()
+            
+            # 尝试直接访问按钮并更新
+            for btn_name in ['minBtn', 'maxBtn', 'closeBtn']:
+                btn = getattr(self.titleBar, btn_name, None)
+                if btn is not None:
+                    btn.update()
+        except Exception as e:
+            self.logger.warning(f"更新标题栏按钮失败: {e}")
 
 
     def showQRCode(self):
