@@ -2,7 +2,7 @@
 
 import asyncio
 from typing import Optional
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
                             QInputDialog, QMessageBox, QComboBox, QDialog, QFormLayout)
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
@@ -343,6 +343,24 @@ class UserManagerWidget(QFrame):
         super().showEvent(event)
         self._maybeLoadOnShow()
     
+    def changeEvent(self, event):
+        """监听主题切换事件，更新标签样式"""
+        super().changeEvent(event)
+        
+        # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_label_styles()
+    
+    def _update_label_styles(self):
+        """更新标签样式以适配当前主题"""
+        try:
+            if isDarkTheme():
+                self.stats_label.setStyleSheet("color: #cccccc;")
+            else:
+                self.stats_label.setStyleSheet("")
+        except Exception as e:
+            logger.warning(f"更新标签样式失败: {e}")
+    
     def _maybeLoadOnShow(self):
         if not self._loaded_once and self.isVisible():
             self._loaded_once = True
@@ -383,6 +401,11 @@ class UserManagerWidget(QFrame):
         title_label = SubtitleLabel("账号管理")
         # 统计信息
         self.stats_label = CaptionLabel("共 0 个账号")
+        
+        # 根据主题设置标签样式
+        if isDarkTheme():
+            title_label.setStyleSheet("color: #ffffff;")
+            self.stats_label.setStyleSheet("color: #cccccc;")
         
         # 左侧标题区域
         title_area = QWidget()

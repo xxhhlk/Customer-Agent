@@ -3,7 +3,7 @@
 import json
 import os
 from typing import Optional
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QFormLayout, QGroupBox, QMessageBox)
 from PyQt6.QtGui import QFont
@@ -11,7 +11,7 @@ from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
                            LineEdit, ComboBox, ScrollArea, FluentIcon as FIF,
                            InfoBar, InfoBarPosition, TextEdit, PasswordLineEdit,
-                           TimePicker)
+                           TimePicker, isDarkTheme)
 from PyQt6.QtCore import QTime
 from utils.logger_loguru import get_logger
 from config import config
@@ -530,6 +530,26 @@ class SettingUI(QFrame):
 
         # 设置对象名
         self.setObjectName("设置")
+    
+    def changeEvent(self, event):
+        """监听主题切换事件，更新标签样式"""
+        super().changeEvent(event)
+        
+        # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_label_styles()
+    
+    def _update_label_styles(self):
+        """更新标签样式以适配当前主题"""
+        try:
+            if isDarkTheme():
+                self.title_label.setStyleSheet("color: #ffffff;")
+                self.description_label.setStyleSheet("padding: 8px 0; color: #cccccc;")
+            else:
+                self.title_label.setStyleSheet("")
+                self.description_label.setStyleSheet("padding: 8px 0;")
+        except Exception as e:
+            self.logger.warning(f"更新标签样式失败: {e}")
 
     def setupUI(self) -> None:
         """设置主界面UI"""
@@ -560,20 +580,26 @@ class SettingUI(QFrame):
         header_layout.setSpacing(20)
         
         # 标题
-        title_label = SubtitleLabel("系统设置")
-        title_label.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
+        self.title_label = SubtitleLabel("系统设置")
+        self.title_label.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
         
         # 描述
-        description_label = CaptionLabel("配置AI客服的基本参数和工作时间")
-        description_label.setStyleSheet("padding: 8px 0;")
+        self.description_label = CaptionLabel("配置AI客服的基本参数和工作时间")
+        
+        # 根据主题设置标签样式
+        if isDarkTheme():
+            self.title_label.setStyleSheet("color: #ffffff;")
+            self.description_label.setStyleSheet("padding: 8px 0; color: #cccccc;")
+        else:
+            self.description_label.setStyleSheet("padding: 8px 0;")
         
         # 左侧标题区域
         title_area = QWidget()
         title_layout = QVBoxLayout(title_area)
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(5)
-        title_layout.addWidget(title_label)
-        title_layout.addWidget(description_label)
+        title_layout.addWidget(self.title_label)
+        title_layout.addWidget(self.description_label)
         
         # 按钮区域
         buttons_widget = QWidget()

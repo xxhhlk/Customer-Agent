@@ -2,13 +2,13 @@
 
 import asyncio
 from typing import Optional, Dict
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
                             QInputDialog, QMessageBox, QComboBox, QDialog, QFormLayout)
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
-                           InfoBadge, ScrollArea, FluentIcon as FIF)
+                           InfoBadge, ScrollArea, FluentIcon as FIF, isDarkTheme)
 from database.db_manager import db_manager
 from utils.logger_loguru import get_logger
 from Channel.pinduoduo.utils.API.Set_up_online import AccountMonitor
@@ -634,6 +634,26 @@ class AutoReplyUI(QFrame):
             self.logger.error(f"清理定时器失败: {e}")
             event.accept()
     
+    def changeEvent(self, event):
+        """监听主题切换事件，更新标签样式"""
+        super().changeEvent(event)
+        
+        # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_label_styles()
+    
+    def _update_label_styles(self):
+        """更新标签样式以适配当前主题"""
+        try:
+            if isDarkTheme():
+                self.running_stats_label.setStyleSheet("font-weight: bold; color: #ffffff;")
+                self.stats_label.setStyleSheet("color: #cccccc;")
+            else:
+                self.running_stats_label.setStyleSheet("font-weight: bold;")
+                self.stats_label.setStyleSheet("")
+        except Exception as e:
+            self.logger.warning(f"更新标签样式失败: {e}")
+    
     def showEvent(self, event):
         super().showEvent(event)
         self._maybeLoadOnShow()
@@ -686,7 +706,14 @@ class AutoReplyUI(QFrame):
         self.stats_label = CaptionLabel("共 0 个账号")
         # 运行状态统计
         self.running_stats_label = CaptionLabel("运行中: 0 个")
-        self.running_stats_label.setStyleSheet("font-weight: bold;")
+        
+        # 根据主题设置标签样式
+        if isDarkTheme():
+            self.running_stats_label.setStyleSheet("font-weight: bold; color: #ffffff;")
+            self.stats_label.setStyleSheet("color: #cccccc;")
+            title_label.setStyleSheet("color: #ffffff;")
+        else:
+            self.running_stats_label.setStyleSheet("font-weight: bold;")
         
         # 左侧标题区域
         title_area = QWidget()

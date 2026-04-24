@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from collections import deque
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QAbstractTableModel, QModelIndex, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QAbstractTableModel, QModelIndex, QObject, QEvent
 from PyQt6.QtWidgets import (QFrame, QVBoxLayout, QHBoxLayout, QWidget,
                             QTextEdit, QFileDialog, QMessageBox, QSplitter,
                             QTableView, QHeaderView, QApplication,
@@ -19,7 +19,7 @@ from PyQt6.QtGui import QFont, QTextCursor, QColor, QTextCharFormat, QBrush, QPa
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
                            ComboBox, LineEdit, ScrollArea, FluentIcon as FIF,
-                           InfoBar, InfoBarPosition, ToolButton, CheckBox)
+                           InfoBar, InfoBarPosition, ToolButton, CheckBox, isDarkTheme)
 from utils.logger_loguru import get_logger, logger, UILogHandler  # pyright: ignore[reportAttributeAccessIssue]
 
 
@@ -577,6 +577,24 @@ class LogUI(QFrame):
         self.setupUI()
         self.setupLogHandler()
         self.connectSignals()
+    
+    def changeEvent(self, event):
+        """监听主题切换事件，更新标签样式"""
+        super().changeEvent(event)
+        
+        # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_label_styles()
+    
+    def _update_label_styles(self):
+        """更新标签样式以适配当前主题"""
+        try:
+            if isDarkTheme():
+                self.title_label.setStyleSheet("color: #ffffff;")
+            else:
+                self.title_label.setStyleSheet("")
+        except Exception as e:
+            self.logger.warning(f"更新标签样式失败: {e}")
         
     def setupUI(self):
         """设置UI"""
@@ -585,9 +603,13 @@ class LogUI(QFrame):
         layout.setSpacing(16)
         
         # 标题
-        title_label = SubtitleLabel("日志管理")
-        title_label.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
-        layout.addWidget(title_label)
+        self.title_label = SubtitleLabel("日志管理")
+        self.title_label.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
+        
+        # 根据主题设置标签样式
+        if isDarkTheme():
+            self.title_label.setStyleSheet("color: #ffffff;")
+        layout.addWidget(self.title_label)
         
         # 主要内容区域
         content_widget = QWidget()

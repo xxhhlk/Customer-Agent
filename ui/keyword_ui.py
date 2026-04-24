@@ -1,7 +1,7 @@
 # 关键词管理界面
 
 from typing import Optional, List
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                             QInputDialog, QMessageBox, QDialog, QFormLayout, QLineEdit,
@@ -432,6 +432,24 @@ class KeywordManagerWidget(QFrame):
         self.keywords_data: List[dict] = []  # 存储关键词数据
         self.setupUI()
         self.loadKeywordsFromDB()
+    
+    def changeEvent(self, event):
+        """监听主题切换事件，更新标签样式"""
+        super().changeEvent(event)
+        
+        # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_label_styles()
+    
+    def _update_label_styles(self):
+        """更新标签样式以适配当前主题"""
+        try:
+            if isDarkTheme():
+                self.stats_label.setStyleSheet("color: #cccccc;")
+            else:
+                self.stats_label.setStyleSheet("")
+        except Exception:
+            pass
         
     def setupUI(self):
         """设置主界面UI"""
@@ -474,6 +492,11 @@ class KeywordManagerWidget(QFrame):
         
         # 统计信息
         self.stats_label = CaptionLabel("共 0 个关键词")
+        
+        # 根据主题设置标签样式
+        if isDarkTheme():
+            title_label.setStyleSheet("color: #ffffff;")
+            self.stats_label.setStyleSheet("color: #cccccc;")
         
         # 左侧标题区域
         title_area = QWidget()
