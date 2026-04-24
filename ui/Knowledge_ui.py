@@ -13,10 +13,10 @@ from PyQt6.QtWidgets import (
     QScrollArea, QFrame, QGridLayout, QFileDialog, QMessageBox, QDialog,
     QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QEvent
 from qfluentwidgets import (
     FluentIcon, PrimaryPushButton, PushButton,
-    InfoBar, InfoBarPosition, SearchLineEdit
+    InfoBar, InfoBarPosition, SearchLineEdit, isDarkTheme
 )
 
 if TYPE_CHECKING:
@@ -317,6 +317,84 @@ class KnowledgeUI(QWidget):
         # 延迟加载数据
         QTimer.singleShot(self.INITIAL_LOAD_DELAY, self.populate_cards)
 
+    def changeEvent(self, event):
+        """监听主题切换事件"""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_label_styles()
+
+    def _update_label_styles(self):
+        """更新所有标签样式以适配当前主题"""
+        is_dark = isDarkTheme()
+        
+        # 更新状态标签
+        if is_dark:
+            self.status_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+            self.page_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
+            self.total_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+            self.page_size_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+            self.loading_icon.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-size: 24px;
+                    font-weight: normal;
+                }
+            """)
+            self.loading_text.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
+            self.loading_dots.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
+            self.tip_label.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    border: 1px solid rgba(255, 193, 7, 0.5);
+                    border-radius: 4px;
+                    padding: 8px 12px;
+                    font-size: 13px;
+                }
+            """)
+        else:
+            self.status_label.setStyleSheet("font-size: 12px;")
+            self.page_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+            self.total_label.setStyleSheet("font-size: 12px;")
+            self.page_size_label.setStyleSheet("font-size: 12px;")
+            self.loading_icon.setStyleSheet("""
+                QLabel {
+                    font-size: 24px;
+                    font-weight: normal;
+                }
+            """)
+            self.loading_text.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
+            self.loading_dots.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
+            self.tip_label.setStyleSheet("""
+                QLabel {
+                    border: 1px solid rgba(255, 193, 7, 0.5);
+                    border-radius: 4px;
+                    padding: 8px 12px;
+                    font-size: 13px;
+                }
+            """)
+
     def _init_ui(self) -> None:
         """初始化UI组件"""
         # 主布局
@@ -358,7 +436,10 @@ class KnowledgeUI(QWidget):
         self.toolbar.addStretch(1)
 
         self.status_label = QLabel(f"共 {len(self.docs)} 条记录")
-        self.status_label.setStyleSheet("font-size: 12px;")
+        if isDarkTheme():
+            self.status_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+        else:
+            self.status_label.setStyleSheet("font-size: 12px;")
         self.toolbar.addWidget(self.status_label)
 
         self.mainLayout.addLayout(self.toolbar)
@@ -381,35 +462,62 @@ class KnowledgeUI(QWidget):
 
         # 旋转图标（使用圆形点阵）
         self.loading_icon = QLabel("⠋")
-        self.loading_icon.setStyleSheet("""
-            QLabel {
-                
-                font-size: 24px;
-                font-weight: normal;
-            }
-        """)
+        if isDarkTheme():
+            self.loading_icon.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-size: 24px;
+                    font-weight: normal;
+                }
+            """)
+        else:
+            self.loading_icon.setStyleSheet("""
+                QLabel {
+                    
+                    font-size: 24px;
+                    font-weight: normal;
+                }
+            """)
         loading_text_layout.addWidget(self.loading_icon, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # 加载文字
         self.loading_text = QLabel("正在导入")
-        self.loading_text.setStyleSheet("""
-            QLabel {
-                
-                font-size: 14px;
-                font-weight: bold;
-            }
-        """)
+        if isDarkTheme():
+            self.loading_text.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
+        else:
+            self.loading_text.setStyleSheet("""
+                QLabel {
+                    
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
         loading_text_layout.addWidget(self.loading_text, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # 动态省略号
         self.loading_dots = QLabel("...")
-        self.loading_dots.setStyleSheet("""
-            QLabel {
-                
-                font-size: 14px;
-                font-weight: bold;
-            }
-        """)
+        if isDarkTheme():
+            self.loading_dots.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
+        else:
+            self.loading_dots.setStyleSheet("""
+                QLabel {
+                    
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+            """)
         loading_text_layout.addWidget(self.loading_dots, alignment=Qt.AlignmentFlag.AlignCenter)
 
         loading_text_layout.addStretch(1)
@@ -424,17 +532,28 @@ class KnowledgeUI(QWidget):
         self._loading_icon_state = 0
 
         # 提示语
-        tip_label = QLabel("💡 提示：导入或添加知识后需重启应用才可生效哦")
-        tip_label.setStyleSheet("""
-            QLabel {
-                border: 1px solid rgba(255, 193, 7, 0.5);
-                border-radius: 4px;
-                padding: 8px 12px;
-                font-size: 13px;
-            }
-        """)
-        tip_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mainLayout.addWidget(tip_label)
+        self.tip_label = QLabel("💡 提示：导入或添加知识后需重启应用才可生效哦")
+        if isDarkTheme():
+            self.tip_label.setStyleSheet("""
+                QLabel {
+                    color: #ffffff;
+                    border: 1px solid rgba(255, 193, 7, 0.5);
+                    border-radius: 4px;
+                    padding: 8px 12px;
+                    font-size: 13px;
+                }
+            """)
+        else:
+            self.tip_label.setStyleSheet("""
+                QLabel {
+                    border: 1px solid rgba(255, 193, 7, 0.5);
+                    border-radius: 4px;
+                    padding: 8px 12px;
+                    font-size: 13px;
+                }
+            """)
+        self.tip_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mainLayout.addWidget(self.tip_label)
 
         # 主内容滚动区域
         self.scroll_area = QScrollArea(self)
@@ -474,7 +593,10 @@ class KnowledgeUI(QWidget):
 
         # 页码显示
         self.page_label = QLabel("第 1 / 1 页")
-        self.page_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        if isDarkTheme():
+            self.page_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
+        else:
+            self.page_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pagination_layout.addWidget(self.page_label)
 
@@ -487,9 +609,12 @@ class KnowledgeUI(QWidget):
         pagination_layout.addWidget(self.next_page_btn)
 
         # 每页数量选择
-        page_size_label = QLabel("每页:")
-        page_size_label.setStyleSheet("font-size: 12px;")
-        pagination_layout.addWidget(page_size_label)
+        self.page_size_label = QLabel("每页:")
+        if isDarkTheme():
+            self.page_size_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+        else:
+            self.page_size_label.setStyleSheet("font-size: 12px;")
+        pagination_layout.addWidget(self.page_size_label)
 
         self.page_size_combo = ComboBox()
         self.page_size_combo.addItems(["12", "24", "48", "96"])
@@ -502,7 +627,10 @@ class KnowledgeUI(QWidget):
         # 显示总记录数
         pagination_layout.addStretch(1)
         total_label = QLabel(f"共 {len(self.docs)} 条记录")
-        total_label.setStyleSheet("font-size: 12px;")
+        if isDarkTheme():
+            total_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+        else:
+            total_label.setStyleSheet("font-size: 12px;")
         pagination_layout.addWidget(total_label)
 
         self.mainLayout.addWidget(pagination_container)
