@@ -632,6 +632,20 @@ class LogUI(QFrame):
                             widget_palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
                         widget.setPalette(widget_palette)
                         widget.setAutoFillBackground(True)
+            
+            # 设置日志表格背景色
+            if hasattr(self, 'log_table'):
+                table_palette = self.log_table.palette()
+                if isDarkTheme():
+                    table_palette.setColor(QPalette.ColorRole.Base, QColor("#2d2d2d"))
+                    table_palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#353535"))
+                    table_palette.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
+                else:
+                    table_palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+                    table_palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#f5f5f5"))
+                    table_palette.setColor(QPalette.ColorRole.Text, QColor("#000000"))
+                self.log_table.setPalette(table_palette)
+                self.log_table.setAutoFillBackground(True)
                         
         except Exception as e:
             self.logger.warning(f"更新标签样式失败: {e}")
