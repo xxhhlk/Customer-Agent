@@ -162,8 +162,10 @@ class MainWindow(FluentWindow):
     def _update_title_bar_color(self):
         """更新标题栏文字颜色，适配深色/浅色模式"""
         try:
-            # 获取标题栏标签
-            title_label = self.titleBar.titleLabel
+            # 获取标题栏标签（PyQt-Fluent-Widgets 内部属性）
+            title_label = getattr(self.titleBar, "titleLabel", None)
+            if title_label is None:
+                return
             if isDarkTheme():
                 # 深色模式：使用白色文字
                 title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")

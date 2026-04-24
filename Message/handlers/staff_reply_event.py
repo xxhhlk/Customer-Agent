@@ -154,6 +154,31 @@ class StaffReplyEventManager:
             del self._staff_reply_times[from_uid]
             return False
 
+    def get_extended_wait_time(self, from_uid: str) -> float:
+        """
+        获取该用户的延长等待时间（如果在冷却期内）
+
+        Args:
+            from_uid: 买家ID
+
+        Returns:
+            float: 延长等待时间（秒），如果不在冷却期内返回0
+        """
+        with self._lock:
+            if from_uid not in self._staff_reply_times:
+                return 0.0
+            
+            last_reply_time = self._staff_reply_times[from_uid]
+            elapsed = time.time() - last_reply_time
+            
+            if elapsed < self.COOLDOWN_SECONDS:
+                logger.debug(f"买家 {from_uid} 在冷却期内，延长等待时间至 {self.EXTENDED_WAIT_SECONDS}秒")
+                return float(self.EXTENDED_WAIT_SECONDS)
+            
+            # 冷却期已过，清理记录
+            del self._staff_reply_times[from_uid]
+            return 0.0
+
     async def wait_for_staff_reply(self, from_uid: str, event_id: str, timeout: float, auto_cleanup: bool = True) -> bool:
         """
         等待人工客服回复
