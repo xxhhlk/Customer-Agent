@@ -254,8 +254,8 @@ class MainWindow(FluentWindow):
         try:
             if hasattr(self, 'theme_listener'):
                 self.theme_listener.quit()
-                # 等待最多100ms让线程退出，避免"Destroyed while thread is still running"警告
-                self.theme_listener.wait(100)
+                # 等待最多500ms让线程退出
+                self.theme_listener.wait(500)
         except Exception:
             pass
         
@@ -263,6 +263,13 @@ class MainWindow(FluentWindow):
         try:
             from ui.auto_reply_ui import auto_reply_manager
             auto_reply_manager.stop_all()
+        except Exception:
+            pass
+        
+        # 清理自动回复界面资源（包括账号卡片的线程和定时器）
+        try:
+            if self.monitor_view:
+                self.monitor_view.cleanup()
         except Exception:
             pass
 

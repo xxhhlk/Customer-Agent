@@ -189,12 +189,16 @@ class AutoReplyManager:
     def stop_all(self):
         """停止所有自动回复"""
         try:
-            # 停止所有正在运行的线程
-            for account_key, thread in self.running_accounts.items():
+            threads = list(self.running_accounts.values())
+            # 先全部发起 stop
+            for thread in threads:
                 if thread.is_running():
                     thread.stop()
-            
-            # 不等待线程结束，直接清理（线程会自动退出）
+            # 然后统一等待线程结束（每个最多等5秒，并行退出总耗时很短）
+            for thread in threads:
+                if thread.is_running():
+                    if not thread.wait(5000):
+                        self.logger.warning(f"线程未在5秒内结束，强制忽略: {thread.account_data.get('username', 'unknown')}")
             self.running_accounts.clear()
             self.logger.info("所有自动回复任务已停止")
             
@@ -250,18 +254,28 @@ class AutoReplyThread(QThread):
             self.logger.error(f"自动回复线程启动失败: {e}")
             self.connection_failed.emit(str(e))
         finally:
-            if self.loop.is_running():
-                self.loop.stop()
-            self.loop.close()
+            try:
+                if hasattr(self, 'loop') and self.loop and not self.loop.is_closed():
+                    if self.loop.is_running():
+                        self.loop.stop()
+                    # 取消所有未完成的任务，避免 loop.close() 阻塞
+                    for t in asyncio.all_tasks(self.loop):
+                        if not t.done():
+                            t.cancel()
+                    self.loop.close()
+            except Exception as e:
+                self.logger.error(f"关闭事件循环失败: {e}")
 
     def stop(self):
         """停止后端引擎"""
         try:
+            self.requestInterruption()
+            
             if self.channel:
                 self.channel.request_stop()
 
             # 停止事件循环（如果存在）
-            if hasattr(self, 'loop') and self.loop:
+            if hasattr(self, 'loop') and self.loop and not self.loop.is_closed():
                 if self.loop.is_running():
                     for task in asyncio.all_tasks(self.loop):
                         if not task.done():
@@ -596,6 +610,15 @@ class AutoReplyCard(CardWidget):
             self.logo_label.setPixmap(pixmap)
         else:
             self.logo_label.setText("加载失败")
+    
+    def cleanup(self):
+        """程序退出时清理资源"""
+        try:
+            if hasattr(self, 'logo_loader_thread') and self.logo_loader_thread and self.logo_loader_thread.isRunning():
+                self.logo_loader_thread.requestInterruption()
+                self.logo_loader_thread.wait(3000)
+        except Exception as e:
+            get_logger().error(f"清理账号卡片资源失败: {e}")
 
 
 class AutoReplyUI(QFrame):
@@ -621,18 +644,29 @@ class AutoReplyUI(QFrame):
 
     def closeEvent(self, event):
         """窗口关闭时清理定时器和线程"""
+        self.cleanup()
+        event.accept()
+    
+    def cleanup(self):
+        """程序退出时清理所有资源"""
         try:
-            if hasattr(self, 'stats_timer'):
+            if hasattr(self, 'stats_timer') and self.stats_timer:
                 self.stats_timer.stop()
-            if hasattr(self, 'sync_timer'):
+            if hasattr(self, 'sync_timer') and self.sync_timer:
                 self.sync_timer.stop()
-            # 等待状态设置线程结束（最多100ms）
-            if hasattr(self, 'status_thread') and self.status_thread.isRunning():
-                self.status_thread.wait(100)
-            event.accept()
+            if hasattr(self, 'status_thread') and self.status_thread and self.status_thread.isRunning():
+                self.status_thread.requestInterruption()
+                self.status_thread.wait(3000)
+            # 清理所有账号卡片的线程
+            for i in range(self.accounts_layout.count() - 1):
+                item = self.accounts_layout.itemAt(i)
+                if item is None:
+                    continue
+                widget = item.widget()
+                if widget and hasattr(widget, 'cleanup'):
+                    widget.cleanup()
         except Exception as e:
-            self.logger.error(f"清理定时器失败: {e}")
-            event.accept()
+            self.logger.error(f"清理自动回复界面失败: {e}")
     
     def changeEvent(self, event):
         """监听主题切换事件，更新标签样式"""
