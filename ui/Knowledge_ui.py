@@ -314,6 +314,9 @@ class KnowledgeUI(QWidget):
 
         # 初始化UI
         self._init_ui()
+        
+        # 应用主题样式（设置背景色等）
+        self._update_label_styles()
 
         # 延迟加载数据
         QTimer.singleShot(self.INITIAL_LOAD_DELAY, self.populate_cards)
@@ -334,83 +337,61 @@ class KnowledgeUI(QWidget):
         try:
             is_dark = isDarkTheme()
             
-            # 更新整体背景色
+            # 使用调色板设置背景色（比样式表更可靠）
+            from PyQt6.QtGui import QPalette, QColor
+            palette = self.palette()
             if is_dark:
-                self.setStyleSheet("""
-                    QWidget#Knowledge-UI {
-                        background-color: #1e1e1e;
-                    }
-                """)
+                palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
+                palette.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
             else:
-                self.setStyleSheet("")
+                palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
+                palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
+            self.setPalette(palette)
+            self.setAutoFillBackground(True)
             
-            # 更新状态标签
+            # 同时设置滚动区域背景色
+            if hasattr(self, 'scroll_area'):
+                scroll_palette = self.scroll_area.palette()
+                if is_dark:
+                    scroll_palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
+                    scroll_palette.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
+                else:
+                    scroll_palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
+                    scroll_palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
+                self.scroll_area.setPalette(scroll_palette)
+                self.scroll_area.setAutoFillBackground(True)
+            
+            # 设置内容控件背景色
+            if hasattr(self, 'contentWidget'):
+                content_palette = self.contentWidget.palette()
+                if is_dark:
+                    content_palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
+                    content_palette.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
+                else:
+                    content_palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
+                    content_palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
+                self.contentWidget.setPalette(content_palette)
+                self.contentWidget.setAutoFillBackground(True)
+            
+            # 更新状态标签文字颜色
             if is_dark:
                 self.status_label.setStyleSheet("font-size: 12px; color: #cccccc;")
                 self.page_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
                 self.total_label.setStyleSheet("font-size: 12px; color: #cccccc;")
                 self.page_size_label.setStyleSheet("font-size: 12px; color: #cccccc;")
-                self.loading_icon.setStyleSheet("""
-                    QLabel {
-                        color: #ffffff;
-                        font-size: 24px;
-                        font-weight: normal;
-                    }
-                """)
-                self.loading_text.setStyleSheet("""
-                    QLabel {
-                        color: #ffffff;
-                        font-size: 14px;
-                        font-weight: bold;
-                    }
-                """)
-                self.loading_dots.setStyleSheet("""
-                    QLabel {
-                        color: #ffffff;
-                        font-size: 14px;
-                        font-weight: bold;
-                    }
-                """)
-                self.tip_label.setStyleSheet("""
-                    QLabel {
-                        color: #ffffff;
-                        border: 1px solid rgba(255, 193, 7, 0.5);
-                        border-radius: 4px;
-                        padding: 8px 12px;
-                        font-size: 13px;
-                    }
-                """)
+                self.loading_icon.setStyleSheet("color: #ffffff; font-size: 24px;")
+                self.loading_text.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+                self.loading_dots.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+                self.tip_label.setStyleSheet("color: #ffffff; border: 1px solid rgba(255, 193, 7, 0.5); border-radius: 4px; padding: 8px 12px; font-size: 13px;")
             else:
                 self.status_label.setStyleSheet("font-size: 12px;")
                 self.page_label.setStyleSheet("font-size: 13px; font-weight: bold;")
                 self.total_label.setStyleSheet("font-size: 12px;")
                 self.page_size_label.setStyleSheet("font-size: 12px;")
-                self.loading_icon.setStyleSheet("""
-                    QLabel {
-                        font-size: 24px;
-                        font-weight: normal;
-                    }
-                """)
-                self.loading_text.setStyleSheet("""
-                    QLabel {
-                        font-size: 14px;
-                        font-weight: bold;
-                    }
-                """)
-                self.loading_dots.setStyleSheet("""
-                    QLabel {
-                        font-size: 14px;
-                        font-weight: bold;
-                    }
-                """)
-                self.tip_label.setStyleSheet("""
-                    QLabel {
-                        border: 1px solid rgba(255, 193, 7, 0.5);
-                        border-radius: 4px;
-                        padding: 8px 12px;
-                        font-size: 13px;
-                    }
-                """)
+                self.loading_icon.setStyleSheet("font-size: 24px;")
+                self.loading_text.setStyleSheet("font-size: 14px; font-weight: bold;")
+                self.loading_dots.setStyleSheet("font-size: 14px; font-weight: bold;")
+                self.tip_label.setStyleSheet("border: 1px solid rgba(255, 193, 7, 0.5); border-radius: 4px; padding: 8px 12px; font-size: 13px;")
         finally:
             self._updating_styles = False
 
@@ -419,14 +400,6 @@ class KnowledgeUI(QWidget):
         # 主布局
         self.mainLayout = QVBoxLayout(self)
         self.setLayout(self.mainLayout)
-
-        # 设置整体背景色（深色模式适配）
-        if isDarkTheme():
-            self.setStyleSheet("""
-                QWidget#Knowledge-UI {
-                    background-color: #1e1e1e;
-                }
-            """)
 
         # 顶部工具栏
         self.toolbar = QHBoxLayout()

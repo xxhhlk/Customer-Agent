@@ -580,6 +580,9 @@ class LogUI(QFrame):
         self.setupUI()
         self.setupLogHandler()
         self.connectSignals()
+        
+        # 应用主题样式（设置背景色等）
+        self._update_label_styles()
     
     def changeEvent(self, event):
         """监听主题切换事件，更新标签样式"""
@@ -597,20 +600,39 @@ class LogUI(QFrame):
         
         self._updating_styles = True
         try:
+            from PyQt6.QtGui import QPalette, QColor
+            
+            # 使用调色板设置背景色（比样式表更可靠）
+            palette = self.palette()
             if isDarkTheme():
-                # 更新整体背景色
-                self.setStyleSheet("""
-                    QFrame#log-ui {
-                        background-color: #1e1e1e;
-                    }
-                """)
+                palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
+                palette.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
                 # 更新标题标签
                 self.title_label.setStyleSheet("color: #ffffff;")
             else:
-                # 清除背景色样式
-                self.setStyleSheet("")
+                palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
+                palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
                 # 清除标题标签样式
                 self.title_label.setStyleSheet("")
+            self.setPalette(palette)
+            self.setAutoFillBackground(True)
+            
+            # 同时设置主布局容器的背景色
+            if hasattr(self, 'main_layout'):
+                for i in range(self.main_layout.count()):
+                    item = self.main_layout.itemAt(i)
+                    if item and item.widget():
+                        widget = item.widget()
+                        widget_palette = widget.palette()
+                        if isDarkTheme():
+                            widget_palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
+                            widget_palette.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
+                        else:
+                            widget_palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
+                            widget_palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
+                        widget.setPalette(widget_palette)
+                        widget.setAutoFillBackground(True)
+                        
         except Exception as e:
             self.logger.warning(f"更新标签样式失败: {e}")
         finally:
@@ -621,14 +643,6 @@ class LogUI(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
-        
-        # 设置整体背景色（深色模式适配）
-        if isDarkTheme():
-            self.setStyleSheet("""
-                QFrame#log-ui {
-                    background-color: #1e1e1e;
-                }
-            """)
         
         # 标题
         self.title_label = SubtitleLabel("日志管理")
