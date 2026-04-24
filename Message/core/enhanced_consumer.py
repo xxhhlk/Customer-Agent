@@ -246,10 +246,12 @@ class EnhancedMessageConsumer:
         self.logger.info(f"Waiting for staff reply (max {wait_seconds}s, event_id={event_id})")
 
         try:
+            # 不自动清理，由外层的 finally 块负责清理
             staff_replied = await self.staff_reply_manager.wait_for_staff_reply(
                 from_uid, 
                 event_id,
-                timeout=wait_seconds
+                timeout=wait_seconds,
+                auto_cleanup=False  # 关键：不自动清理
             )
             return staff_replied
         finally:

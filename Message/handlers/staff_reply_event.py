@@ -120,7 +120,7 @@ class StaffReplyEventManager:
 
             return notified_count > 0
 
-    async def wait_for_staff_reply(self, from_uid: str, event_id: str, timeout: float) -> bool:
+    async def wait_for_staff_reply(self, from_uid: str, event_id: str, timeout: float, auto_cleanup: bool = True) -> bool:
         """
         等待人工客服回复
 
@@ -128,6 +128,7 @@ class StaffReplyEventManager:
             from_uid: 买家ID
             event_id: 本次等待的事件ID（从start_waiting获取）
             timeout: 超时时间（秒）
+            auto_cleanup: 是否自动清理事件（默认True，向后兼容）
 
         Returns:
             bool: True表示人工客服已回复，False表示超时
@@ -168,8 +169,9 @@ class StaffReplyEventManager:
             logger.debug(f"等待超时 {timeout}秒: {from_uid}, 事件ID: {event_id}")
             return False
         finally:
-            # 清理当前事件
-            self.stop_waiting(from_uid, event_id)
+            # 清理当前事件（可选）
+            if auto_cleanup:
+                self.stop_waiting(from_uid, event_id)
 
     def is_waiting(self, from_uid: str) -> bool:
         """
