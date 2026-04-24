@@ -620,12 +620,15 @@ class AutoReplyUI(QFrame):
         self.sync_timer.start(10000)  # 每10秒同步一次状态（减少频率）
 
     def closeEvent(self, event):
-        """窗口关闭时清理定时器"""
+        """窗口关闭时清理定时器和线程"""
         try:
             if hasattr(self, 'stats_timer'):
                 self.stats_timer.stop()
             if hasattr(self, 'sync_timer'):
                 self.sync_timer.stop()
+            # 等待状态设置线程结束（最多100ms）
+            if hasattr(self, 'status_thread') and self.status_thread.isRunning():
+                self.status_thread.wait(100)
             event.accept()
         except Exception as e:
             self.logger.error(f"清理定时器失败: {e}")

@@ -254,8 +254,8 @@ class MainWindow(FluentWindow):
         try:
             if hasattr(self, 'theme_listener'):
                 self.theme_listener.quit()
-                # 不等待线程结束，避免阻塞主线程
-                # self.theme_listener.wait()
+                # 等待最多100ms让线程退出，避免"Destroyed while thread is still running"警告
+                self.theme_listener.wait(100)
         except Exception:
             pass
         
