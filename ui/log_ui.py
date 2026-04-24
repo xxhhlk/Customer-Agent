@@ -355,6 +355,11 @@ class LogTableView(QTableView):
                     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
                     font-weight: bold;
                 }
+                QHeaderView::section:vertical {
+                    background-color: #1e1e1e;
+                    color: #ffffff;
+                    border-right: 1px solid rgba(255, 255, 255, 0.1);
+                }
             """)
         else:
             self.setStyleSheet("""
@@ -383,6 +388,11 @@ class LogTableView(QTableView):
                     border-right: 1px solid rgba(0, 0, 0, 0.1);
                     border-bottom: 1px solid rgba(0, 0, 0, 0.1);
                     font-weight: bold;
+                }
+                QHeaderView::section:vertical {
+                    background-color: #f0f0f0;
+                    color: #000000;
+                    border-right: 1px solid rgba(0, 0, 0, 0.1);
                 }
             """)
 
