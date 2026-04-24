@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QCursor
 from qfluentwidgets import (
     ElevatedCardWidget, Flyout, FlyoutViewBase, FluentIcon,
-    PrimaryPushButton, PushButton, InfoBar, InfoBarPosition, MessageBox
+    PrimaryPushButton, PushButton, InfoBar, InfoBarPosition, MessageBox,
+    isDarkTheme
 )
 
 from .models import SimpleDocument, DocumentTitleExtractor, MarkdownConverter
@@ -530,6 +531,33 @@ class AddKnowledgeDialog(QDialog):
 
     def _init_ui(self) -> None:
         """初始化UI"""
+        # 设置对话框背景色，适配深色模式
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #202020;
+                }
+                QLabel {
+                    color: #ffffff;
+                }
+                QLineEdit, QTextEdit {
+                    background-color: #333333;
+                    color: #ffffff;
+                    border: 1px solid #484848;
+                    border-radius: 4px;
+                    padding: 4px;
+                }
+                QLineEdit:focus, QTextEdit:focus {
+                    border: 1px solid #0078d4;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #ffffff;
+                }
+            """)
+        
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
         layout.setContentsMargins(25, 25, 25, 25)

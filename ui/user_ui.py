@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePol
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
+                           ScrollArea, FluentIcon as FIF, isDarkTheme)
                            InfoBadge, ScrollArea, FluentIcon as FIF)
 from database.db_manager import db_manager
 from Channel.pinduoduo.pdd_login import login_pdd
@@ -787,6 +788,58 @@ class EditAccountDialog(QDialog):
         """设置对话框UI"""
         from qfluentwidgets import LineEdit, ComboBox
         
+        # 设置对话框背景色，适配深色模式
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #202020;
+                }
+                QLabel {
+                    color: #ffffff;
+                }
+                QLineEdit {
+                    background-color: #333333;
+                    color: #ffffff;
+                    border: 1px solid #484848;
+                    border-radius: 4px;
+                    padding: 4px;
+                }
+                QLineEdit:focus {
+                    border: 1px solid #0078d4;
+                }
+                QComboBox {
+                    background-color: #333333;
+                    color: #ffffff;
+                    border: 1px solid #484848;
+                    border-radius: 4px;
+                    padding: 4px;
+                }
+                QComboBox:focus {
+                    border: 1px solid #0078d4;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 4px solid transparent;
+                    border-right: 4px solid transparent;
+                    border-top: 6px solid #ffffff;
+                    margin-right: 8px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #333333;
+                    color: #ffffff;
+                    selection-background-color: #0078d4;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #ffffff;
+                }
+            """)
+        
         layout = QFormLayout(self)
         
         # 显示不可编辑的信息
@@ -910,6 +963,33 @@ class AddAccountDialog(QDialog):
         """设置对话框UI"""
         from qfluentwidgets import LineEdit, PrimaryPushButton, PushButton
 
+        # 设置对话框背景色，适配深色模式
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #202020;
+                }
+                QLabel {
+                    color: #ffffff;
+                }
+                QLineEdit {
+                    background-color: #333333;
+                    color: #ffffff;
+                    border: 1px solid #484848;
+                    border-radius: 4px;
+                    padding: 4px;
+                }
+                QLineEdit:focus {
+                    border: 1px solid #0078d4;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #ffffff;
+                }
+            """)
+        
         layout = QFormLayout(self)
         layout.setSpacing(15)
         

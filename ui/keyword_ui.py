@@ -6,11 +6,12 @@ from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                             QInputDialog, QMessageBox, QDialog, QFormLayout, QLineEdit,
                             QSpinBox, QCheckBox, QComboBox, QTextEdit)
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
 from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton,
                            ScrollArea, FluentIcon as FIF,
-                           TableWidget, LineEdit, SpinBox, CheckBox, ComboBox)
+                           TableWidget, LineEdit, SpinBox, CheckBox, ComboBox,
+                           isDarkTheme)
 from database.db_manager import db_manager
 
 
@@ -155,6 +156,55 @@ class KeywordDialog(QDialog):
         """设置对话框UI"""
         self.setWindowTitle('编辑关键词' if self.keyword_data else '添加关键词')
         self.setMinimumWidth(400)
+        
+        # 设置对话框背景色，适配深色模式
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #202020;
+                }
+                QLabel {
+                    color: #ffffff;
+                }
+                QLineEdit, QTextEdit, QComboBox, QSpinBox {
+                    background-color: #333333;
+                    color: #ffffff;
+                    border: 1px solid #484848;
+                    border-radius: 4px;
+                    padding: 4px;
+                }
+                QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {
+                    border: 1px solid #0078d4;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 4px solid transparent;
+                    border-right: 4px solid transparent;
+                    border-top: 6px solid #ffffff;
+                    margin-right: 8px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #333333;
+                    color: #ffffff;
+                    selection-background-color: #0078d4;
+                }
+                QCheckBox {
+                    color: #ffffff;
+                }
+                QCheckBox::indicator {
+                    width: 16px;
+                    height: 16px;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #ffffff;
+                }
+            """)
         
         layout = QFormLayout(self)
         layout.setSpacing(10)
