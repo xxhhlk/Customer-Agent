@@ -29,7 +29,7 @@ class StaffReplyEventManager:
 
     # 冷却期配置：人工客服回复后，该用户的新消息延长等待时间
     COOLDOWN_SECONDS = 60  # 冷却期60秒
-    EXTENDED_WAIT_SECONDS = 60  # 冷却期内延长等待时间
+    EXTENDED_WAIT_SECONDS = 30  # 冷却期内延长等待时间
 
     def __init__(self):
         # from_uid -> [{"event_id": str, "event": asyncio.Event, "timestamp": float, "loop": asyncio.AbstractEventLoop}]
