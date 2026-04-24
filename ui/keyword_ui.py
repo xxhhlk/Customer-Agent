@@ -747,6 +747,11 @@ class KeywordManagerWidget(QFrame):
             else:
                 QMessageBox.warning(self, '失败', f'关键词 "{keyword_data["keyword"]}" 添加失败，可能已存在!')
     
+    def onTestKeywords(self):
+        """测试关键词按钮点击事件"""
+        dialog = KeywordTestDialog(self)
+        dialog.exec()
+    
     def onImportKeywords(self):
         """批量导入关键词按钮点击事件"""
         text, ok = QInputDialog.getMultiLineText(

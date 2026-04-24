@@ -114,14 +114,20 @@ class KnowledgeCard(ElevatedCardWidget):
 
         # 标题
         title = QLabel(doc_title)
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        if isDarkTheme():
+            title.setStyleSheet("font-weight: bold; font-size: 14px; color: #ffffff;")
+        else:
+            title.setStyleSheet("font-weight: bold; font-size: 14px;")
         title.setMaximumHeight(20)
         vbox.addWidget(title)
 
         # 文档ID
         if self.doc.id:
             cid = QLabel(f"ID: {self.doc.id[:self.ID_DISPLAY_LENGTH]}...")
-            cid.setStyleSheet("font-size: 10px;")
+            if isDarkTheme():
+                cid.setStyleSheet("font-size: 10px; color: #cccccc;")
+            else:
+                cid.setStyleSheet("font-size: 10px;")
             cid.setMaximumHeight(15)
             vbox.addWidget(cid)
 
@@ -131,7 +137,10 @@ class KnowledgeCard(ElevatedCardWidget):
             if len(content_preview) > self.PREVIEW_LENGTH:
                 content_preview = content_preview[:self.PREVIEW_LENGTH] + "..."
             self._content_label = QLabel(content_preview)
-            self._content_label.setStyleSheet("font-size: 12px;")
+            if isDarkTheme():
+                self._content_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+            else:
+                self._content_label.setStyleSheet("font-size: 12px;")
             self._content_label.setWordWrap(True)
             self._content_label.setMaximumHeight(36)
             vbox.addWidget(self._content_label)
@@ -142,7 +151,10 @@ class KnowledgeCard(ElevatedCardWidget):
         # 文档长度信息
         if self.doc.content:
             length_label = QLabel(f"{len(self.doc.content)}字")
-            length_label.setStyleSheet("font-size: 10px;")
+            if isDarkTheme():
+                length_label.setStyleSheet("font-size: 10px; color: #999999;")
+            else:
+                length_label.setStyleSheet("font-size: 10px;")
             info_layout.addWidget(length_label)
 
         # 元数据信息
@@ -150,7 +162,10 @@ class KnowledgeCard(ElevatedCardWidget):
             for key in ['row_number', 'sheet_name', 'section']:
                 if key in self.doc.metadata:
                     meta_label = QLabel(f"{self.doc.metadata[key]}")
-                    meta_label.setStyleSheet("font-size: 10px;")
+                    if isDarkTheme():
+                        meta_label.setStyleSheet("font-size: 10px; color: #999999;")
+                    else:
+                        meta_label.setStyleSheet("font-size: 10px;")
                     info_layout.addWidget(meta_label)
                     break
 
@@ -169,8 +184,11 @@ class KnowledgeCard(ElevatedCardWidget):
         view_btn.setIcon(FluentIcon.VIEW)
         delete_btn.setIcon(FluentIcon.DELETE)
 
-        # 设置删除按钮样式为红色
-        delete_btn.setStyleSheet(delete_btn.styleSheet() + "QPushButton { color: #d32f2f; }")
+        # 设置删除按钮样式为红色（适配深色模式）
+        if isDarkTheme():
+            delete_btn.setStyleSheet(delete_btn.styleSheet() + "QPushButton { color: #ff6b6b; }")
+        else:
+            delete_btn.setStyleSheet(delete_btn.styleSheet() + "QPushButton { color: #d32f2f; }")
 
         btn_bar.addWidget(view_btn)
         btn_bar.addWidget(delete_btn)
@@ -703,10 +721,16 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         title_layout.setContentsMargins(0, 0, 0, 0)
 
         self._title_label = QLabel(self._title)
-        self._title_label.setStyleSheet("font-weight: 600; font-size: 16px;")
+        if isDarkTheme():
+            self._title_label.setStyleSheet("font-weight: 600; font-size: 16px; color: #ffffff;")
+        else:
+            self._title_label.setStyleSheet("font-weight: 600; font-size: 16px;")
 
         self._title_edit = QLineEdit(self._title)
-        self._title_edit.setStyleSheet("font-size: 16px; padding: 4px;")
+        if isDarkTheme():
+            self._title_edit.setStyleSheet("font-size: 16px; padding: 4px; background-color: #333333; color: #ffffff; border: 1px solid #484848; border-radius: 4px;")
+        else:
+            self._title_edit.setStyleSheet("font-size: 16px; padding: 4px;")
         self._title_edit.setVisible(False)
 
         title_layout.addWidget(self._title_label)
@@ -717,7 +741,10 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
 
         # 向量信息区域
         self._vector_info_label = QLabel("📋 正在加载向量信息...")
-        self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px;")
+        if isDarkTheme():
+            self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px; background-color: #333333; color: #ffffff;")
+        else:
+            self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px; background-color: #f5f5f5; color: #333333;")
         self._vector_info_label.setWordWrap(True)
         main_layout.addWidget(self._vector_info_label)
 
@@ -725,7 +752,10 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._line = QFrame()
         self._line.setFrameShape(QFrame.Shape.HLine)
         self._line.setFrameShadow(QFrame.Shadow.Sunken)
-        self._line.setStyleSheet("")
+        if isDarkTheme():
+            self._line.setStyleSheet("background-color: #484848;")
+        else:
+            self._line.setStyleSheet("")
         main_layout.addWidget(self._line)
 
         # 内容区域（支持编辑模式切换）
@@ -737,29 +767,47 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._text_edit.setReadOnly(True)
         self._text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._text_edit.setMinimumHeight(self.CONTENT_MIN_HEIGHT)
-        self._text_edit.setStyleSheet("""
-            QTextEdit {
-                border: none;
-                background-color: transparent;
-                
-                font-size: 13px;
-                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            }
-        """)
+        if isDarkTheme():
+            self._text_edit.setStyleSheet("""
+                QTextEdit {
+                    border: none;
+                    background-color: #202020;
+                    color: #ffffff;
+                    font-size: 13px;
+                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                }
+            """)
+        else:
+            self._text_edit.setStyleSheet("""
+                QTextEdit {
+                    border: none;
+                    background-color: transparent;
+                    font-size: 13px;
+                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                }
+            """)
 
         # 编辑模式：纯文本编辑
         self._content_edit = QTextEdit()
         self._content_edit.setPlainText(self._doc_content)
         self._content_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._content_edit.setMinimumHeight(self.CONTENT_MIN_HEIGHT)
-        self._content_edit.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #0078d4;
-                
-                
-                font-size: 13px;
-            }
-        """)
+        if isDarkTheme():
+            self._content_edit.setStyleSheet("""
+                QTextEdit {
+                    border: 1px solid #0078d4;
+                    background-color: #333333;
+                    color: #ffffff;
+                    font-size: 13px;
+                }
+            """)
+        else:
+            self._content_edit.setStyleSheet("""
+                QTextEdit {
+                    border: 1px solid #0078d4;
+                    font-size: 13px;
+                }
+            """)
         self._content_edit.setVisible(False)
 
         main_layout.addWidget(self._text_edit, 1)
@@ -971,10 +1019,16 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
                 self._vector_info_label.setText(
                     f"✅ 向量状态: 正常 | 维度: {dimension} | 前5个值: [{sample_str}, ...]"
                 )
-                self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px;")
+                if isDarkTheme():
+                    self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px; background-color: #333333; color: #ffffff;")
+                else:
+                    self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px; background-color: #f5f5f5; color: #333333;")
             else:
                 self._vector_info_label.setText("❌ 向量状态: 缺失 | 该文档未生成向量嵌入")
-                self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px;")
+                if isDarkTheme():
+                    self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px; background-color: #333333; color: #ffffff;")
+                else:
+                    self._vector_info_label.setStyleSheet("font-size: 12px; padding: 8px; border-radius: 4px; background-color: #f5f5f5; color: #333333;")
 
         except Exception as e:
             logger.error(f"更新向量信息失败: {e}")
