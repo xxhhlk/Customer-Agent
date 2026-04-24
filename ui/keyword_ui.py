@@ -13,6 +13,144 @@ from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel,
                            TableWidget, LineEdit, SpinBox, CheckBox, ComboBox,
                            isDarkTheme)
 from database.db_manager import db_manager
+from Message.handlers.keyword_handler import KeywordDetectionHandler
+
+
+class KeywordTestDialog(QDialog):
+    """关键词测试对话框"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.keyword_handler = KeywordDetectionHandler()
+        self.setupUI()
+        
+    def setupUI(self):
+        """设置对话框UI"""
+        self.setWindowTitle('关键词测试')
+        self.setMinimumSize(500, 400)
+        
+        # 设置对话框背景色，适配深色模式
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #202020;
+                }
+                QLabel {
+                    color: #ffffff;
+                }
+                QLineEdit, QTextEdit {
+                    background-color: #333333;
+                    color: #ffffff;
+                    border: 1px solid #484848;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+                QLineEdit:focus, QTextEdit:focus {
+                    border: 1px solid #0078d4;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #ffffff;
+                }
+            """)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # 说明文字
+        desc_label = BodyLabel("输入测试消息，查看会匹配到哪个关键词：")
+        layout.addWidget(desc_label)
+        
+        # 测试输入框
+        self.test_input = QLineEdit()
+        self.test_input.setPlaceholderText("请输入测试消息...")
+        self.test_input.returnPressed.connect(self.onTest)
+        layout.addWidget(self.test_input)
+        
+        # 测试按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.test_btn = PrimaryPushButton("测试")
+        self.test_btn.setIcon(FIF.SEARCH)
+        self.test_btn.setFixedSize(100, 35)
+        self.test_btn.clicked.connect(self.onTest)
+        btn_layout.addWidget(self.test_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+        # 结果区域
+        result_label = BodyLabel("测试结果：")
+        layout.addWidget(result_label)
+        
+        self.result_text = QTextEdit()
+        self.result_text.setReadOnly(True)
+        self.result_text.setMinimumHeight(200)
+        layout.addWidget(self.result_text)
+        
+        # 关闭按钮
+        close_btn = PushButton("关闭")
+        close_btn.clicked.connect(self.accept)
+        btn_layout2 = QHBoxLayout()
+        btn_layout2.addStretch()
+        btn_layout2.addWidget(close_btn)
+        btn_layout2.addStretch()
+        layout.addLayout(btn_layout2)
+        
+    def onTest(self):
+        """执行测试"""
+        test_message = self.test_input.text().strip()
+        
+        if not test_message:
+            self.result_text.setText("❌ 请输入测试消息")
+            return
+        
+        # 使用关键词处理器进行匹配
+        matched = self.keyword_handler.match_keyword(test_message)
+        
+        if not matched:
+            result = f"📝 测试消息：{test_message}\n\n"
+            result += "❌ 未匹配到任何关键词"
+            self.result_text.setText(result)
+            return
+        
+        # 构建匹配结果
+        result = f"📝 测试消息：{test_message}\n\n"
+        result += f"✅ 匹配成功！\n\n"
+        result += f"关键词：{matched.get('keyword', 'N/A')}\n"
+        result += f"分组：{matched.get('group_name', 'N/A')}\n"
+        
+        # 匹配类型
+        match_type_map = {
+            'exact': '完全匹配',
+            'partial': '部分匹配',
+            'regex': '正则匹配',
+            'wildcard': '通配符匹配'
+        }
+        match_type_text = match_type_map.get(matched.get('match_type', 'partial'), '部分匹配')
+        result += f"匹配类型：{match_type_text}\n"
+        
+        # 优先级
+        result += f"优先级：{matched.get('priority', 0)}\n"
+        
+        # 回复内容
+        reply_content = matched.get('reply_content')
+        if reply_content:
+            result += f"\n💬 回复内容：\n{reply_content}\n"
+        
+        # 转人工
+        if matched.get('transfer_to_human', False):
+            result += f"\n👤 会转人工客服"
+        else:
+            result += f"\n👤 不会转人工客服"
+        
+        # pass_to_ai
+        if matched.get('pass_to_ai', False):
+            result += f"\n🤖 会传递给AI处理"
+        
+        self.result_text.setText(result)
 
 
 class KeywordTableWidget(TableWidget):
@@ -314,6 +452,7 @@ class KeywordManagerWidget(QFrame):
         
         # 连接按钮信号
         self.add_btn.clicked.connect(self.onAddKeyword)
+        self.test_btn.clicked.connect(self.onTestKeywords)
         self.import_btn.clicked.connect(self.onImportKeywords)
         
         # 添加到主布局
@@ -349,6 +488,11 @@ class KeywordManagerWidget(QFrame):
         self.add_btn.setIcon(FIF.ADD)
         self.add_btn.setFixedSize(120, 40)
         
+        # 测试按钮
+        self.test_btn = PushButton("测试关键词")
+        self.test_btn.setIcon(FIF.SEARCH)
+        self.test_btn.setFixedSize(120, 40)
+        
         # 批量导入按钮
         self.import_btn = PushButton("批量导入")
         self.import_btn.setIcon(FIF.FOLDER_ADD)
@@ -359,6 +503,7 @@ class KeywordManagerWidget(QFrame):
         buttons_layout = QHBoxLayout(buttons_widget)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(10)
+        buttons_layout.addWidget(self.test_btn)
         buttons_layout.addWidget(self.import_btn)
         buttons_layout.addWidget(self.add_btn)
         
