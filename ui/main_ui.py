@@ -6,7 +6,7 @@ from PyQt6.QtGui import QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
-from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, themeListener
+from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, SystemThemeListener
 from utils.logger_loguru import get_logger
 import time
 
@@ -41,8 +41,10 @@ class MainWindow(FluentWindow):
         # 自动跟随系统主题（深色/浅色）
         setTheme(Theme.AUTO)
         
-        # 监听主题切换事件
-        themeListener.themeChanged.connect(self._on_theme_changed)
+        # 监听系统主题切换事件
+        self.theme_listener = SystemThemeListener(self)
+        self.theme_listener.systemThemeChanged.connect(self._on_theme_changed)
+        self.theme_listener.start()
         
         t = time.perf_counter()
         self.setWindowTitle('拼多多AI客服助手')
@@ -209,7 +211,15 @@ class MainWindow(FluentWindow):
 
     def closeEvent(self, a0: Optional["QCloseEvent"]) -> None:
         """ 重写窗口关闭事件，确保后台线程安全退出 """
-
+        
+        # 停止主题监听器
+        try:
+            if hasattr(self, 'theme_listener'):
+                self.theme_listener.quit()
+                self.theme_listener.wait()
+        except Exception:
+            pass
+        
         # 停止所有自动回复线程
         try:
             from ui.auto_reply_ui import auto_reply_manager
