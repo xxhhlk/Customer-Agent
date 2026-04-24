@@ -242,6 +242,12 @@ class EnhancedMessageConsumer:
         from config import get_config
         staff_wait_config = get_config("staff_reply_wait", {})
         wait_seconds = staff_wait_config.get("wait_seconds", 30)
+        
+        # 检查是否在冷却期内，如果是则延长等待时间
+        extended_wait = self.staff_reply_manager.get_extended_wait_time(from_uid)
+        if extended_wait > 0:
+            wait_seconds = extended_wait
+            self.logger.info(f"User in cooldown, extended wait to {wait_seconds}s")
 
         self.logger.info(f"Waiting for staff reply (max {wait_seconds}s, event_id={event_id})")
 

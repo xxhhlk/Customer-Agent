@@ -27,9 +27,15 @@ class StaffReplyEventManager:
     支持同一买家同时有多个等待事件（连续发送多条消息的场景）。
     """
 
+    # 冷却期配置：人工客服回复后，该用户的新消息延长等待时间
+    COOLDOWN_SECONDS = 60  # 冷却期60秒
+    EXTENDED_WAIT_SECONDS = 60  # 冷却期内延长等待时间
+
     def __init__(self):
         # from_uid -> [{"event_id": str, "event": asyncio.Event, "timestamp": float, "loop": asyncio.AbstractEventLoop}]
         self._waiting_events: Dict[str, List[Dict[str, Any]]] = {}
+        # from_uid -> last_staff_reply_timestamp (记录人工客服最后回复时间)
+        self._staff_reply_times: Dict[str, float] = {}
         self._lock = threading.Lock()
 
     def start_waiting(self, from_uid: str) -> str:
@@ -93,6 +99,9 @@ class StaffReplyEventManager:
         """
         notified_count = 0
         with self._lock:
+            # 记录人工客服回复时间（用于冷却期判断）
+            self._staff_reply_times[from_uid] = time.time()
+            
             if from_uid not in self._waiting_events:
                 logger.debug(f"买家 {from_uid} 没有在等待客服回复")
                 return False
@@ -119,6 +128,31 @@ class StaffReplyEventManager:
                 logger.info(f"人工客服已回复，通知 {from_uid} 的 {notified_count} 个等待事件")
 
             return notified_count > 0
+
+    def is_in_cooldown(self, from_uid: str) -> bool:
+        """
+        检查该用户是否在人工回复冷却期内
+
+        Args:
+            from_uid: 买家ID
+
+        Returns:
+            bool: True表示在冷却期内（应跳过AI处理），False表示不在冷却期
+        """
+        with self._lock:
+            if from_uid not in self._staff_reply_times:
+                return False
+            
+            last_reply_time = self._staff_reply_times[from_uid]
+            elapsed = time.time() - last_reply_time
+            
+            if elapsed < self.COOLDOWN_SECONDS:
+                logger.info(f"买家 {from_uid} 在人工回复冷却期内（剩余 {self.COOLDOWN_SECONDS - elapsed:.1f}秒），跳过AI处理")
+                return True
+            
+            # 冷却期已过，清理记录
+            del self._staff_reply_times[from_uid]
+            return False
 
     async def wait_for_staff_reply(self, from_uid: str, event_id: str, timeout: float, auto_cleanup: bool = True) -> bool:
         """
