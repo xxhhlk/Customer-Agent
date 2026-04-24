@@ -8,8 +8,7 @@ from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePol
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
-                           ScrollArea, FluentIcon as FIF, isDarkTheme)
-                           InfoBadge, ScrollArea, FluentIcon as FIF)
+                           ScrollArea, FluentIcon as FIF, isDarkTheme, InfoBadge)
 from database.db_manager import db_manager
 from Channel.pinduoduo.pdd_login import login_pdd
 from utils.logger_loguru import get_logger

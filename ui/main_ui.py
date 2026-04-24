@@ -6,7 +6,7 @@ from PyQt6.QtGui import QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
-from qfluentwidgets import Action, setTheme, Theme, isDarkTheme
+from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, themeListener
 from utils.logger_loguru import get_logger
 import time
 
@@ -40,6 +40,9 @@ class MainWindow(FluentWindow):
         
         # 自动跟随系统主题（深色/浅色）
         setTheme(Theme.AUTO)
+        
+        # 监听主题切换事件
+        themeListener.themeChanged.connect(self._on_theme_changed)
         
         t = time.perf_counter()
         self.setWindowTitle('拼多多AI客服助手')
@@ -162,11 +165,25 @@ class MainWindow(FluentWindow):
             if isDarkTheme():
                 # 深色模式：使用白色文字
                 title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+                # 设置标题栏按钮颜色
+                self.titleBar.setStyleSheet("""
+                    QWidget {
+                        color: white;
+                    }
+                    QPushButton {
+                        color: white;
+                    }
+                """)
             else:
                 # 浅色模式：使用深色文字
                 title_label.setStyleSheet("color: black; font-size: 14px; font-weight: bold;")
+                self.titleBar.setStyleSheet("")
         except Exception as e:
             self.logger.warning(f"设置标题栏颜色失败: {e}")
+    
+    def _on_theme_changed(self):
+        """主题切换时更新标题栏颜色"""
+        self._update_title_bar_color()
 
 
     def showQRCode(self):
