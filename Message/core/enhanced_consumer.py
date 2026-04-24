@@ -139,7 +139,7 @@ class EnhancedMessageConsumer:
             
             # 检查是否需要监听人工回复（白天时段且配置开启）
             should_watch_staff_reply = False
-            if from_uid:
+            if from_uid and isinstance(from_uid, str):
                 current_hour = time.localtime().tm_hour
                 is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
                 if not is_night:
@@ -151,7 +151,7 @@ class EnhancedMessageConsumer:
             
             # 如果需要监听人工回复，在防抖等待前创建等待事件
             event_id = None
-            if should_watch_staff_reply:
+            if should_watch_staff_reply and isinstance(from_uid, str):
                 event_id = self.staff_reply_manager.start_waiting(from_uid)
                 self.logger.debug(f"提前创建等待事件: {from_uid}, event_id={event_id}")
 
@@ -164,12 +164,12 @@ class EnhancedMessageConsumer:
 
                 if not merged_wrapper:
                     # 消息被合并，清理等待事件并返回
-                    if event_id:
+                    if event_id and isinstance(from_uid, str):
                         self.staff_reply_manager.stop_waiting(from_uid, event_id)
                     return
 
                 # 2. 检查人工回复（使用提前创建的等待事件）
-                if event_id:
+                if event_id and isinstance(from_uid, str):
                     staff_replied = await self._check_staff_reply_with_event(
                         merged_wrapper.context, 
                         from_uid, 
@@ -189,7 +189,7 @@ class EnhancedMessageConsumer:
                 await self._process_message_with_ai_timeout(merged_wrapper)
             finally:
                 # 清理等待事件
-                if event_id:
+                if event_id and isinstance(from_uid, str):
                     self.staff_reply_manager.stop_waiting(from_uid, event_id)
 
         except Exception as e:

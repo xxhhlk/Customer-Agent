@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from qfluentwidgets import (
     FluentIcon, PrimaryPushButton, PushButton,
-    InfoBar, InfoBarPosition
+    InfoBar, InfoBarPosition, SearchLineEdit
 )
 
 if TYPE_CHECKING:
@@ -296,6 +296,10 @@ class KnowledgeUI(QWidget):
         self._page_size = 12  # 每页显示数量
         self._total_pages = 1  # 总页数
 
+        # 搜索相关
+        self._search_query = ""  # 当前搜索关键词
+        self._filtered_docs: List[SimpleDocument] = []  # 搜索过滤后的文档
+
         # 设置大小策略
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -341,6 +345,15 @@ class KnowledgeUI(QWidget):
         refresh_btn.setFixedWidth(self.BUTTON_WIDTH)
         refresh_btn.setFixedHeight(self.BUTTON_HEIGHT)
         self.toolbar.addWidget(refresh_btn)
+
+        # 搜索框
+        self.search_input = SearchLineEdit()
+        self.search_input.setPlaceholderText("搜索知识库...")
+        self.search_input.setFixedWidth(250)
+        self.search_input.setFixedHeight(self.BUTTON_HEIGHT)
+        self.search_input.searchSignal.connect(self._on_search)
+        self.search_input.clearSignal.connect(self._on_clear_search)
+        self.toolbar.addWidget(self.search_input)
 
         self.toolbar.addStretch(1)
 
@@ -1068,3 +1081,113 @@ class KnowledgeUI(QWidget):
 
         except Exception as e:
             logger.error(f"❌ 渲染当前页失败: {e}")
+
+    # ========== 搜索功能方法 ==========
+
+    def _on_search(self, query: str) -> None:
+        """
+        搜索知识库
+
+        Args:
+            query: 搜索关键词
+        """
+        if not query or not query.strip():
+            self._on_clear_search()
+            return
+
+        self._search_query = query.strip().lower()
+
+        # 在所有文档中搜索
+        self._filtered_docs = [
+            doc for doc in self.docs
+            if self._match_document(doc, self._search_query)
+        ]
+
+        # 重置到第一页
+        self._current_page = 1
+
+        # 更新状态标签
+        self.status_label.setText(
+            f"搜索结果: {len(self._filtered_docs)} / {len(self.docs)} 条记录"
+        )
+
+        # 渲染搜索结果
+        self._populate_search_results()
+
+        logger.info(f"🔍 搜索 '{query}' 找到 {len(self._filtered_docs)} 条结果")
+
+    def _on_clear_search(self) -> None:
+        """清除搜索"""
+        self._search_query = ""
+        self._filtered_docs = []
+        self.search_input.clear()
+
+        # 恢复显示所有文档
+        self._current_page = 1
+        self.status_label.setText(f"共 {len(self.docs)} 条记录")
+        self._populate_current_page()
+
+    def _match_document(self, doc: SimpleDocument, query: str) -> bool:
+        """
+        匹配文档是否包含搜索关键词
+
+        Args:
+            doc: 文档对象
+            query: 搜索关键词（已转为小写）
+
+        Returns:
+            是否匹配
+        """
+        # 搜索标题（从 metadata 中获取）
+        title = doc.metadata.get('title') or doc.metadata.get('name') or doc.metadata.get('filename') or doc.name
+        if title and query in str(title).lower():
+            return True
+
+        # 搜索内容
+        if doc.content and query in doc.content.lower():
+            return True
+
+        # 搜索ID
+        if doc.id and query in doc.id.lower():
+            return True
+
+        return False
+
+
+    def _populate_search_results(self) -> None:
+        """渲染搜索结果"""
+        try:
+            # 清空现有卡片
+            self.clear_grid_layout()
+
+            # 如果没有搜索结果
+            if not self._filtered_docs:
+                no_result_label = QLabel(
+                    f"未找到包含「{self._search_query}」的知识\n"
+                    "请尝试其他关键词"
+                )
+                no_result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                no_result_label.setStyleSheet("font-size: 14px; padding: 40px;")
+                self.gridLayout.addWidget(no_result_label, 0, 0)
+                self._layout_initialized = True
+                return
+
+            # 固定列数布局
+            columns = self.DEFAULT_COLUMNS
+
+            # 添加卡片到网格
+            for idx, doc in enumerate(self._filtered_docs):
+                card = KnowledgeCard(self, doc)
+                row = idx // columns
+                col = idx % columns
+                self.gridLayout.addWidget(card, row, col)
+
+            # 设置列等宽拉伸
+            for col in range(columns):
+                self.gridLayout.setColumnStretch(col, 1)
+
+            # 标记布局已初始化
+            self._layout_initialized = True
+
+        except Exception as e:
+            logger.error(f"❌ 渲染搜索结果失败: {e}")

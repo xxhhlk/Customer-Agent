@@ -60,6 +60,18 @@ class LLMConfigCard(CardWidget):
         self.model_name_edit.setPlaceholderText("输入模型名称，如：doubao-seed-1-6-flash-250828")
         form_layout.addRow("模型名称:", self.model_name_edit)
 
+        # 深度思考模式
+        self.thinking_combo = ComboBox()
+        self.thinking_combo.addItems(["禁用", "自动", "启用"])
+        self.thinking_combo.setCurrentIndex(0)  # 默认禁用
+        self.thinking_combo.setToolTip(
+            "深度思考模式配置：\n"
+            "• 禁用：不使用深度思考，响应更快\n"
+            "• 自动：模型自动判断是否需要深度思考\n"
+            "• 启用：强制启用深度思考，适合复杂问题"
+        )
+        form_layout.addRow("深度思考:", self.thinking_combo)
+
         layout.addLayout(form_layout)
 
         # 说明文本
@@ -72,10 +84,17 @@ class LLMConfigCard(CardWidget):
 
     def getConfig(self) -> dict:
         """获取配置"""
+        # 映射下拉框索引到 thinking type
+        thinking_map = {0: "disabled", 1: "auto", 2: "enabled"}
+        thinking_type = thinking_map.get(self.thinking_combo.currentIndex(), "disabled")
+
         return {
             "api_base": self.api_base_edit.text().strip() or "https://ark.cn-beijing.volces.com/api/v3",
             "api_key": self.api_key_edit.text().strip(),
-            "model_name": self.model_name_edit.text().strip()
+            "model_name": self.model_name_edit.text().strip(),
+            "thinking": {
+                "type": thinking_type
+            }
         }
 
     def setConfig(self, config: dict):
@@ -83,6 +102,12 @@ class LLMConfigCard(CardWidget):
         self.api_base_edit.setText(config.get("api_base", "https://ark.cn-beijing.volces.com/api/v3"))
         self.api_key_edit.setText(config.get("api_key", ""))
         self.model_name_edit.setText(config.get("model_name", ""))
+
+        # 设置深度思考模式
+        thinking_config = config.get("thinking", {})
+        thinking_type = thinking_config.get("type", "disabled")
+        thinking_map = {"disabled": 0, "auto": 1, "enabled": 2}
+        self.thinking_combo.setCurrentIndex(thinking_map.get(thinking_type, 0))
 
 
 class EmbedderConfigCard(CardWidget):
@@ -622,7 +647,8 @@ class SettingUI(QFrame):
                 "llm": {
                     "api_base": config.get("llm.api_base", "https://ark.cn-beijing.volces.com/api/v3"),
                     "api_key": config.get("llm.api_key", ""),
-                    "model_name": config.get("llm.model_name", "doubao-seed-1-6-flash-250828")
+                    "model_name": config.get("llm.model_name", "doubao-seed-1-6-flash-250828"),
+                    "thinking": config.get("llm.thinking", {"type": "disabled"})
                 },
                 "embedder": {
                     "api_base": config.get("embedder.api_base", "https://ark.cn-beijing.volces.com/api/v3"),
@@ -664,7 +690,8 @@ class SettingUI(QFrame):
             "llm": {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
                 "api_key": "",
-                "model_name": "doubao-seed-1-6-flash-250828"
+                "model_name": "doubao-seed-1-6-flash-250828",
+                "thinking": {"type": "disabled"}
             },
             "embedder": {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -699,7 +726,8 @@ class SettingUI(QFrame):
             "llm": config_data.get("llm", {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
                 "api_key": "",
-                "model_name": "doubao-seed-1-6-flash-250828"
+                "model_name": "doubao-seed-1-6-flash-250828",
+                "thinking": {"type": "disabled"}
             }),
             "embedder": config_data.get("embedder", {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
