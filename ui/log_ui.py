@@ -322,30 +322,69 @@ class LogTableView(QTableView):
         self.setColumnWidth(3, 200)  # 文件
         # 消息列自动拉伸
 
-        # 设置样式（移除硬编码背景色，使用主题感知）
-        self.setStyleSheet("""
-            QTableView {
-                alternate-background-color: rgba(0, 0, 0, 0.03);
-                gridline-color: rgba(0, 0, 0, 0.1);
-                selection-background-color: #007bff;
-                selection-color: white;
-            }
-            QTableView::item {
-                padding: 4px;
-                border: none;
-            }
-            QTableView::item:selected {
-                background-color: #007bff;
-                color: white;
-            }
-            QHeaderView::section {
-                padding: 8px;
-                border: none;
-                border-right: 1px solid rgba(0, 0, 0, 0.1);
-                border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-                font-weight: bold;
-            }
-        """)
+        # 设置样式（支持深色模式）
+        self._update_table_style()
+
+    def _update_table_style(self):
+        """更新表格样式以适配当前主题"""
+        if isDarkTheme():
+            self.setStyleSheet("""
+                QTableView {
+                    background-color: #2d2d2d;
+                    alternate-background-color: #353535;
+                    gridline-color: rgba(255, 255, 255, 0.1);
+                    selection-background-color: #007bff;
+                    selection-color: white;
+                    color: #ffffff;
+                }
+                QTableView::item {
+                    padding: 4px;
+                    border: none;
+                    color: #ffffff;
+                }
+                QTableView::item:selected {
+                    background-color: #007bff;
+                    color: white;
+                }
+                QHeaderView::section {
+                    background-color: #1e1e1e;
+                    color: #ffffff;
+                    padding: 8px;
+                    border: none;
+                    border-right: 1px solid rgba(255, 255, 255, 0.1);
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                    font-weight: bold;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QTableView {
+                    background-color: #ffffff;
+                    alternate-background-color: rgba(0, 0, 0, 0.03);
+                    gridline-color: rgba(0, 0, 0, 0.1);
+                    selection-background-color: #007bff;
+                    selection-color: white;
+                    color: #000000;
+                }
+                QTableView::item {
+                    padding: 4px;
+                    border: none;
+                    color: #000000;
+                }
+                QTableView::item:selected {
+                    background-color: #007bff;
+                    color: white;
+                }
+                QHeaderView::section {
+                    background-color: #f0f0f0;
+                    color: #000000;
+                    padding: 8px;
+                    border: none;
+                    border-right: 1px solid rgba(0, 0, 0, 0.1);
+                    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+                    font-weight: bold;
+                }
+            """)
 
     def set_highlight(self, text: str):
         """设置搜索高亮"""
@@ -646,6 +685,8 @@ class LogUI(QFrame):
                     table_palette.setColor(QPalette.ColorRole.Text, QColor("#000000"))
                 self.log_table.setPalette(table_palette)
                 self.log_table.setAutoFillBackground(True)
+                # 更新表格样式（支持深色模式）
+                self.log_table._update_table_style()
                         
         except Exception as e:
             self.logger.warning(f"更新标签样式失败: {e}")
