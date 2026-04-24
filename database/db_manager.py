@@ -808,6 +808,7 @@ class DatabaseManager:
                 # 优先使用关键词自身的回复，如果没有则使用分组的回复
                 reply_content = kw.reply_content
                 transfer_to_human = bool(kw.transfer_to_human)
+                pass_to_ai = False
                 
                 # 如果关键词没有单独设置回复，从分组获取
                 if kw.group:
@@ -815,6 +816,7 @@ class DatabaseManager:
                         reply_content = kw.group.reply
                     if not transfer_to_human:
                         transfer_to_human = bool(kw.group.is_transfer)
+                    pass_to_ai = bool(kw.group.pass_to_ai)
                 
                 result.append({
                     'id': kw.id,
@@ -824,6 +826,7 @@ class DatabaseManager:
                     'match_type': kw.match_type,
                     'reply_content': reply_content,
                     'transfer_to_human': transfer_to_human,
+                    'pass_to_ai': pass_to_ai,
                     'priority': kw.priority,
                     'created_at': kw.created_at.isoformat() if kw.created_at else None,
                     'updated_at': kw.updated_at.isoformat() if kw.updated_at else None

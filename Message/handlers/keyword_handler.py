@@ -94,6 +94,7 @@ class KeywordDetectionHandler(BaseHandler):
                     'match_type': kw.get('match_type', 'partial'),
                     'reply_content': kw.get('reply_content'),
                     'transfer_to_human': kw.get('transfer_to_human', False),
+                    'pass_to_ai': kw.get('pass_to_ai', False),
                     'priority': kw.get('priority', 0)
                 }
         
@@ -133,6 +134,12 @@ class KeywordDetectionHandler(BaseHandler):
                 sender = SendMessage(shop_id, user_id)
                 sender.send_text(from_uid, reply_content)
                 self.logger.info(f"已发送关键词回复: {reply_content}")
+                
+                # 如果 pass_to_ai 为 True，发送回复后继续传递给AI
+                if matched.get('pass_to_ai', False):
+                    self.logger.info(f"关键词 pass_to_ai=True，继续传递给AI处理")
+                    return False
+                
                 return True
             
             self.logger.warning(f"关键词匹配成功但没有回复内容: {matched.get('keyword')}")
