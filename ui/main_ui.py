@@ -167,11 +167,36 @@ class MainWindow(FluentWindow):
             if title_label is None:
                 return
             
-            # 只设置标题文字颜色，不干扰按钮的主题适配
+            # 设置标题文字颜色
             if isDarkTheme():
                 title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+                
+                # 设置标题栏按钮样式，确保在深色模式下图标清晰可见
+                self.titleBar.setStyleSheet("""
+                    QWidget {
+                        background-color: transparent;
+                    }
+                    QPushButton {
+                        color: white;
+                        background-color: transparent;
+                        border: none;
+                        border-radius: 0px;
+                        padding: 0px;
+                        margin: 0px;
+                        min-width: 46px;
+                        min-height: 32px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(255, 255, 255, 0.1);
+                    }
+                    QPushButton:pressed {
+                        background-color: rgba(255, 255, 255, 0.05);
+                    }
+                """)
             else:
                 title_label.setStyleSheet("color: black; font-size: 14px; font-weight: bold;")
+                # 浅色模式使用默认样式
+                self.titleBar.setStyleSheet("")
         except Exception as e:
             self.logger.warning(f"设置标题栏颜色失败: {e}")
     

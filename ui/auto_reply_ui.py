@@ -194,10 +194,7 @@ class AutoReplyManager:
                 if thread.is_running():
                     thread.stop()
             
-            # 等待所有线程结束
-            for thread in self.running_accounts.values():
-                thread.wait(5000) # 等待5秒
-            
+            # 不等待线程结束，直接清理（线程会自动退出）
             self.running_accounts.clear()
             self.logger.info("所有自动回复任务已停止")
             

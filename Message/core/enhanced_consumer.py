@@ -184,6 +184,23 @@ class EnhancedMessageConsumer:
                     if staff_replied:
                         self.logger.info(f"User {user_key} staff replied, skip AI")
                         return
+                    else:
+                        # 等待超时，检查队列中是否有冷却期内被跳过的消息
+                        user_queue = self._user_queues.get(user_key)
+                        if user_queue:
+                            pending_messages = []
+                            while True:
+                                try:
+                                    pending_wrapper = user_queue.get_nowait()
+                                    pending_messages.append(pending_wrapper)
+                                except asyncio.QueueEmpty:
+                                    break
+                            
+                            if pending_messages:
+                                self.logger.info(f"Found {len(pending_messages)} pending messages, merging...")
+                                # 合并消息
+                                all_messages = [merged_wrapper] + pending_messages
+                                merged_wrapper = self._merge_messages(all_messages)
                 else:
                     # 夜间或配置关闭，直接处理
                     staff_replied = await self._check_staff_reply(merged_wrapper.context)
