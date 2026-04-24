@@ -286,6 +286,7 @@ class KnowledgeUI(QWidget):
         self.knowledge_manager: Optional[KnowledgeManager] = None
         self.docs: List[SimpleDocument] = []
         self._layout_initialized = False
+        self._updating_styles = False  # 防止递归更新样式
 
         # 数据缓存
         self._cached_docs: List[SimpleDocument] = []
@@ -325,85 +326,93 @@ class KnowledgeUI(QWidget):
 
     def _update_label_styles(self):
         """更新所有标签样式以适配当前主题"""
-        is_dark = isDarkTheme()
+        # 防止递归调用
+        if self._updating_styles:
+            return
         
-        # 更新整体背景色
-        if is_dark:
-            self.setStyleSheet("""
-                QWidget#Knowledge-UI {
-                    background-color: #1e1e1e;
-                }
-            """)
-        else:
-            self.setStyleSheet("")
-        
-        # 更新状态标签
-        if is_dark:
-            self.status_label.setStyleSheet("font-size: 12px; color: #cccccc;")
-            self.page_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
-            self.total_label.setStyleSheet("font-size: 12px; color: #cccccc;")
-            self.page_size_label.setStyleSheet("font-size: 12px; color: #cccccc;")
-            self.loading_icon.setStyleSheet("""
-                QLabel {
-                    color: #ffffff;
-                    font-size: 24px;
-                    font-weight: normal;
-                }
-            """)
-            self.loading_text.setStyleSheet("""
-                QLabel {
-                    color: #ffffff;
-                    font-size: 14px;
-                    font-weight: bold;
-                }
-            """)
-            self.loading_dots.setStyleSheet("""
-                QLabel {
-                    color: #ffffff;
-                    font-size: 14px;
-                    font-weight: bold;
-                }
-            """)
-            self.tip_label.setStyleSheet("""
-                QLabel {
-                    color: #ffffff;
-                    border: 1px solid rgba(255, 193, 7, 0.5);
-                    border-radius: 4px;
-                    padding: 8px 12px;
-                    font-size: 13px;
-                }
-            """)
-        else:
-            self.status_label.setStyleSheet("font-size: 12px;")
-            self.page_label.setStyleSheet("font-size: 13px; font-weight: bold;")
-            self.total_label.setStyleSheet("font-size: 12px;")
-            self.page_size_label.setStyleSheet("font-size: 12px;")
-            self.loading_icon.setStyleSheet("""
-                QLabel {
-                    font-size: 24px;
-                    font-weight: normal;
-                }
-            """)
-            self.loading_text.setStyleSheet("""
-                QLabel {
-                    font-size: 14px;
-                    font-weight: bold;
-                }
-            """)
-            self.loading_dots.setStyleSheet("""
-                QLabel {
-                    font-size: 14px;
-                    font-weight: bold;
-                }
-            """)
-            self.tip_label.setStyleSheet("""
-                QLabel {
-                    border: 1px solid rgba(255, 193, 7, 0.5);
-                    border-radius: 4px;
-                    padding: 8px 12px;
-                    font-size: 13px;
-                }
-            """)
+        self._updating_styles = True
+        try:
+            is_dark = isDarkTheme()
+            
+            # 更新整体背景色
+            if is_dark:
+                self.setStyleSheet("""
+                    QWidget#Knowledge-UI {
+                        background-color: #1e1e1e;
+                    }
+                """)
+            else:
+                self.setStyleSheet("")
+            
+            # 更新状态标签
+            if is_dark:
+                self.status_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+                self.page_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
+                self.total_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+                self.page_size_label.setStyleSheet("font-size: 12px; color: #cccccc;")
+                self.loading_icon.setStyleSheet("""
+                    QLabel {
+                        color: #ffffff;
+                        font-size: 24px;
+                        font-weight: normal;
+                    }
+                """)
+                self.loading_text.setStyleSheet("""
+                    QLabel {
+                        color: #ffffff;
+                        font-size: 14px;
+                        font-weight: bold;
+                    }
+                """)
+                self.loading_dots.setStyleSheet("""
+                    QLabel {
+                        color: #ffffff;
+                        font-size: 14px;
+                        font-weight: bold;
+                    }
+                """)
+                self.tip_label.setStyleSheet("""
+                    QLabel {
+                        color: #ffffff;
+                        border: 1px solid rgba(255, 193, 7, 0.5);
+                        border-radius: 4px;
+                        padding: 8px 12px;
+                        font-size: 13px;
+                    }
+                """)
+            else:
+                self.status_label.setStyleSheet("font-size: 12px;")
+                self.page_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+                self.total_label.setStyleSheet("font-size: 12px;")
+                self.page_size_label.setStyleSheet("font-size: 12px;")
+                self.loading_icon.setStyleSheet("""
+                    QLabel {
+                        font-size: 24px;
+                        font-weight: normal;
+                    }
+                """)
+                self.loading_text.setStyleSheet("""
+                    QLabel {
+                        font-size: 14px;
+                        font-weight: bold;
+                    }
+                """)
+                self.loading_dots.setStyleSheet("""
+                    QLabel {
+                        font-size: 14px;
+                        font-weight: bold;
+                    }
+                """)
+                self.tip_label.setStyleSheet("""
+                    QLabel {
+                        border: 1px solid rgba(255, 193, 7, 0.5);
+                        border-radius: 4px;
+                        padding: 8px 12px;
+                        font-size: 13px;
+                    }
+                """)
+        finally:
+            self._updating_styles = False
 
     def _init_ui(self) -> None:
         """初始化UI组件"""

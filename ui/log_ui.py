@@ -573,6 +573,9 @@ class LogUI(QFrame):
 
         # 设置对象名（用于导航）
         self.setObjectName('log-ui')
+        
+        # 防止递归更新样式
+        self._updating_styles = False
 
         self.setupUI()
         self.setupLogHandler()
@@ -588,6 +591,11 @@ class LogUI(QFrame):
     
     def _update_label_styles(self):
         """更新标签样式以适配当前主题"""
+        # 防止递归调用
+        if self._updating_styles:
+            return
+        
+        self._updating_styles = True
         try:
             if isDarkTheme():
                 # 更新整体背景色
@@ -605,6 +613,8 @@ class LogUI(QFrame):
                 self.title_label.setStyleSheet("")
         except Exception as e:
             self.logger.warning(f"更新标签样式失败: {e}")
+        finally:
+            self._updating_styles = False
         
     def setupUI(self):
         """设置UI"""
