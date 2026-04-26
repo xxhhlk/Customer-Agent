@@ -162,10 +162,13 @@ class EnhancedMessageConsumer:
                 self.logger.debug(f"提前创建等待事件: {from_uid}, event_id={event_id}")
 
             try:
-                # 1. 防抖合并
+                # 1. 防抖合并（同时监听人工回复事件）
                 merged_wrapper = await self.debounce_processor.process_with_debounce(
                     wrapper, 
-                    self._user_queues.get(user_key)
+                    self._user_queues.get(user_key),
+                    self.staff_reply_manager if should_watch_staff_reply else None,
+                    from_uid if isinstance(from_uid, str) else None,
+                    event_id
                 )
 
                 if not merged_wrapper:

@@ -30,7 +30,10 @@ class DebounceProcessorAdapter:
     async def process_with_debounce(
         self, 
         wrapper: MessageWrapper, 
-        user_queue: Optional[asyncio.Queue] = None
+        user_queue: Optional[asyncio.Queue] = None,
+        staff_reply_manager=None,
+        from_uid=None,
+        event_id=None
     ) -> Optional[MessageWrapper]:
         """
         带防抖的消息处理
@@ -38,9 +41,12 @@ class DebounceProcessorAdapter:
         Args:
             wrapper: 消息封装
             user_queue: 用户队列（用于收集后续消息）
+            staff_reply_manager: 人工回复事件管理器
+            from_uid: 用户ID
+            event_id: 事件ID
 
         Returns:
-            合并后的消息封装，如果被合并则返回 None
+            合并后的消息封装，如果被合并则返回 None，如果人工回复则返回 None
         """
         try:
             user_key = self._extract_user_id(wrapper.context)
@@ -59,8 +65,15 @@ class DebounceProcessorAdapter:
             # 更新最后消息时间
             self._last_message_time[user_key] = current_time
 
-            # 等待防抖窗口，收集后续消息
-            merged_wrapper = await self._wait_and_merge(wrapper, user_queue, debounce_seconds)
+            # 等待防抖窗口，收集后续消息，同时监听人工回复
+            merged_wrapper = await self._wait_and_merge(
+                wrapper, 
+                user_queue, 
+                debounce_seconds,
+                staff_reply_manager,
+                from_uid,
+                event_id
+            )
 
             return merged_wrapper
 
@@ -72,12 +85,54 @@ class DebounceProcessorAdapter:
         self, 
         wrapper: MessageWrapper, 
         user_queue: Optional[asyncio.Queue],
-        debounce_seconds: float
-    ) -> MessageWrapper:
-        """等待防抖窗口并合并消息"""
+        debounce_seconds: float,
+        staff_reply_manager=None,
+        from_uid=None,
+        event_id=None
+    ) -> Optional[MessageWrapper]:
+        """等待防抖窗口并合并消息，同时监听人工回复事件"""
         try:
-            # 等待防抖时间
-            await asyncio.sleep(debounce_seconds)
+            # 如果提供了人工回复管理器和事件ID，则同时监听人工回复
+            if staff_reply_manager and from_uid and event_id:
+                # 创建防抖超时任务
+                debounce_task = asyncio.create_task(asyncio.sleep(debounce_seconds))
+                
+                # 创建人工回复监听任务
+                staff_reply_task = asyncio.create_task(
+                    staff_reply_manager.wait_for_staff_reply(from_uid, event_id, timeout=debounce_seconds)
+                )
+                
+                # 等待任一任务完成
+                done, pending = await asyncio.wait(
+                    {debounce_task, staff_reply_task},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                # 取消未完成的任务
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                
+                # 检查是哪个任务完成了
+                if staff_reply_task in done:
+                    # 人工回复了，检查结果
+                    try:
+                        staff_replied = staff_reply_task.result()
+                        if staff_replied:
+                            self.logger.info(f"人工客服在防抖期间回复了 {from_uid}，取消自动回复")
+                            # 清理等待事件
+                            staff_reply_manager.stop_waiting(from_uid, event_id)
+                            return None  # 返回None表示取消自动回复
+                    except Exception as e:
+                        self.logger.error(f"检查人工回复结果时出错: {e}")
+                
+                # 如果是防抖超时完成，继续下面的正常流程
+            else:
+                # 没有提供人工回复管理器，使用原来的简单等待方式
+                await asyncio.sleep(debounce_seconds)
 
             # 如果没有队列，直接返回原消息
             if not user_queue:
@@ -103,6 +158,12 @@ class DebounceProcessorAdapter:
 
         except Exception as e:
             self.logger.error(f"Wait and merge error: {e}")
+            # 如果出现异常，确保清理等待事件
+            if staff_reply_manager and from_uid and event_id:
+                try:
+                    staff_reply_manager.stop_waiting(from_uid, event_id)
+                except Exception:
+                    pass
             return wrapper
 
     def _merge_messages(self, wrappers: list) -> MessageWrapper:

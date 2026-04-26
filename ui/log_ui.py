@@ -667,24 +667,28 @@ class LogUI(QFrame):
             self.setAutoFillBackground(True)
             
             # 同时设置主布局容器的背景色
-            if hasattr(self, 'main_layout'):
-                for i in range(self.main_layout.count()):
-                    item = self.main_layout.itemAt(i)
+            if hasattr(self, 'log_display'):
+                layout = self.log_display.layout()
+                if layout is not None:
+                    for i in range(layout.count()):
+                        item = layout.itemAt(i)
                     if item and item.widget():
                         widget = item.widget()
-                        widget_palette = widget.palette()
-                        if isDarkTheme():
-                            widget_palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
-                            widget_palette.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
-                        else:
-                            widget_palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
-                            widget_palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
-                        widget.setPalette(widget_palette)
-                        widget.setAutoFillBackground(True)
+                        if widget is not None:
+                            widget_palette = widget.palette()
+                            if isDarkTheme():
+                                widget_palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e1e"))
+                                widget_palette.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
+                            else:
+                                widget_palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
+                                widget_palette.setColor(QPalette.ColorRole.Base, QColor("#f5f5f5"))
+                            widget.setPalette(widget_palette)
+                            widget.setAutoFillBackground(True)
             
             # 设置日志表格背景色
-            if hasattr(self, 'log_table'):
-                table_palette = self.log_table.palette()
+            if hasattr(self, 'log_display') and hasattr(self.log_display, 'log_table'):
+                log_table = self.log_display.log_table
+                table_palette = log_table.palette()
                 if isDarkTheme():
                     table_palette.setColor(QPalette.ColorRole.Base, QColor("#2d2d2d"))
                     table_palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#353535"))
@@ -693,10 +697,10 @@ class LogUI(QFrame):
                     table_palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
                     table_palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#f5f5f5"))
                     table_palette.setColor(QPalette.ColorRole.Text, QColor("#000000"))
-                self.log_table.setPalette(table_palette)
-                self.log_table.setAutoFillBackground(True)
+                log_table.setPalette(table_palette)
+                log_table.setAutoFillBackground(True)
                 # 更新表格样式（支持深色模式）
-                self.log_table._update_table_style()
+                log_table._update_table_style()
                         
         except Exception as e:
             self.logger.warning(f"更新标签样式失败: {e}")

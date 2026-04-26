@@ -451,8 +451,9 @@ class GroupListWidget(QListWidget):
         """双击编辑分组"""
         group_id = item.data(Qt.ItemDataRole.UserRole)
         # 通过父组件处理编辑
-        if self.parent() and hasattr(self.parent(), 'onEditGroup'):
-            self.parent().onEditGroup(group_id)
+        parent = self.parent()
+        if parent and hasattr(parent, 'onEditGroup'):
+            parent.onEditGroup(group_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     def showContextMenu(self, position):
         """显示右键菜单"""
@@ -474,13 +475,15 @@ class GroupListWidget(QListWidget):
 
     def onEditGroup(self, group_id: int):
         """编辑分组"""
-        if self.parent() and hasattr(self.parent(), 'onEditGroup'):
-            self.parent().onEditGroup(group_id)
+        parent = self.parent()
+        if parent and hasattr(parent, 'onEditGroup'):
+            parent.onEditGroup(group_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     def onDeleteGroup(self, group_id: int):
         """删除分组"""
-        if self.parent() and hasattr(self.parent(), 'onDeleteGroup'):
-            self.parent().onDeleteGroup(group_id)
+        parent = self.parent()
+        if parent and hasattr(parent, 'onDeleteGroup'):
+            parent.onDeleteGroup(group_id)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class KeywordTableWidget(TableWidget):
@@ -907,7 +910,7 @@ class KeywordManagerWidget(QFrame):
                 # 选中新分组
                 for i in range(self.group_list.count()):
                     item = self.group_list.item(i)
-                    if item.data(Qt.ItemDataRole.UserRole) == group_id:
+                    if item and item.data(Qt.ItemDataRole.UserRole) == group_id:
                         self.group_list.setCurrentItem(item)
                         self.onGroupSelected(group_id, data['group_name'])
                         break

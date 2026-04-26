@@ -664,7 +664,7 @@ class AutoReplyUI(QFrame):
                     continue
                 widget = item.widget()
                 if widget and hasattr(widget, 'cleanup'):
-                    widget.cleanup()
+                    widget.cleanup()  # pyright: ignore[reportAttributeAccessIssue]
         except Exception as e:
             self.logger.error(f"清理自动回复界面失败: {e}")
     
