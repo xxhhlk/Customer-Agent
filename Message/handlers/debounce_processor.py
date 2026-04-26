@@ -1,16 +1,19 @@
 """
-用户消息顺序处理器 - 支持防抖合并 + AI超时中断重发 + 夜间延迟
+用户消息顺序处理器 - 支持防抖合并 + AI超时中断重发 + 夜间延迟 + 频率限制
 
 基于上游新架构重实现
 """
 
 import time
 import asyncio
+import random
 from datetime import datetime, time as dt_time
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from bridge.context import Context
 from utils.logger_loguru import get_logger
+from utils.rate_limiter import UserRateLimiterManager
+from config import config
 
 logger = get_logger(__name__)
 
@@ -24,7 +27,7 @@ class PendingMessage:
 
 
 class UserSequentialProcessor:
-    """用户消息顺序处理器 - 支持防抖合并 + AI超时中断重发 + 夜间延迟"""
+    """用户消息顺序处理器 - 支持防抖合并 + AI超时中断重发 + 夜间延迟 + 频率限制"""
 
     # 防抖等待时间（秒）
     DEBOUNCE_SECONDS = 8
@@ -38,6 +41,26 @@ class UserSequentialProcessor:
     REPLY_TIMEOUT = 165.0          # AI回复总超时（秒）
     CANCEL_WINDOW = 25.0           # 超时中断等待窗口（秒）
     MIN_REPLY_TIMEOUT = 120.0      # 取消重发后的最低超时（秒）
+
+    # 类级别的频率限制器管理器（所有用户共享）
+    _rate_limiter_manager: Optional[UserRateLimiterManager] = None
+
+    @classmethod
+    def _get_rate_limiter_manager(cls) -> UserRateLimiterManager:
+        """获取频率限制器管理器（懒加载）"""
+        if cls._rate_limiter_manager is None:
+            rate_limit_config = config.get_rate_limit_config()
+            window_seconds = int(rate_limit_config['window_hours'] * 3600)
+            max_requests = rate_limit_config['max_requests']
+            cls._rate_limiter_manager = UserRateLimiterManager(
+                window_seconds=window_seconds,
+                max_requests=max_requests
+            )
+            logger.info(
+                f"初始化频率限制器: 窗口={rate_limit_config['window_hours']}小时, "
+                f"最大请求={max_requests}次"
+            )
+        return cls._rate_limiter_manager
 
     def __init__(self, user_id: str, process_func):
         """
@@ -248,6 +271,27 @@ class UserSequentialProcessor:
         except Exception as e:
             self.logger.warning(f"取消窗口等待异常: {e}，继续AI处理")
 
+        # ========== 频率限制检查 ==========
+        try:
+            rate_limiter = self._get_rate_limiter_manager()
+            is_allowed = await rate_limiter.is_allowed(self.user_id)
+
+            if not is_allowed:
+                # 超过频率限制，发送兜底回复
+                self.logger.warning(f"用户 {self.user_id} 超过频率限制，发送兜底回复")
+                return await self._send_fallback_reply(context, metadata)
+
+            # 记录本次请求
+            await rate_limiter.record_request(self.user_id)
+            status = await rate_limiter.get_user_status(self.user_id)
+            self.logger.debug(
+                f"频率检查通过，剩余次数: {status['remaining']}/{status['request_count']}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"频率限制检查异常: {e}，继续AI处理")
+        # ========== 频率限制检查结束 ==========
+
         # 取消窗口结束，开始AI处理
         remaining_timeout = max(timeout - self.CANCEL_WINDOW, 30.0)
 
@@ -260,6 +304,73 @@ class UserSequentialProcessor:
         except asyncio.TimeoutError:
             self.logger.error(f"AI回复超时（剩余时间: {remaining_timeout:.0f}秒）")
             raise
+
+    async def _send_fallback_reply(self, context: Context, metadata: Dict[str, Any]) -> bool:
+        """发送兜底回复（频率限制触发时）
+
+        Args:
+            context: 消息上下文
+            metadata: 消息元数据
+
+        Returns:
+            bool: 是否发送成功
+        """
+        try:
+            # 从配置获取兜底回复列表
+            rate_limit_config = config.get_rate_limit_config()
+            fallback_replies = rate_limit_config.get('fallback_reply', [])
+
+            # 如果没有配置兜底回复，使用默认回复
+            if not fallback_replies:
+                fallback_replies = [
+                    "亲，感谢您的咨询！客服正在为您处理，请稍等片刻。",
+                    "您好，客服稍后会为您解答，请耐心等待~",
+                    "收到您的消息啦，客服马上就来~"
+                ]
+
+            # 随机选择一条兜底回复
+            reply_text = random.choice(fallback_replies)
+            self.logger.info(f"发送兜底回复: {reply_text}")
+
+            # 发送回复
+            return await self._send_reply(context, reply_text, metadata)
+
+        except Exception as e:
+            self.logger.error(f"发送兜底回复失败: {e}")
+            return True  # 返回True避免重复处理
+
+    async def _send_reply(self, context: Context, reply: str, metadata: Dict[str, Any]) -> bool:
+        """发送回复消息
+
+        Args:
+            context: 消息上下文
+            reply: 回复内容
+            metadata: 消息元数据
+
+        Returns:
+            bool: 是否发送成功
+        """
+        try:
+            # 从metadata中提取必要信息
+            shop_id = metadata.get('shop_id')
+            user_id = metadata.get('user_id')
+            from_uid = metadata.get('from_uid')
+
+            if not shop_id or not user_id or not from_uid:
+                self.logger.warning(f"缺少发送信息: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
+                return False
+
+            # 尝试发送消息
+            from Channel.pinduoduo.utils.API.send_message import SendMessage
+            sender = SendMessage(str(shop_id), str(user_id))
+            result = sender.send_text(str(from_uid), reply)
+            if isinstance(result, dict) and result.get("success"):
+                return True
+            return False
+
+        except Exception as e:
+            self.logger.error(f"发送回复失败: {e}")
+            return False
 
     async def stop(self) -> None:
         """停止处理器"""
