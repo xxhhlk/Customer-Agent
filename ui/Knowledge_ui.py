@@ -651,6 +651,15 @@ class KnowledgeUI(QWidget):
                 logger.error(f"❌ 知识库管理器初始化失败: {e}")
                 self.knowledge_manager = None
 
+    def cleanup(self):
+        """程序退出时清理所有Worker线程"""
+        worker_attrs = ['_load_worker', '_add_worker', '_import_worker', '_delete_worker']
+        for attr in worker_attrs:
+            worker = getattr(self, attr, None)
+            if worker and worker.isRunning():
+                worker.requestInterruption()
+                worker.wait(3000)
+
     def showEvent(self, event) -> None:
         """窗口显示事件，确保布局正确"""
         super().showEvent(event)

@@ -194,34 +194,41 @@ class AutoReplyManager:
     
     def stop_all(self):
         """停止所有自动回复"""
-        # 防止重复调用
+        # 防止重复调用（shutdown场景，不需要重置标志）
         if self._stopping:
-            self.logger.debug("stop_all()已在执行中，跳过重复调用")
+            self.logger.debug("stop_all()已执行过，跳过重复调用")
             return
             
         self._stopping = True
         try:
             threads = list(self.running_accounts.values())
+            if not threads:
+                self.logger.info("没有正在运行的自动回复任务")
+                return
+                
+            self.logger.info(f"正在停止 {len(threads)} 个自动回复线程...")
+            
             # 先全部发起 stop
             for thread in threads:
                 if thread.is_running():
                     thread.stop()
             
             # 等待一小段时间，让线程有机会开始清理
-            time.sleep(0.1)
+            time.sleep(0.2)
             
-            # 然后统一等待线程结束（每个最多等5秒，并行退出总耗时很短）
+            # 然后统一等待线程结束
             for thread in threads:
                 if thread.is_running():
                     if not thread.wait(5000):
-                        self.logger.warning(f"线程未在5秒内结束，强制忽略: {thread.account_data.get('username', 'unknown')}")
+                        self.logger.warning(f"线程未在5秒内结束: {thread.objectName()}")
+                    else:
+                        self.logger.debug(f"线程已正常结束: {thread.objectName()}")
+            
             self.running_accounts.clear()
             self.logger.info("所有自动回复任务已停止")
             
         except Exception as e:
             self.logger.error(f"停止所有自动回复失败: {e}")
-        finally:
-            self._stopping = False
 
 
 class AutoReplyThread(QThread):
@@ -236,7 +243,9 @@ class AutoReplyThread(QThread):
         self.channel = None
         self.logger = get_logger("AutoReplyThread")
         self.loop = None
-        self._stop_requested = False  # 添加停止请求标志
+        self._stop_requested = False
+        # 设置线程对象名，便于调试
+        self.setObjectName(f"AutoReplyThread-{account_data.get('username', 'unknown')}")
         
     def run(self):
         """启动后端 PDDChannel 引擎"""
@@ -249,6 +258,8 @@ class AutoReplyThread(QThread):
             
             # 创建 PDDChannel 实例
             self.channel = PDDChannel()
+            # 将事件循环引用传递给PDDChannel，使其能线程安全地操作事件循环
+            self.channel.loop = self.loop
             
             # 定义成功和失败的回调函数
             def on_success():
@@ -272,6 +283,9 @@ class AutoReplyThread(QThread):
                 self.loop.run_until_complete(task)
             except asyncio.CancelledError:
                 self.logger.debug("主任务被取消")
+            except RuntimeError:
+                # loop.stop() 被调用时会触发此异常
+                self.logger.debug("事件循环被外部停止")
             except Exception as e:
                 self.logger.error(f"主任务执行出错: {e}")
 
@@ -283,36 +297,45 @@ class AutoReplyThread(QThread):
             if self.loop and not self.loop.is_closed():
                 try:
                     # 取消所有未完成的任务
-                    for task in asyncio.all_tasks(self.loop):
+                    pending = asyncio.all_tasks(self.loop)
+                    for task in pending:
                         if not task.done():
                             task.cancel()
                     
-                    # 运行事件循环一小段时间，让取消的任务完成
-                    try:
-                        self.loop.run_until_complete(asyncio.sleep(0.1))
-                    except Exception:
-                        pass
+                    # 运行事件循环让取消的任务完成清理
+                    if pending:
+                        try:
+                            self.loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True)
+                            )
+                        except Exception:
+                            pass
                     
                     # 关闭事件循环
                     self.loop.close()
+                    self.logger.debug("事件循环已关闭")
                 except Exception as e:
                     self.logger.error(f"关闭事件循环失败: {e}")
 
     def stop(self):
-        """停止后端引擎"""
+        """停止后端引擎 - 线程安全版本"""
         try:
             self._stop_requested = True
             self.requestInterruption()
             
+            # 通知channel停止（设置_stop_event）
             if self.channel:
                 self.channel.request_stop()
             
-            # 停止事件循环（如果存在且仍在运行）
+            # 线程安全地停止事件循环
+            # call_soon_threadsafe 是唯一安全的跨线程事件循环操作
             if self.loop and not self.loop.is_closed():
-                # 取消所有未完成的任务
-                for task in asyncio.all_tasks(self.loop):
-                    if not task.done():
-                        task.cancel()
+                try:
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                    self.logger.debug("已请求停止事件循环")
+                except RuntimeError:
+                    # 事件循环已经关闭
+                    pass
 
         except Exception as e:
             self.logger.error(f"停止自动回复线程失败: {e}")

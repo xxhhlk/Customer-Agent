@@ -338,6 +338,15 @@ class UserManagerWidget(QFrame):
         self._loaded_once = False
         self.setupUI()
         QTimer.singleShot(300, self._maybeLoadOnShow)
+    
+    def cleanup(self):
+        """程序退出时清理所有线程"""
+        thread_attrs = ['login_thread', 'add_account_thread']
+        for attr in thread_attrs:
+            thread = getattr(self, attr, None)
+            if thread and thread.isRunning():
+                thread.requestInterruption()
+                thread.wait(3000)
         
     def showEvent(self, event):
         super().showEvent(event)

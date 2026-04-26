@@ -16,6 +16,7 @@ import json
 from websockets import exceptions as ws_exceptions
 import asyncio
 import time
+import threading
 from typing import Optional, Dict, List, Set, Any, Callable, Union
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -77,6 +78,8 @@ class PDDChannel(Channel):
         self.status_manager = status_manager  # pyright: ignore[reportAttributeAccessIssue]
 
         self._stop_event: Optional[asyncio.Event] = None
+        self._threading_stop_event = threading.Event()  # 线程安全的停止事件
+        self.loop: Optional[asyncio.AbstractEventLoop] = None  # 事件循环引用（由AutoReplyThread设置）
         self.base_url = "wss://m-ws.pinduoduo.com/"
         self.ws: Any = None
         self.businessHours = config.get("businessHours")
@@ -363,8 +366,8 @@ class PDDChannel(Channel):
         带重连机制的WebSocket连接
         """
         for attempt in range(self.reconnect_config.max_attempts):
-            # 检查是否收到停止信号
-            if self._stop_event and self._stop_event.is_set():
+            # 检查是否收到停止信号（同时检查asyncio.Event和threading.Event）
+            if (self._stop_event and self._stop_event.is_set()) or self._threading_stop_event.is_set():
                 self.logger.info(f"收到停止信号，取消重连: {shop_id}-{username}")
                 self.status_manager.update_status(shop_id, user_id, username, ConnectionState.DISCONNECTED)
                 return
@@ -381,7 +384,7 @@ class PDDChannel(Channel):
 
             except Exception as e:
                 # 检查是否是因为停止事件导致的异常
-                if self._stop_event and self._stop_event.is_set():
+                if (self._stop_event and self._stop_event.is_set()) or self._threading_stop_event.is_set():
                     self.logger.info(f"连接被停止信号中断: {shop_id}-{username}")
                     self.status_manager.update_status(shop_id, user_id, username, ConnectionState.DISCONNECTED)
                     return
@@ -405,7 +408,7 @@ class PDDChannel(Channel):
                 try:
                     # 检查停止事件，避免事件循环关闭时的异步调用问题
                     for _ in range(int(delay * 10)):  # 每0.1秒检查一次
-                        if self._stop_event and self._stop_event.is_set():
+                        if (self._stop_event and self._stop_event.is_set()) or self._threading_stop_event.is_set():
                             self.logger.info(f"重连延迟被停止信号中断: {shop_id}-{username}")
                             self.status_manager.update_status(shop_id, user_id, username, ConnectionState.DISCONNECTED)
                             return
@@ -541,7 +544,7 @@ class PDDChannel(Channel):
         consecutive_failures = 0
 
         try:
-            while not (self._stop_event and self._stop_event.is_set()):
+            while not (self._stop_event and self._stop_event.is_set()) and not self._threading_stop_event.is_set():
                 try:
                     # 发送ping消息检查连接
                     start_time = time.time()
@@ -601,7 +604,7 @@ class PDDChannel(Channel):
             self.logger.info(f"消息循环开始: {shop_id}-{username}")
 
             async for message in websocket:
-                if self._stop_event and self._stop_event.is_set():
+                if (self._stop_event and self._stop_event.is_set()) or self._threading_stop_event.is_set():
                     self.logger.info(f"停止事件已设置，退出消息循环: {shop_id}-{username}")
                     break
                 # 创建并发处理任务
@@ -651,9 +654,18 @@ class PDDChannel(Channel):
         self.processing_tasks.clear()
     
     def request_stop(self) -> None:
-        """请求停止WebSocket连接"""
+        """请求停止WebSocket连接（线程安全）"""
+        # 设置线程安全的停止事件
+        self._threading_stop_event.set()
+        # 同时设置asyncio.Event（在事件循环线程中安全地设置）
         if self._stop_event:
-            self._stop_event.set()
+            if self.loop and not self.loop.is_closed():
+                self.loop.call_soon_threadsafe(self._stop_event.set)
+            else:
+                try:
+                    self._stop_event.set()
+                except RuntimeError:
+                    pass
             self.logger.info("已设置停止事件")
 
     async def stop_all_connections(self):
@@ -661,7 +673,8 @@ class PDDChannel(Channel):
         try:
             self.logger.info("正在停止所有连接...")
 
-            # 设置全局停止事件
+            # 设置停止事件（两个都设置，确保所有检查点都能响应）
+            self._threading_stop_event.set()
             if self._stop_event:
                 self._stop_event.set()
 

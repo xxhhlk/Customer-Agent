@@ -699,6 +699,12 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
     def set_flyout(self, flyout) -> None:
         """设置 Flyout 实例引用"""
         self._flyout = flyout
+    
+    def cleanup(self):
+        """程序退出时清理Worker线程"""
+        if self._save_worker and self._save_worker.isRunning():
+            self._save_worker.requestInterruption()
+            self._save_worker.wait(3000)
 
     def set_card(self, card) -> None:
         """设置卡片引用，用于保存后刷新"""

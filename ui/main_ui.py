@@ -259,17 +259,24 @@ class MainWindow(FluentWindow):
         except Exception:
             pass
         
-        # 停止所有自动回复线程
-        try:
-            from ui.auto_reply_ui import auto_reply_manager
-            auto_reply_manager.stop_all()
-        except Exception:
-            pass
-        
-        # 清理自动回复界面资源（包括账号卡片的线程和定时器）
+        # 清理自动回复界面资源（内部会调用auto_reply_manager.stop_all()）
         try:
             if self.monitor_view:
                 self.monitor_view.cleanup()
+        except Exception:
+            pass
+        
+        # 清理知识库界面资源（停止所有Worker线程）
+        try:
+            if self.knowledge_view:
+                self.knowledge_view.cleanup()
+        except Exception:
+            pass
+        
+        # 清理账号管理界面资源（停止LoginThread等线程）
+        try:
+            if self.user_manager_view:
+                self.user_manager_view.cleanup()
         except Exception:
             pass
 
