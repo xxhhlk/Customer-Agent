@@ -265,6 +265,13 @@ class KnowledgeCard(ElevatedCardWidget):
         flyout_view.set_card(self)
         self.current_dialog = flyout
 
+        # Flyout 关闭时清理 worker 线程
+        def _on_flyout_closed():
+            flyout_view.cleanup()
+            self.current_dialog = None
+
+        flyout.finished.connect(_on_flyout_closed)
+
     def delete_document(self) -> None:
         """
         删除文档 - 优化后的确认对话框
@@ -410,6 +417,12 @@ class KnowledgeCard(ElevatedCardWidget):
         """
         from ui.Knowledge_ui import DeleteWorker
 
+        # 如果已有 worker 在运行，先停止它
+        if self._delete_worker and self._delete_worker.isRunning():
+            self._delete_worker.requestInterruption()
+            self._delete_worker.wait(3000)
+            self._delete_worker = None
+
         # 创建删除工作线程
         self._delete_worker = DeleteWorker(
             getattr(parent_ui, 'knowledge_manager'),  # type: ignore[arg-type]
@@ -418,6 +431,7 @@ class KnowledgeCard(ElevatedCardWidget):
         )
 
         # 连接信号
+        self._delete_worker.finished.connect(lambda: setattr(self, '_delete_worker', None))
         self._delete_worker.success.connect(
             lambda did, dtitle: self._on_delete_success(parent_ui, did, dtitle)
         )
@@ -941,6 +955,12 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
 
     def _execute_save(self, title: str, content: str) -> None:
         """执行保存操作（使用 QThread 避免线程安全问题）"""
+        # 如果已有 worker 在运行，先停止它
+        if self._save_worker and self._save_worker.isRunning():
+            self._save_worker.requestInterruption()
+            self._save_worker.wait(3000)
+            self._save_worker = None
+
         # 创建保存工作线程
         self._save_worker = SaveDocumentWorker(
             self._get_knowledge_manager(),
@@ -948,6 +968,7 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
             title,
             content
         )
+        self._save_worker.finished.connect(lambda: setattr(self, '_save_worker', None))
         self._save_worker.success.connect(self._on_save_success)
         self._save_worker.failed.connect(self._on_save_failed)
         self._save_worker.start()
