@@ -377,19 +377,17 @@ class GroupListWidget(QListWidget):
         """监听主题切换事件"""
         super().changeEvent(event)
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_style()
+            # 使用 blockSignals 避免递归
+            self.blockSignals(True)
+            try:
+                self._update_style()
+            finally:
+                self.blockSignals(False)
 
     def _update_style(self):
         """更新样式以适配当前主题"""
         try:
-            palette = self.palette()
             if isDarkTheme():
-                # 使用 QPalette 设置颜色
-                palette.setColor(QPalette.ColorRole.Base, QColor("#2b2b2b"))
-                palette.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
-                palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#3d3d3d"))
-                palette.setColor(QPalette.ColorRole.Highlight, QColor("#0078d4"))
-                palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
                 self.setStyleSheet("""
                     QListWidget {
                         background-color: #2b2b2b;
@@ -411,11 +409,6 @@ class GroupListWidget(QListWidget):
                     }
                 """)
             else:
-                palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
-                palette.setColor(QPalette.ColorRole.Text, QColor("#000000"))
-                palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#f5f5f5"))
-                palette.setColor(QPalette.ColorRole.Highlight, QColor("#0078d4"))
-                palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
                 self.setStyleSheet("""
                     QListWidget {
                         background-color: #ffffff;
@@ -436,7 +429,6 @@ class GroupListWidget(QListWidget):
                         color: #ffffff;
                     }
                 """)
-            self.setPalette(palette)
         except Exception:
             pass
 
