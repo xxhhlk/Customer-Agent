@@ -29,7 +29,7 @@ class EnhancedMessageConsumer:
     NIGHT_END = 7   # 夜间结束时间（07:55）
 
     # AI超时配置
-    CANCEL_WINDOW = 25  # AI取消窗口（秒）
+    CANCEL_WINDOW = 5  # AI取消窗口（秒）
     AI_TIMEOUT = 165  # AI总超时时间（秒）
 
     def __init__(self, queue_name: str, max_concurrent: int = 10):
