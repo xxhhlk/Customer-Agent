@@ -217,6 +217,7 @@ class AutoReplyThread(QThread):
         self.account_data = account_data
         self.channel = None
         self.logger = get_logger("AutoReplyThread")
+        self.loop = None
         
     def run(self):
         """启动后端 PDDChannel 引擎"""
@@ -253,18 +254,6 @@ class AutoReplyThread(QThread):
         except Exception as e:
             self.logger.error(f"自动回复线程启动失败: {e}")
             self.connection_failed.emit(str(e))
-        finally:
-            try:
-                if hasattr(self, 'loop') and self.loop and not self.loop.is_closed():
-                    if self.loop.is_running():
-                        self.loop.stop()
-                    # 取消所有未完成的任务，避免 loop.close() 阻塞
-                    for t in asyncio.all_tasks(self.loop):
-                        if not t.done():
-                            t.cancel()
-                    self.loop.close()
-            except Exception as e:
-                self.logger.error(f"关闭事件循环失败: {e}")
 
     def stop(self):
         """停止后端引擎"""
@@ -275,20 +264,68 @@ class AutoReplyThread(QThread):
                 self.channel.request_stop()
 
             # 停止事件循环（如果存在）
-            if hasattr(self, 'loop') and self.loop and not self.loop.is_closed():
+            if self.loop and not self.loop.is_closed():
                 if self.loop.is_running():
+                    # 取消所有未完成的任务
                     for task in asyncio.all_tasks(self.loop):
                         if not task.done():
                             task.cancel()
+                    # 安全地停止事件循环
                     self.loop.call_soon_threadsafe(self.loop.stop)
 
         except Exception as e:
             self.logger.error(f"停止自动回复线程失败: {e}")
+            
+    def wait(self, msecs: int = 10000) -> bool:
+        """等待线程结束"""
+        # 确保事件循环正确关闭
+        if self.loop and not self.loop.is_closed():
+            try:
+                # 如果事件循环仍在运行，先停止它
+                if self.loop.is_running():
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                
+                # 等待事件循环停止
+                for _ in range(100):  # 最多等待10秒
+                    if not self.loop.is_running():
+                        break
+                    time.sleep(0.1)
+                
+                # 关闭事件循环
+                self.loop.close()
+            except Exception as e:
+                self.logger.error(f"关闭事件循环失败: {e}")
+        
+        # 调用父类的wait方法
+        return super().wait(msecs)
         
     def is_running(self) -> bool:
         """检查线程是否在运行"""
         # 实际的运行状态由 PDDChannel 内部管理，这里仅表示线程是否已启动
         return self.isRunning()
+        
+    def wait(self, msecs: int = 10000) -> bool:
+        """等待线程结束"""
+        # 确保事件循环正确关闭
+        if self.loop and not self.loop.is_closed():
+            try:
+                # 如果事件循环仍在运行，先停止它
+                if self.loop.is_running():
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                
+                # 等待事件循环停止
+                for _ in range(100):  # 最多等待10秒
+                    if not self.loop.is_running():
+                        break
+                    time.sleep(0.1)
+                
+                # 关闭事件循环
+                self.loop.close()
+            except Exception as e:
+                self.logger.error(f"关闭事件循环失败: {e}")
+        
+        # 调用父类的wait方法
+        return super().wait(msecs)
 
 
 # 全局自动回复管理器实例
