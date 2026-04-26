@@ -90,6 +90,17 @@ def migrate(db_path: str = './temp/channel_shop.db'):
     # 3. 创建 keyword_groups 表（如果不存在）
     Base.metadata.create_all(engine, tables=[Base.metadata.tables['keyword_groups']])
 
+    # 3.5 确保 keyword_groups 表有 priority 列（旧表可能缺少）
+    inspector = inspect(engine)
+    if inspector.has_table('keyword_groups'):
+        columns = [c['name'] for c in inspector.get_columns('keyword_groups')]
+        if 'priority' not in columns:
+            logger.info("keyword_groups 表缺少 priority 列，正在添加...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE keyword_groups ADD COLUMN priority INTEGER DEFAULT 0"))
+                conn.commit()
+            logger.info("priority 列添加成功")
+
     # 4. 创建分组并记录 ID 映射
     session = Session()
     group_name_to_id = {}
