@@ -359,6 +359,7 @@ class GroupListWidget(QListWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._updating_style = False  # 防止递归的标志
         self.setupUI()
         self._update_style()
 
@@ -370,22 +371,18 @@ class GroupListWidget(QListWidget):
         self.customContextMenuRequested.connect(self.showContextMenu)
         self.itemClicked.connect(self.onItemClicked)
         self.itemDoubleClicked.connect(self.onItemDoubleClicked)
-        # 确保样式表生效
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
     def changeEvent(self, event):
         """监听主题切换事件"""
         super().changeEvent(event)
         if event.type() == QEvent.Type.PaletteChange:
-            # 使用 blockSignals 避免递归
-            self.blockSignals(True)
-            try:
-                self._update_style()
-            finally:
-                self.blockSignals(False)
+            self._update_style()
 
     def _update_style(self):
         """更新样式以适配当前主题"""
+        if self._updating_style:
+            return
+        self._updating_style = True
         try:
             if isDarkTheme():
                 self.setStyleSheet("""
@@ -429,8 +426,8 @@ class GroupListWidget(QListWidget):
                         color: #ffffff;
                     }
                 """)
-        except Exception:
-            pass
+        finally:
+            self._updating_style = False
 
     def addGroup(self, group_data: dict):
         """添加分组到列表"""
