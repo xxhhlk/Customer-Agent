@@ -25,6 +25,7 @@ class LogoLoaderThread(QThread):
     def __init__(self, url: str):
         super().__init__()
         self.url = url
+        self.setObjectName("LogoLoaderThread")
 
     def run(self):
         try:
@@ -366,6 +367,7 @@ class SetStatusThread(QThread):
         self.account_data = account_data
         self.target_status = target_status
         self.logger = get_logger()
+        self.setObjectName("SetStatusThread")
     def run(self):
         """在后台线程中执行状态更新"""
         try:
@@ -722,13 +724,13 @@ class AutoReplyUI(QFrame):
             auto_reply_manager.stop_all()
             
             # 清理所有账号卡片的线程
-            for i in range(self.accounts_layout.count() - 1):
+            for i in range(self.accounts_layout.count()):
                 item = self.accounts_layout.itemAt(i)
                 if item is None:
                     continue
                 widget = item.widget()
-                if widget and hasattr(widget, 'cleanup'):
-                    widget.cleanup()  # pyright: ignore[reportAttributeAccessIssue]
+                if isinstance(widget, AutoReplyCard):
+                    widget.cleanup()
         except Exception as e:
             self.logger.error(f"清理自动回复界面失败: {e}")
     

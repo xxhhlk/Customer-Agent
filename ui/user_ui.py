@@ -23,6 +23,7 @@ class LogoLoaderThread(QThread):
     def __init__(self, url: str):
         super().__init__()
         self.url = url
+        self.setObjectName("LogoLoaderThread")
 
     def run(self):
         try:
@@ -65,6 +66,7 @@ class LoginThread(QThread):
     def __init__(self, account_data: dict):
         super().__init__()
         self.account_data = account_data
+        self.setObjectName("LoginThread")
         
     def run(self):
         """在后台线程中执行登录"""
@@ -167,6 +169,15 @@ class AccountCard(CardWidget):
             QTimer.singleShot(200, _start)
         else:
             self.logo_label.setText("无Logo")
+
+    def cleanup(self):
+        """程序退出时清理资源"""
+        try:
+            if hasattr(self, 'logo_loader_thread') and self.logo_loader_thread and self.logo_loader_thread.isRunning():
+                self.logo_loader_thread.requestInterruption()
+                self.logo_loader_thread.wait(3000)
+        except Exception as e:
+            logger.error(f"清理账号卡片资源失败: {e}")
 
     def setLogo(self, pixmap: QPixmap):
         """设置Logo"""
@@ -347,6 +358,18 @@ class UserManagerWidget(QFrame):
             if thread and thread.isRunning():
                 thread.requestInterruption()
                 thread.wait(3000)
+        
+        # 清理所有 AccountCard 的 LogoLoaderThread
+        try:
+            for i in range(self.accounts_layout.count()):
+                item = self.accounts_layout.itemAt(i)
+                if item is None:
+                    continue
+                widget = item.widget()
+                if isinstance(widget, AccountCard):
+                    widget.cleanup()
+        except Exception as e:
+            logger.error(f"清理账号卡片线程失败: {e}")
         
     def showEvent(self, event):
         super().showEvent(event)

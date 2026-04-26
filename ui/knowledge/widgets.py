@@ -35,6 +35,7 @@ class SaveDocumentWorker(QThread):
         self.doc_id = doc_id
         self.title = title
         self.content = content
+        self.setObjectName("SaveDocumentWorker")
 
     def run(self):
         """在子线程中执行保存操作"""
@@ -102,6 +103,24 @@ class KnowledgeCard(ElevatedCardWidget):
 
         # 安装事件过滤器用于点击弹窗
         self.installEventFilter(self)
+
+    def cleanup(self):
+        """程序退出时清理资源"""
+        # 清理删除线程
+        if hasattr(self, '_delete_worker') and self._delete_worker and self._delete_worker.isRunning():
+            self._delete_worker.requestInterruption()
+            self._delete_worker.wait(3000)
+        # 清理弹窗中的保存线程
+        if hasattr(self, 'current_dialog') and self.current_dialog:
+            try:
+                # Flyout 内的 view 是 KnowledgeDetailFlyout
+                flyout_view = None
+                if hasattr(self.current_dialog, 'view'):
+                    flyout_view = self.current_dialog.view
+                if flyout_view and hasattr(flyout_view, 'cleanup'):
+                    flyout_view.cleanup()
+            except Exception:
+                pass
 
     def _setup_ui(self) -> None:
         """初始化UI布局"""

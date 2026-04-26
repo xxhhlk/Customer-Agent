@@ -40,6 +40,7 @@ class ImportWorker(QThread):
         super().__init__()
         self.knowledge_manager = knowledge_manager
         self.file_path = file_path
+        self.setObjectName("ImportWorker")
 
     def run(self):
         """在子线程中运行异步导入"""
@@ -142,6 +143,7 @@ class AddKnowledgeWorker(QThread):
         self.knowledge_manager = knowledge_manager
         self.title = title
         self.content = content
+        self.setObjectName("AddKnowledgeWorker")
 
     def run(self):
         """在子线程中运行异步添加"""
@@ -188,6 +190,7 @@ class DeleteWorker(QThread):
         self.knowledge_manager = knowledge_manager
         self.doc_id = doc_id
         self.doc_title = doc_title
+        self.setObjectName("DeleteWorker")
 
     def run(self):
         """在子线程中运行删除操作"""
@@ -213,6 +216,7 @@ class LoadDataWorker(QThread):
     def __init__(self, knowledge_manager: KnowledgeManager):
         super().__init__()
         self.knowledge_manager = knowledge_manager
+        self.setObjectName("LoadDataWorker")
 
     def run(self):
         """在子线程中运行异步加载"""
@@ -653,12 +657,26 @@ class KnowledgeUI(QWidget):
 
     def cleanup(self):
         """程序退出时清理所有Worker线程"""
-        worker_attrs = ['_load_worker', '_add_worker', '_import_worker', '_delete_worker']
+        # 清理自身持有的 Worker 线程
+        worker_attrs = ['_load_worker', '_add_worker', '_import_worker']
         for attr in worker_attrs:
             worker = getattr(self, attr, None)
             if worker and worker.isRunning():
                 worker.requestInterruption()
                 worker.wait(3000)
+        
+        # 清理 KnowledgeCard 的线程（_delete_worker 和 Flyout 中的 _save_worker）
+        try:
+            from ui.knowledge.widgets import KnowledgeCard
+            for i in range(self.gridLayout.count()):
+                item = self.gridLayout.itemAt(i)
+                if item is None:
+                    continue
+                widget = item.widget()
+                if isinstance(widget, KnowledgeCard) and hasattr(widget, 'cleanup'):
+                    widget.cleanup()
+        except Exception as e:
+            logger.error(f"清理知识库卡片线程失败: {e}")
 
     def showEvent(self, event) -> None:
         """窗口显示事件，确保布局正确"""
