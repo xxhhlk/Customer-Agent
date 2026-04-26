@@ -672,6 +672,10 @@ class AutoReplyUI(QFrame):
             if hasattr(self, 'status_thread') and self.status_thread and self.status_thread.isRunning():
                 self.status_thread.requestInterruption()
                 self.status_thread.wait(3000)
+            
+            # 停止所有自动回复线程
+            auto_reply_manager.stop_all()
+            
             # 清理所有账号卡片的线程
             for i in range(self.accounts_layout.count() - 1):
                 item = self.accounts_layout.itemAt(i)
