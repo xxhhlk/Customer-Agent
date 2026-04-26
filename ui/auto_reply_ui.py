@@ -67,6 +67,7 @@ class AutoReplyManager:
     def __init__(self):
         self.running_accounts: Dict[str, 'AutoReplyThread'] = {}  # 正在运行的账号线程
         self.logger = get_logger()
+        self._stopping = False  # 添加停止标志，防止重复调用
     
     def start_auto_reply(self, account_data: dict) -> bool:
         """启动账号自动回复"""
@@ -193,6 +194,12 @@ class AutoReplyManager:
     
     def stop_all(self):
         """停止所有自动回复"""
+        # 防止重复调用
+        if self._stopping:
+            self.logger.debug("stop_all()已在执行中，跳过重复调用")
+            return
+            
+        self._stopping = True
         try:
             threads = list(self.running_accounts.values())
             # 先全部发起 stop
@@ -213,6 +220,8 @@ class AutoReplyManager:
             
         except Exception as e:
             self.logger.error(f"停止所有自动回复失败: {e}")
+        finally:
+            self._stopping = False
 
 
 class AutoReplyThread(QThread):
@@ -258,11 +267,13 @@ class AutoReplyThread(QThread):
                 )
             )
             
-            # 保持事件循环运行，直到显式停止或线程被中断
-            while not self.isInterruptionRequested() and not self._stop_requested and self.loop.is_running():
-                self.loop.run_forever()
-                # 短暂休眠以检查中断请求
-                time.sleep(0.1)
+            # 运行事件循环，直到任务完成或被停止
+            try:
+                self.loop.run_until_complete(task)
+            except asyncio.CancelledError:
+                self.logger.debug("主任务被取消")
+            except Exception as e:
+                self.logger.error(f"主任务执行出错: {e}")
 
         except Exception as e:
             self.logger.error(f"自动回复线程启动失败: {e}")
@@ -276,9 +287,11 @@ class AutoReplyThread(QThread):
                         if not task.done():
                             task.cancel()
                     
-                    # 停止事件循环
-                    if self.loop.is_running():
-                        self.loop.call_soon_threadsafe(self.loop.stop)
+                    # 运行事件循环一小段时间，让取消的任务完成
+                    try:
+                        self.loop.run_until_complete(asyncio.sleep(0.1))
+                    except Exception:
+                        pass
                     
                     # 关闭事件循环
                     self.loop.close()
@@ -293,28 +306,13 @@ class AutoReplyThread(QThread):
             
             if self.channel:
                 self.channel.request_stop()
-                # 在事件循环中运行stop_all_connections来彻底停止所有连接
-                if self.loop and not self.loop.is_closed():
-                    if self.loop.is_running():
-                        stop_task = asyncio.run_coroutine_threadsafe(
-                            self.channel.stop_all_connections(), 
-                            self.loop
-                        )
-                        # 等待停止任务完成，最多等待5秒
-                        try:
-                            stop_task.result(timeout=5.0)
-                        except Exception as e:
-                            self.logger.warning(f"等待停止所有连接时超时或出错: {e}")
-
+            
             # 停止事件循环（如果存在且仍在运行）
             if self.loop and not self.loop.is_closed():
-                if self.loop.is_running():
-                    # 取消所有未完成的任务
-                    for task in asyncio.all_tasks(self.loop):
-                        if not task.done():
-                            task.cancel()
-                    # 安全地停止事件循环
-                    self.loop.call_soon_threadsafe(self.loop.stop)
+                # 取消所有未完成的任务
+                for task in asyncio.all_tasks(self.loop):
+                    if not task.done():
+                        task.cancel()
 
         except Exception as e:
             self.logger.error(f"停止自动回复线程失败: {e}")
@@ -326,24 +324,6 @@ class AutoReplyThread(QThread):
         
     def wait(self, msecs: int = 10000) -> bool:
         """等待线程结束"""
-        # 确保事件循环正确关闭
-        if self.loop and not self.loop.is_closed():
-            try:
-                # 如果事件循环仍在运行，先停止它
-                if self.loop.is_running():
-                    self.loop.call_soon_threadsafe(self.loop.stop)
-                
-                # 等待事件循环停止
-                start_time = time.time()
-                while self.loop.is_running() and (time.time() - start_time) < 10:  # 最多等待10秒
-                    time.sleep(0.1)
-                
-                # 关闭事件循环
-                if not self.loop.is_closed():
-                    self.loop.close()
-            except Exception as e:
-                self.logger.error(f"关闭事件循环失败: {e}")
-        
         # 调用父类的wait方法
         return super().wait(msecs)
 
