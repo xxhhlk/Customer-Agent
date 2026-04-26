@@ -263,6 +263,17 @@ class AutoReplyThread(QThread):
             
             if self.channel:
                 self.channel.request_stop()
+                # 在事件循环中运行stop_all_connections来彻底停止所有连接
+                if self.loop and not self.loop.is_closed() and self.loop.is_running():
+                    stop_task = asyncio.run_coroutine_threadsafe(
+                        self.channel.stop_all_connections(), 
+                        self.loop
+                    )
+                    # 等待停止任务完成，最多等待5秒
+                    try:
+                        stop_task.result(timeout=5.0)
+                    except Exception as e:
+                        self.logger.warning(f"等待停止所有连接时超时或出错: {e}")
 
             # 停止事件循环（如果存在）
             if self.loop and not self.loop.is_closed():
