@@ -251,13 +251,15 @@ class MainWindow(FluentWindow):
     def closeEvent(self, a0: Optional["QCloseEvent"]) -> None:
         """ 重写窗口关闭事件，确保后台线程安全退出 """
         
-        # 停止主题监听器
+        # 停止主题监听器（Windows上darkdetect.listener是阻塞的，quit无效，需terminate）
         try:
             if hasattr(self, 'theme_listener') and self.theme_listener:
-                self.theme_listener.quit()
-                # 等待最多3000ms让线程退出
-                if not self.theme_listener.wait(3000):
-                    self.logger.warning("主题监听器线程未在3秒内退出")
+                self.theme_listener.requestInterruption()
+                # 等待最多500ms让线程退出
+                if not self.theme_listener.wait(500):
+                    self.logger.warning("主题监听器未在500ms内退出，执行强制终止")
+                    self.theme_listener.terminate()
+                    self.theme_listener.wait(500)
         except Exception:
             pass
         
