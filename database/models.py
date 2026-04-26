@@ -69,13 +69,14 @@ class KeywordGroup(Base):
     __allow_unmapped__ = True
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    group_name: Mapped[str] = mapped_column(String(100), nullable=False, comment='分组名称')
+    group_name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, comment='分组名称')
     reply: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='回复内容')
     is_transfer: Mapped[Optional[int]] = mapped_column(Integer, default=0, comment='是否转人工: 0-否, 1-是')
     pass_to_ai: Mapped[Optional[int]] = mapped_column(Integer, default=0, comment='是否传递给AI: 0-否, 1-是')
+    priority: Mapped[int] = mapped_column(Integer, default=0, comment='优先级，数值越大优先级越高')
 
     # 关联关系 - 一个分组可以有多个关键词
-    keywords: Mapped[List['Keyword']] = relationship('Keyword', back_populates='group')
+    keywords: Mapped[List['Keyword']] = relationship('Keyword', back_populates='group', cascade='all, delete-orphan')
 
     def __repr__(self):
         return f"<KeywordGroup(id={self.id}, name='{self.group_name}', reply='{self.reply[:20] if self.reply else None}...')>"
@@ -87,18 +88,14 @@ class Keyword(Base):
     __allow_unmapped__ = True
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    keyword: Mapped[str] = mapped_column(String(100), nullable=False, comment='关键词')
-    group_id: Mapped[int] = mapped_column(Integer, ForeignKey('keyword_groups.id'), default=0, comment='分组ID')
-    group_name: Mapped[str] = mapped_column(String(100), nullable=False, default='default', comment='分组名称')
+    keyword: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, comment='关键词')
+    group_id: Mapped[int] = mapped_column(Integer, ForeignKey('keyword_groups.id'), nullable=False, comment='分组ID')
     match_type: Mapped[str] = mapped_column(String(20), nullable=False, default='partial', comment='匹配类型: exact-完全匹配, partial-部分匹配, regex-正则匹配, wildcard-通配符匹配')
-    reply_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='回复内容（单独设置时使用）')
-    transfer_to_human: Mapped[bool] = mapped_column(Integer, default=0, comment='是否转人工: 0-否, 1-是')
-    priority: Mapped[int] = mapped_column(Integer, default=0, comment='优先级，数值越大优先级越高')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment='创建时间')
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment='更新时间')
 
     # 关联关系 - 多个关键词属于一个分组
-    group: Mapped[Optional['KeywordGroup']] = relationship('KeywordGroup', back_populates='keywords')
+    group: Mapped['KeywordGroup'] = relationship('KeywordGroup', back_populates='keywords')
 
     def __repr__(self):
         return f"<Keyword(keyword='{self.keyword}', group_id={self.group_id}, match_type='{self.match_type}')>"
