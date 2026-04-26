@@ -108,9 +108,13 @@ class AutoReplyManager:
             thread = self.running_accounts[account_key]
             thread.stop()
             
+            # 等待一小段时间，让线程有机会开始清理
+            time.sleep(0.1)
+            
             # 等待线程结束后再从列表中移除
             if thread.isRunning():
-                thread.wait(5000)  # 最多等待5秒
+                if not thread.wait(5000):  # 最多等待5秒
+                    self.logger.warning(f"线程未在5秒内结束: {account_data['username']}")
             
             # 从运行列表中移除
             if account_key in self.running_accounts:
