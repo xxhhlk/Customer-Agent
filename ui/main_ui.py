@@ -44,6 +44,7 @@ class MainWindow(FluentWindow):
         # 监听系统主题切换事件
         self.theme_listener = SystemThemeListener(self)
         self.theme_listener.systemThemeChanged.connect(self._on_theme_changed)
+        self.theme_listener.setObjectName("SystemThemeListener")
         self.theme_listener.start()
         
         t = time.perf_counter()
@@ -252,10 +253,11 @@ class MainWindow(FluentWindow):
         
         # 停止主题监听器
         try:
-            if hasattr(self, 'theme_listener'):
+            if hasattr(self, 'theme_listener') and self.theme_listener:
                 self.theme_listener.quit()
-                # 等待最多500ms让线程退出
-                self.theme_listener.wait(500)
+                # 等待最多3000ms让线程退出
+                if not self.theme_listener.wait(3000):
+                    self.logger.warning("主题监听器线程未在3秒内退出")
         except Exception:
             pass
         
