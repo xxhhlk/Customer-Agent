@@ -195,6 +195,10 @@ class AutoReplyManager:
             for thread in threads:
                 if thread.is_running():
                     thread.stop()
+            
+            # 等待一小段时间，让线程有机会开始清理
+            time.sleep(0.1)
+            
             # 然后统一等待线程结束（每个最多等5秒，并行退出总耗时很短）
             for thread in threads:
                 if thread.is_running():
@@ -249,8 +253,11 @@ class AutoReplyThread(QThread):
                 )
             )
             
-            # 保持事件循环运行，直到显式停止
-            self.loop.run_forever()
+            # 保持事件循环运行，直到显式停止或线程被中断
+            while not self.isInterruptionRequested() and self.loop.is_running():
+                self.loop.run_forever()
+                # 短暂休眠以检查中断请求
+                time.sleep(0.1)
 
         except Exception as e:
             self.logger.error(f"自动回复线程启动失败: {e}")
