@@ -360,6 +360,7 @@ class GroupListWidget(QListWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setupUI()
+        self._update_style()
 
     def setupUI(self):
         """设置列表"""
@@ -369,6 +370,57 @@ class GroupListWidget(QListWidget):
         self.customContextMenuRequested.connect(self.showContextMenu)
         self.itemClicked.connect(self.onItemClicked)
         self.itemDoubleClicked.connect(self.onItemDoubleClicked)
+
+    def changeEvent(self, event):
+        """监听主题切换事件"""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            self._update_style()
+
+    def _update_style(self):
+        """更新样式以适配当前主题"""
+        try:
+            if isDarkTheme():
+                self.setStyleSheet("""
+                    QListWidget {
+                        background-color: #2b2b2b;
+                        border: 1px solid #3d3d3d;
+                        border-radius: 4px;
+                        color: #ffffff;
+                    }
+                    QListWidget::item {
+                        padding: 8px;
+                        border-bottom: 1px solid #3d3d3d;
+                    }
+                    QListWidget::item:hover {
+                        background-color: #3d3d3d;
+                    }
+                    QListWidget::item:selected {
+                        background-color: #0078d4;
+                        color: #ffffff;
+                    }
+                """)
+            else:
+                self.setStyleSheet("""
+                    QListWidget {
+                        background-color: #ffffff;
+                        border: 1px solid #e0e0e0;
+                        border-radius: 4px;
+                    }
+                    QListWidget::item {
+                        padding: 8px;
+                        border-bottom: 1px solid #f0f0f0;
+                    }
+                    QListWidget::item:hover {
+                        background-color: #f5f5f5;
+                    }
+                    QListWidget::item:selected {
+                        background-color: #0078d4;
+                        color: #ffffff;
+                    }
+                """)
+        except Exception:
+            pass
 
     def addGroup(self, group_data: dict):
         """添加分组到列表"""
