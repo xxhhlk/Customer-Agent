@@ -370,6 +370,8 @@ class GroupListWidget(QListWidget):
         self.customContextMenuRequested.connect(self.showContextMenu)
         self.itemClicked.connect(self.onItemClicked)
         self.itemDoubleClicked.connect(self.onItemDoubleClicked)
+        # 确保样式表生效
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
     def changeEvent(self, event):
         """监听主题切换事件"""
@@ -380,7 +382,14 @@ class GroupListWidget(QListWidget):
     def _update_style(self):
         """更新样式以适配当前主题"""
         try:
+            palette = self.palette()
             if isDarkTheme():
+                # 使用 QPalette 设置颜色
+                palette.setColor(QPalette.ColorRole.Base, QColor("#2b2b2b"))
+                palette.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
+                palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#3d3d3d"))
+                palette.setColor(QPalette.ColorRole.Highlight, QColor("#0078d4"))
+                palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
                 self.setStyleSheet("""
                     QListWidget {
                         background-color: #2b2b2b;
@@ -391,6 +400,7 @@ class GroupListWidget(QListWidget):
                     QListWidget::item {
                         padding: 8px;
                         border-bottom: 1px solid #3d3d3d;
+                        color: #ffffff;
                     }
                     QListWidget::item:hover {
                         background-color: #3d3d3d;
@@ -401,15 +411,22 @@ class GroupListWidget(QListWidget):
                     }
                 """)
             else:
+                palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+                palette.setColor(QPalette.ColorRole.Text, QColor("#000000"))
+                palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#f5f5f5"))
+                palette.setColor(QPalette.ColorRole.Highlight, QColor("#0078d4"))
+                palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
                 self.setStyleSheet("""
                     QListWidget {
                         background-color: #ffffff;
                         border: 1px solid #e0e0e0;
                         border-radius: 4px;
+                        color: #000000;
                     }
                     QListWidget::item {
                         padding: 8px;
                         border-bottom: 1px solid #f0f0f0;
+                        color: #000000;
                     }
                     QListWidget::item:hover {
                         background-color: #f5f5f5;
@@ -419,6 +436,7 @@ class GroupListWidget(QListWidget):
                         color: #ffffff;
                     }
                 """)
+            self.setPalette(palette)
         except Exception:
             pass
 
@@ -656,6 +674,20 @@ class KeywordManagerWidget(QFrame):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(10)
+
+        # 设置左侧区域背景色
+        if isDarkTheme():
+            left_widget.setStyleSheet("""
+                QWidget {
+                    background-color: transparent;
+                }
+            """)
+        else:
+            left_widget.setStyleSheet("""
+                QWidget {
+                    background-color: transparent;
+                }
+            """)
 
         # 分组列表头部
         left_header = QWidget()
