@@ -1,14 +1,15 @@
 #自动回复界面
 
 import asyncio
+import time
 from typing import Optional, Dict
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
-                            QInputDialog, QMessageBox, QComboBox, QDialog, QFormLayout)
+                           QInputDialog, QMessageBox, QComboBox, QDialog, QFormLayout)
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
-                           PrimaryPushButton, PushButton, StrongBodyLabel,
-                           InfoBadge, ScrollArea, FluentIcon as FIF, isDarkTheme)
+                          PrimaryPushButton, PushButton, StrongBodyLabel,
+                          InfoBadge, ScrollArea, FluentIcon as FIF, isDarkTheme)
 from database.db_manager import db_manager
 from utils.logger_loguru import get_logger
 from Channel.pinduoduo.utils.API.Set_up_online import AccountMonitor
@@ -276,29 +277,6 @@ class AutoReplyThread(QThread):
         except Exception as e:
             self.logger.error(f"停止自动回复线程失败: {e}")
             
-    def wait(self, msecs: int = 10000) -> bool:
-        """等待线程结束"""
-        # 确保事件循环正确关闭
-        if self.loop and not self.loop.is_closed():
-            try:
-                # 如果事件循环仍在运行，先停止它
-                if self.loop.is_running():
-                    self.loop.call_soon_threadsafe(self.loop.stop)
-                
-                # 等待事件循环停止
-                for _ in range(100):  # 最多等待10秒
-                    if not self.loop.is_running():
-                        break
-                    time.sleep(0.1)
-                
-                # 关闭事件循环
-                self.loop.close()
-            except Exception as e:
-                self.logger.error(f"关闭事件循环失败: {e}")
-        
-        # 调用父类的wait方法
-        return super().wait(msecs)
-        
     def is_running(self) -> bool:
         """检查线程是否在运行"""
         # 实际的运行状态由 PDDChannel 内部管理，这里仅表示线程是否已启动
@@ -314,13 +292,13 @@ class AutoReplyThread(QThread):
                     self.loop.call_soon_threadsafe(self.loop.stop)
                 
                 # 等待事件循环停止
-                for _ in range(100):  # 最多等待10秒
-                    if not self.loop.is_running():
-                        break
+                start_time = time.time()
+                while self.loop.is_running() and (time.time() - start_time) < 10:  # 最多等待10秒
                     time.sleep(0.1)
                 
                 # 关闭事件循环
-                self.loop.close()
+                if not self.loop.is_closed():
+                    self.loop.close()
             except Exception as e:
                 self.logger.error(f"关闭事件循环失败: {e}")
         
