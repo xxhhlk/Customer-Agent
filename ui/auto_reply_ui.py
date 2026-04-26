@@ -227,6 +227,7 @@ class AutoReplyThread(QThread):
         self.channel = None
         self.logger = get_logger("AutoReplyThread")
         self.loop = None
+        self._stop_requested = False  # 添加停止请求标志
         
     def run(self):
         """启动后端 PDDChannel 引擎"""
@@ -258,7 +259,7 @@ class AutoReplyThread(QThread):
             )
             
             # 保持事件循环运行，直到显式停止或线程被中断
-            while not self.isInterruptionRequested() and self.loop.is_running():
+            while not self.isInterruptionRequested() and not self._stop_requested and self.loop.is_running():
                 self.loop.run_forever()
                 # 短暂休眠以检查中断请求
                 time.sleep(0.1)
@@ -266,27 +267,46 @@ class AutoReplyThread(QThread):
         except Exception as e:
             self.logger.error(f"自动回复线程启动失败: {e}")
             self.connection_failed.emit(str(e))
+        finally:
+            # 确保事件循环正确关闭
+            if self.loop and not self.loop.is_closed():
+                try:
+                    # 取消所有未完成的任务
+                    for task in asyncio.all_tasks(self.loop):
+                        if not task.done():
+                            task.cancel()
+                    
+                    # 停止事件循环
+                    if self.loop.is_running():
+                        self.loop.call_soon_threadsafe(self.loop.stop)
+                    
+                    # 关闭事件循环
+                    self.loop.close()
+                except Exception as e:
+                    self.logger.error(f"关闭事件循环失败: {e}")
 
     def stop(self):
         """停止后端引擎"""
         try:
+            self._stop_requested = True
             self.requestInterruption()
             
             if self.channel:
                 self.channel.request_stop()
                 # 在事件循环中运行stop_all_connections来彻底停止所有连接
-                if self.loop and not self.loop.is_closed() and self.loop.is_running():
-                    stop_task = asyncio.run_coroutine_threadsafe(
-                        self.channel.stop_all_connections(), 
-                        self.loop
-                    )
-                    # 等待停止任务完成，最多等待5秒
-                    try:
-                        stop_task.result(timeout=5.0)
-                    except Exception as e:
-                        self.logger.warning(f"等待停止所有连接时超时或出错: {e}")
+                if self.loop and not self.loop.is_closed():
+                    if self.loop.is_running():
+                        stop_task = asyncio.run_coroutine_threadsafe(
+                            self.channel.stop_all_connections(), 
+                            self.loop
+                        )
+                        # 等待停止任务完成，最多等待5秒
+                        try:
+                            stop_task.result(timeout=5.0)
+                        except Exception as e:
+                            self.logger.warning(f"等待停止所有连接时超时或出错: {e}")
 
-            # 停止事件循环（如果存在）
+            # 停止事件循环（如果存在且仍在运行）
             if self.loop and not self.loop.is_closed():
                 if self.loop.is_running():
                     # 取消所有未完成的任务

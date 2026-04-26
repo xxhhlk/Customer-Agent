@@ -654,6 +654,7 @@ class PDDChannel(Channel):
         """请求停止WebSocket连接"""
         if self._stop_event:
             self._stop_event.set()
+            self.logger.info("已设置停止事件")
 
     async def stop_all_connections(self):
         """停止所有连接并清理所有任务"""
@@ -665,28 +666,70 @@ class PDDChannel(Channel):
                 self._stop_event.set()
 
             # 停止所有重连任务
+            reconnect_tasks_to_cancel = []
             for connection_key, task in list(self._reconnect_tasks.items()):
                 if not task.done():
+                    reconnect_tasks_to_cancel.append((connection_key, task))
+                    
+            if reconnect_tasks_to_cancel:
+                self.logger.info(f"准备取消 {len(reconnect_tasks_to_cancel)} 个重连任务")
+                for connection_key, task in reconnect_tasks_to_cancel:
                     task.cancel()
-                    try:
-                        await asyncio.wait_for(task, timeout=5.0)
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        self.logger.debug(f"任务已取消或超时: {connection_key}")
-                    except Exception as e:
-                        self.logger.error(f"停止任务时出错: {connection_key}, {e}")
-                del self._reconnect_tasks[connection_key]
+                    
+                # 等待所有任务完成或超时
+                done, pending = await asyncio.wait(
+                    [task for _, task in reconnect_tasks_to_cancel],
+                    timeout=5.0,
+                    return_when=asyncio.ALL_COMPLETED
+                )
+                
+                for connection_key, task in reconnect_tasks_to_cancel:
+                    if task in done:
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            self.logger.debug(f"重连任务已取消: {connection_key}")
+                        except Exception as e:
+                            self.logger.error(f"重连任务执行时出错: {connection_key}, {e}")
+                    else:
+                        self.logger.warning(f"重连任务未在超时时间内完成: {connection_key}")
+                        
+                    # 从字典中移除已完成的任务
+                    if connection_key in self._reconnect_tasks:
+                        del self._reconnect_tasks[connection_key]
 
             # 停止所有心跳任务
+            heartbeat_tasks_to_cancel = []
             for connection_key, task in list(self._heartbeat_tasks.items()):
                 if not task.done():
+                    heartbeat_tasks_to_cancel.append((connection_key, task))
+                    
+            if heartbeat_tasks_to_cancel:
+                self.logger.info(f"准备取消 {len(heartbeat_tasks_to_cancel)} 个心跳任务")
+                for connection_key, task in heartbeat_tasks_to_cancel:
                     task.cancel()
-                    try:
-                        await asyncio.wait_for(task, timeout=3.0)
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        self.logger.debug(f"心跳任务已取消或超时: {connection_key}")
-                    except Exception as e:
-                        self.logger.error(f"停止心跳任务时出错: {connection_key}, {e}")
-                del self._heartbeat_tasks[connection_key]
+                    
+                # 等待所有任务完成或超时
+                done, pending = await asyncio.wait(
+                    [task for _, task in heartbeat_tasks_to_cancel],
+                    timeout=3.0,
+                    return_when=asyncio.ALL_COMPLETED
+                )
+                
+                for connection_key, task in heartbeat_tasks_to_cancel:
+                    if task in done:
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            self.logger.debug(f"心跳任务已取消: {connection_key}")
+                        except Exception as e:
+                            self.logger.error(f"心跳任务执行时出错: {connection_key}, {e}")
+                    else:
+                        self.logger.warning(f"心跳任务未在超时时间内完成: {connection_key}")
+                        
+                    # 从字典中移除已完成的任务
+                    if connection_key in self._heartbeat_tasks:
+                        del self._heartbeat_tasks[connection_key]
 
             # 关闭WebSocket连接
             if self.ws:
@@ -703,6 +746,8 @@ class PDDChannel(Channel):
 
         except Exception as e:
             self.logger.error(f"停止所有连接时发生错误: {e}")
+            # 重新抛出异常，让调用者知道停止过程中发生了错误
+            raise
     
     async def _setup_message_consumer(self, queue_name: str):
         """
