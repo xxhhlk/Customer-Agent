@@ -600,6 +600,12 @@ class SettingUI(QFrame):
         # 创建内容区域
         content_widget = self.createContentWidget()
         
+        # 根据主题更新表单标签样式（卡片已创建，可以安全调用）
+        if isDarkTheme():
+            self._update_form_label_styles(True)
+        else:
+            self._update_form_label_styles(False)
+        
         # 连接按钮信号
         self.save_btn.clicked.connect(self.onSaveConfig)
         self.reset_btn.clicked.connect(self.onResetConfig)
@@ -626,12 +632,8 @@ class SettingUI(QFrame):
         if isDarkTheme():
             self.title_label.setStyleSheet("color: #ffffff;")
             self.description_label.setStyleSheet("padding: 8px 0; color: #cccccc;")
-            # 更新所有配置卡片中的表单标签颜色
-            self._update_form_label_styles(True)
         else:
             self.description_label.setStyleSheet("padding: 8px 0;")
-            # 更新所有配置卡片中的表单标签颜色
-            self._update_form_label_styles(False)
         
         # 左侧标题区域
         title_area = QWidget()
