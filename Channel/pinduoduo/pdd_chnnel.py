@@ -124,17 +124,27 @@ class PDDChannel(Channel):
             self._reconnect_tasks[connection_key].cancel()
             del self._reconnect_tasks[connection_key]
 
-        # 创建带重连的连接任务
+        # 直接 await 连接任务，而不是创建任务后立即返回
         if self.reconnect_config.enable_auto_reconnect:
-            connect_task = asyncio.create_task(
-                self._connect_with_retry(shop_id, user_id, username, on_success, on_failure)
-            )
+            task = self._connect_with_retry(shop_id, user_id, username, on_success, on_failure)
         else:
-            connect_task = asyncio.create_task(
-                self._connect_single_attempt(shop_id, user_id, username, on_success, on_failure)
-            )
-
+            task = self._connect_single_attempt(shop_id, user_id, username, on_success, on_failure)
+        
+        # 保存任务引用
+        connect_task = asyncio.create_task(task)
         self._reconnect_tasks[connection_key] = connect_task
+        
+        # 等待任务完成
+        try:
+            await connect_task
+        except asyncio.CancelledError:
+            self.logger.debug(f"连接任务被取消: {shop_id}-{username}")
+        except Exception as e:
+            self.logger.error(f"连接任务异常: {shop_id}-{username}, 错误: {e}")
+        finally:
+            # 清理任务引用
+            if connection_key in self._reconnect_tasks:
+                del self._reconnect_tasks[connection_key]
 
     async def stop_account(self, shop_id: str, user_id: str) -> None:
         """

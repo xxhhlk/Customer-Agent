@@ -545,11 +545,47 @@ class SettingUI(QFrame):
             if isDarkTheme():
                 self.title_label.setStyleSheet("color: #ffffff;")
                 self.description_label.setStyleSheet("padding: 8px 0; color: #cccccc;")
+                # 更新所有配置卡片中的表单标签颜色
+                self._update_form_label_styles(True)
             else:
                 self.title_label.setStyleSheet("")
                 self.description_label.setStyleSheet("padding: 8px 0;")
+                # 恢复所有配置卡片中的表单标签颜色
+                self._update_form_label_styles(False)
         except Exception as e:
             self.logger.warning(f"更新标签样式失败: {e}")
+    
+    def _update_form_label_styles(self, is_dark: bool):
+        """更新表单标签样式"""
+        # 更新所有配置卡片中的表单标签颜色
+        cards = [
+            self.llm_config_card,
+            self.embedder_config_card,
+            self.knowledge_config_card,
+            self.prompt_config_card,
+            self.business_hours_card,
+            self.human_reply_wait_card,
+            self.auto_start_card
+        ]
+        
+        for card in cards:
+            if hasattr(card, 'layout') and card.layout() is not None:
+                # 遍历卡片中的所有子控件
+                for i in range(card.layout().count()):
+                    item = card.layout().itemAt(i)
+                    if item and item.widget():
+                        # 如果是表单布局
+                        if isinstance(item.widget(), QFormLayout):
+                            form_layout = item.widget()
+                            # 更新表单中所有标签的颜色
+                            for row in range(form_layout.rowCount()):
+                                label_item = form_layout.itemAt(row, QFormLayout.ItemRole.LabelRole)
+                                if label_item and label_item.widget():
+                                    label_widget = label_item.widget()
+                                    if is_dark:
+                                        label_widget.setStyleSheet("color: #ffffff;")
+                                    else:
+                                        label_widget.setStyleSheet("")
 
     def setupUI(self) -> None:
         """设置主界面UI"""
@@ -590,8 +626,12 @@ class SettingUI(QFrame):
         if isDarkTheme():
             self.title_label.setStyleSheet("color: #ffffff;")
             self.description_label.setStyleSheet("padding: 8px 0; color: #cccccc;")
+            # 更新所有配置卡片中的表单标签颜色
+            self._update_form_label_styles(True)
         else:
             self.description_label.setStyleSheet("padding: 8px 0;")
+            # 更新所有配置卡片中的表单标签颜色
+            self._update_form_label_styles(False)
         
         # 左侧标题区域
         title_area = QWidget()
