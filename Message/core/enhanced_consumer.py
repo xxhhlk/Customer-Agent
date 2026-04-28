@@ -143,19 +143,17 @@ class EnhancedMessageConsumer:
                     self.logger.info(f"User {user_key} in cooldown and has waiting event, skip this message (will merge to next)")
                     return
             
-            # 检查是否需要监听人工回复（白天时段且配置开启）
+            # 检查是否需要监听人工回复（配置开启即可，不再限制时段）
             should_watch_staff_reply = False
             if from_uid and isinstance(from_uid, str):
-                current_hour = time.localtime().tm_hour
-                is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
-                if not is_night:
-                    from config import get_config
-                    staff_wait_config = get_config("staff_reply_wait", {})
-                    enable_staff_wait = staff_wait_config.get("enable", True)
-                    if enable_staff_wait:
-                        should_watch_staff_reply = True
+                from config import get_config
+                staff_wait_config = get_config("staff_reply_wait", {})
+                enable_staff_wait = staff_wait_config.get("enable", True)
+                if enable_staff_wait:
+                    should_watch_staff_reply = True
             
             # 如果需要监听人工回复，在防抖等待前创建等待事件
+            # 无论何时都创建等待事件（只要配置允许），确保在整个防抖期间都能监听人工客服回复
             event_id = None
             if should_watch_staff_reply and isinstance(from_uid, str):
                 event_id = self.staff_reply_manager.start_waiting(from_uid)
@@ -205,7 +203,7 @@ class EnhancedMessageConsumer:
                                 all_messages = [merged_wrapper] + pending_messages
                                 merged_wrapper = self._merge_messages(all_messages)
                 else:
-                    # 夜间或配置关闭，直接处理
+                    # 配置关闭，直接处理
                     staff_replied = await self._check_staff_reply(merged_wrapper.context)
                     if staff_replied:
                         self.logger.info(f"User {user_key} staff replied, skip AI")
@@ -223,13 +221,6 @@ class EnhancedMessageConsumer:
 
     async def _check_staff_reply(self, context: Context) -> bool:
         """检查人工客服是否已回复"""
-        # 只有白天时段才等待人工回复
-        current_hour = time.localtime().tm_hour
-        is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
-
-        if is_night:
-            return False
-
         # 检查配置
         from config import get_config
         staff_wait_config = get_config("staff_reply_wait", {})
@@ -242,6 +233,12 @@ class EnhancedMessageConsumer:
         from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
         if not from_uid:
             return False
+
+        # 夜间时段使用更长的等待时间
+        current_hour = time.localtime().tm_hour
+        is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
+        if is_night:
+            wait_seconds = max(wait_seconds, 60)  # 夜间至少等待60秒
 
         self.logger.info(f"Waiting for staff reply (max {wait_seconds}s)")
 
