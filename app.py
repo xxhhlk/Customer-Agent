@@ -23,8 +23,8 @@ import ctypes
 import asyncio
 import os
 from pathlib import Path
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt, QTimer, QSharedMemory
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 # ============================================================================
 # 全局单例预初始化（确保正确的初始化顺序）
@@ -71,6 +71,22 @@ async def main():
     # 创建应用
     app = QApplication(sys.argv)
     app.setApplicationName("Agent-Customer")
+    
+    # 多开校验 - 使用 QSharedMemory 确保单实例运行
+    shared_memory_key = "AgentCustomerApp_InstanceChecker"
+    shared_mem = QSharedMemory(shared_memory_key)
+    
+    # 尝试附加到已存在的共享内存
+    if shared_mem.attach():
+        # 如果能成功附加，说明已经有实例在运行
+        QMessageBox.critical(None, "程序已在运行", "拼多多AI客服助手已经在运行中，请勿重复启动。")
+        sys.exit(1)
+    
+    # 如果不能附加，尝试创建新的共享内存
+    if not shared_mem.create(1):
+        # 如果创建失败，说明可能有并发问题或其他异常
+        QMessageBox.critical(None, "启动失败", "无法创建实例检查器，请检查权限或重启电脑后再试。")
+        sys.exit(1)
 
     # 创建主窗口
     logger = _get_logger("App")
@@ -88,10 +104,16 @@ async def main():
 
     # 将窗口设为应用级别的变量，防止被垃圾回收
     app.main_window = window
-
+    app.shared_mem = shared_mem  # 保存共享内存引用
 
     # 运行事件循环
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    
+    # 退出时释放共享内存
+    if shared_mem.isAttached():
+        shared_mem.detach()
+    
+    sys.exit(exit_code)
 
 if __name__ == '__main__':
     asyncio.run(main())
