@@ -540,6 +540,10 @@ class EnhancedMessageConsumer:
     async def _send_fallback_reply(self, context: Context, metadata: Dict[str, Any]):
         """发送兜底回复"""
         try:
+            # 等待15秒，给人工客服处理的时间
+            import asyncio
+            await asyncio.sleep(15)
+            
             # 获取兜底回复配置
             from config import get_config
             rate_limit_config = get_config("rate_limit", {})

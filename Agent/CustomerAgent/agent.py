@@ -108,7 +108,11 @@ class CustomerAgent(Bot):
                 # 获取限流器实例
                 from Message.handlers.rate_limiter import coze_rate_limiter
                 if coze_rate_limiter.is_rate_limited(from_uid):
-                    self.logger.warning(f"用户 {from_uid} 已超出限流阈值，使用兜底回复")
+                    self.logger.warning(f"用户 {from_uid} 已超出限流阈值，等待15秒后发送兜底回复")
+                    # 等待15秒，给人工客服处理的时间
+                    import asyncio
+                    await asyncio.sleep(15)
+                    
                     # 获取兜底回复配置
                     from config import get_config
                     rate_limit_config = get_config("rate_limit", {})
