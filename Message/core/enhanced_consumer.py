@@ -51,8 +51,9 @@ class EnhancedMessageConsumer:
         # 人工回复事件管理器（使用全局单例）
         self.staff_reply_manager = staff_reply_event_manager
 
-        # 限流器
-        self.rate_limiter = CozeRateLimiter()
+        # 限流器（使用全局单例）
+        from Message.handlers.rate_limiter import coze_rate_limiter
+        self.rate_limiter = coze_rate_limiter
 
     def add_handler(self, handler: MessageHandler):
         """添加处理器"""
@@ -322,6 +323,15 @@ class EnhancedMessageConsumer:
             pass
         metadata['user_key'] = user_key
 
+        # 限流检查 - 在处理AI请求之前检查用户是否超出限流阈值
+        from_uid = metadata.get('from_uid')
+        if from_uid:
+            if self.rate_limiter.is_rate_limited(from_uid):
+                self.logger.warning(f"用户 {from_uid} 已超出限流阈值，使用兜底回复")
+                # 使用兜底回复
+                await self._send_fallback_reply(context, metadata)
+                return
+
         # 先尝试非AI处理器（关键词、转人工等）
         ai_handler = None
         catch_all_handler = None
@@ -526,6 +536,42 @@ class EnhancedMessageConsumer:
         except Exception as e:
             self.logger.error(f"Failed to extract user ID: {e}")
             return "unknown_unknown"
+
+    async def _send_fallback_reply(self, context: Context, metadata: Dict[str, Any]):
+        """发送兜底回复"""
+        try:
+            # 获取兜底回复配置
+            from config import get_config
+            rate_limit_config = get_config("rate_limit", {})
+            fallback_replies = rate_limit_config.get("fallback_reply", [])
+            
+            # 如果没有配置兜底回复，使用默认回复
+            if not fallback_replies:
+                fallback_replies = ["亲，感谢您的咨询！客服正在为您处理，请稍等片刻。"]
+            
+            # 随机选择一个兜底回复
+            import random
+            reply_text = random.choice(fallback_replies)
+            
+            # 发送回复
+            shop_id = metadata.get('shop_id')
+            user_id = metadata.get('user_id')
+            from_uid = metadata.get('from_uid')
+
+            if not shop_id or not user_id or not from_uid:
+                self.logger.warning(f"缺少发送信息: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
+                return
+
+            # 尝试发送消息
+            from Channel.pinduoduo.utils.API.send_message import SendMessage
+            sender = SendMessage(str(shop_id), str(user_id))
+            result = sender.send_text(str(from_uid), reply_text)
+            if isinstance(result, dict) and result.get("success"):
+                self.logger.info(f"已发送兜底回复给用户 {from_uid}")
+            else:
+                self.logger.warning(f"发送兜底回复失败: {result}")
+        except Exception as e:
+            self.logger.error(f"发送兜底回复时出错: {e}")
 
 
 class EnhancedMessageConsumerManager:

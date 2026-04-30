@@ -101,6 +101,30 @@ class CustomerAgent(Bot):
         if context is None:
             return Reply(ReplyType.TEXT, "缺少上下文信息")
 
+        # 限流检查 - 在处理AI请求之前检查用户是否超出限流阈值
+        try:
+            from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
+            if from_uid:
+                # 获取限流器实例
+                from Message.handlers.rate_limiter import coze_rate_limiter
+                if coze_rate_limiter.is_rate_limited(from_uid):
+                    self.logger.warning(f"用户 {from_uid} 已超出限流阈值，使用兜底回复")
+                    # 获取兜底回复配置
+                    from config import get_config
+                    rate_limit_config = get_config("rate_limit", {})
+                    fallback_replies = rate_limit_config.get("fallback_reply", [])
+                    
+                    # 如果没有配置兜底回复，使用默认回复
+                    if not fallback_replies:
+                        fallback_replies = ["亲，感谢您的咨询！客服正在为您处理，请稍等片刻。"]
+                    
+                    # 随机选择一个兜底回复
+                    import random
+                    reply_text = random.choice(fallback_replies)
+                    return Reply(ReplyType.TEXT, reply_text)
+        except Exception as e:
+            self.logger.error(f"限流检查时出错: {e}")
+
         try:
             assert self._agent is not None, "Agent未初始化"
             # 确保session_id是字符串
