@@ -327,21 +327,30 @@ class EnhancedMessageConsumer:
         from_uid = metadata.get('from_uid')
         if from_uid:
             if self.rate_limiter.is_rate_limited(from_uid):
-                self.logger.warning(f"用户 {from_uid} 已超出限流阈值，使用兜底回复")
-                # 使用兜底回复
+                self.logger.warning(f"用户 {from_uid} 已超出限流阈值，等待人工回复")
+
+                # 先等待人工回复，与普通消息一致
+                if isinstance(from_uid, str):
+                    staff_replied = await self._check_staff_reply(context)
+                    if staff_replied:
+                        self.logger.info(f"用户 {from_uid} 限流期间人工客服已回复，跳过兜底回复")
+                        return
+
+                # 人工回复超时，发送兜底回复
                 await self._send_fallback_reply(context, metadata)
                 return
 
         # 先尝试非AI处理器（关键词、转人工等）
         ai_handler = None
         catch_all_handler = None
+        should_continue_to_ai = False  # 标记是否有非AI处理器返回False（需要继续传递给AI）
 
         for handler in self.handlers:
             # 检查是否是AI处理器
             is_ai_handler = hasattr(handler, '_get_ai_reply')
             # 检查是否是CatchAllHandler
             is_catch_all = isinstance(handler, CatchAllHandler)
-            
+
             if handler.can_handle(context):
                 if is_ai_handler:
                     # 记录AI处理器，稍后处理
@@ -357,9 +366,20 @@ class EnhancedMessageConsumer:
                             self.logger.debug(f"Message handled by {handler.__class__.__name__}")
                             return  # 处理成功，直接返回
                         else:
-                            self.logger.debug(f"Handler {handler.__class__.__name__} returned False, continuing...")
+                            # 非AI处理器返回False，表示需要继续传递给AI（如关键词pass_to_ai）
+                            should_continue_to_ai = True
+                            self.logger.debug(f"Handler {handler.__class__.__name__} returned False, continuing to AI...")
                     except Exception as e:
                         self.logger.error(f"Handler {handler.__class__.__name__} error: {e}")
+
+        # 关键词pass_to_ai后，等待人工回复（与普通消息一致）
+        if should_continue_to_ai:
+            from_uid_raw = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
+            if from_uid_raw and isinstance(from_uid_raw, str):
+                staff_replied = await self._check_staff_reply(context)
+                if staff_replied:
+                    self.logger.info(f"关键词传递AI前，人工客服已回复，跳过AI处理")
+                    return
 
         # 如果没有AI处理器，执行CatchAllHandler
         if not ai_handler:
@@ -538,12 +558,8 @@ class EnhancedMessageConsumer:
             return "unknown_unknown"
 
     async def _send_fallback_reply(self, context: Context, metadata: Dict[str, Any]):
-        """发送兜底回复"""
+        """发送兜底回复（调用方已等待人工回复，此处直接发送）"""
         try:
-            # 等待15秒，给人工客服处理的时间
-            import asyncio
-            await asyncio.sleep(15)
-            
             # 获取兜底回复配置
             from config import get_config
             rate_limit_config = get_config("rate_limit", {})

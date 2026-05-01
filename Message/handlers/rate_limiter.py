@@ -122,14 +122,15 @@ class CozeRateLimiter:
                 return False
 
             # 窗口内：检查是否超限
-            user.count += 1
-            if user.count > self._max_requests:
+            if user.count >= self._max_requests:
+                # 已超限，不再递增计数（因为没有实际请求AI）
                 logger.warning(
                     f"用户 {from_uid} 已超限：{user.count}/{self._max_requests}，"
                     f"窗口剩余 {(user.window_size - elapsed) / 3600:.1f}h"
                 )
                 return True
 
+            user.count += 1
             logger.debug(f"用户 {from_uid} 计数 {user.count}/{self._max_requests}")
             return False
 
