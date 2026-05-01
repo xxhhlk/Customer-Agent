@@ -270,7 +270,7 @@ class KnowledgeCard(ElevatedCardWidget):
             flyout_view.cleanup()
             self.current_dialog = None
 
-        flyout.finished.connect(_on_flyout_closed)
+        flyout.closed.connect(_on_flyout_closed)
 
     def delete_document(self) -> None:
         """
