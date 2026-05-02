@@ -127,7 +127,7 @@ class CustomerAgent(Bot):
                             )
                             if staff_replied:
                                 self.logger.info(f"用户 {from_uid} 限流期间人工客服已回复，跳过兜底回复")
-                                return None
+                                return Reply(ReplyType.TEXT, "")  # 返回空内容跳过后续处理
                         finally:
                             staff_reply_event_manager.stop_waiting(from_uid, event_id)
 

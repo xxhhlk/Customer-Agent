@@ -318,6 +318,7 @@ class PDDChannel(Channel):
 
                     # 判断是否应该清理资源
                     should_cleanup = False
+                    should_reconnect = False  # 是否需要触发重连
                     if stop_task in done:
                         self.logger.debug(f"收到停止信号: {shop_id}-{username}")
                         should_cleanup = True
@@ -325,6 +326,7 @@ class PDDChannel(Channel):
                         # 消息循环或心跳异常结束（不是正常停止）
                         self.logger.warning(f"消息循环异常结束: {shop_id}-{username}")
                         should_cleanup = True
+                        should_reconnect = True  # 需要触发重连
 
                     # 取消未完成的任务
                     for task in pending:
@@ -339,6 +341,11 @@ class PDDChannel(Channel):
                     # 只在需要时清理资源
                     if should_cleanup:
                         await self._cleanup_resources(f"pdd_{shop_id}")
+
+                    # 如果需要重连，抛出异常让 _connect_with_retry 捕获
+                    if should_reconnect:
+                        self.logger.info(f"消息循环异常结束，触发重连: {shop_id}-{username}")
+                        raise RuntimeError(f"消息循环异常结束，需要重连: {shop_id}-{username}")
 
                 except asyncio.CancelledError:
                     self.logger.debug(f"WebSocket任务被取消: {shop_id}-{username}")
@@ -355,17 +362,25 @@ class PDDChannel(Channel):
                         except (asyncio.CancelledError, asyncio.TimeoutError, asyncio.InvalidStateError):
                             pass
                     await self._cleanup_resources(f"pdd_{shop_id}")
+                    # 被取消不需要重连（用户主动停止）
+                    raise
 
         except ws_exceptions.ConnectionClosed as e:
             self.status_manager.update_status(shop_id, user_id, username, ConnectionState.ERROR, str(e))
             self.logger.warning(f"WebSocket连接已关闭: {shop_id}-{username}, 错误: {str(e)}")
             on_failure(f"WebSocket连接已关闭: {e}")
+            # 异常时也需要清理资源
+            await self._cleanup_resources(f"pdd_{shop_id}")
+            # 抛出异常，让 _connect_with_retry 能够捕获并触发重连
+            raise
         except Exception as e:
             self.status_manager.update_status(shop_id, user_id, username, ConnectionState.ERROR, str(e))
             self.logger.error(f"WebSocket连接错误: {shop_id}-{username}, 错误: {str(e)}")
             on_failure(f"WebSocket连接错误: {e}")
             # 异常时也需要清理资源
             await self._cleanup_resources(f"pdd_{shop_id}")
+            # 抛出异常，让 _connect_with_retry 能够捕获并触发重连
+            raise
 
     # ============================================================================
     # WebSocket优化功能 - 自动重连和单次连接方法

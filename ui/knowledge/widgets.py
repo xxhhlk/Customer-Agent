@@ -116,9 +116,9 @@ class KnowledgeCard(ElevatedCardWidget):
                 # Flyout 内的 view 是 KnowledgeDetailFlyout
                 flyout_view = None
                 if hasattr(self.current_dialog, 'view'):
-                    flyout_view = self.current_dialog.view
+                    flyout_view = self.current_dialog.view  # type: ignore[union-attr]
                 if flyout_view and hasattr(flyout_view, 'cleanup'):
-                    flyout_view.cleanup()
+                    flyout_view.cleanup()  # type: ignore[call-arg]
             except Exception:
                 pass
 
@@ -346,7 +346,7 @@ class KnowledgeCard(ElevatedCardWidget):
         widget: QWidget = self
         parent = widget.parent()
         while parent is not None:
-            widget = parent
+            widget = parent  # type: ignore[assignment]
             parent = widget.parent()
         return widget
 

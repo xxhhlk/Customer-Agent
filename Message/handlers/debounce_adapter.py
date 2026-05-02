@@ -98,8 +98,9 @@ class DebounceProcessorAdapter:
                 debounce_task = asyncio.create_task(asyncio.sleep(debounce_seconds))
                 
                 # 创建人工回复监听任务
+                # 注意：auto_cleanup=False，事件由外层的 finally 块负责清理
                 staff_reply_task = asyncio.create_task(
-                    staff_reply_manager.wait_for_staff_reply(from_uid, event_id, timeout=debounce_seconds)
+                    staff_reply_manager.wait_for_staff_reply(from_uid, event_id, timeout=debounce_seconds, auto_cleanup=False)
                 )
                 
                 # 等待任一任务完成

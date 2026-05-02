@@ -397,9 +397,14 @@ class EnhancedMessageConsumer:
         queue_task = asyncio.create_task(self._user_queues[user_key].get())
 
         # 人工回复监听任务
+        # 读取配置的等待时间
+        from config import get_config
+        staff_wait_config = get_config("staff_reply_wait", {})
+        staff_wait_seconds = staff_wait_config.get("wait_seconds", 30)
+
         staff_reply_event_id = self.staff_reply_manager.start_waiting(from_uid)
         staff_reply_task = asyncio.create_task(
-            self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=300)
+            self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=staff_wait_seconds)
         )
 
         try:
