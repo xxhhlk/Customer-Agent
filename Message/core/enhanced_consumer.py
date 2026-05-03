@@ -176,42 +176,93 @@ class EnhancedMessageConsumer:
                         self.staff_reply_manager.stop_waiting(from_uid, event_id)
                     return
 
-                # 2. 检查人工回复（使用提前创建的等待事件）
-                if event_id and isinstance(from_uid, str):
-                    staff_replied = await self._check_staff_reply_with_event(
-                        merged_wrapper.context, 
-                        from_uid, 
-                        event_id
-                    )
-                    if staff_replied:
-                        self.logger.info(f"User {user_key} staff replied, skip AI")
-                        return
-                    else:
-                        # 等待超时，检查队列中是否有冷却期内被跳过的消息
-                        user_queue = self._user_queues.get(user_key)
-                        if user_queue:
-                            pending_messages = []
-                            while True:
-                                try:
-                                    pending_wrapper = user_queue.get_nowait()
-                                    pending_messages.append(pending_wrapper)
-                                except asyncio.QueueEmpty:
-                                    break
-                            
-                            if pending_messages:
-                                self.logger.info(f"Found {len(pending_messages)} pending messages, merging...")
-                                # 合并消息
-                                all_messages = [merged_wrapper] + pending_messages
-                                merged_wrapper = self._merge_messages(all_messages)
-                else:
-                    # 配置关闭，直接处理
-                    staff_replied = await self._check_staff_reply(merged_wrapper.context)
-                    if staff_replied:
-                        self.logger.info(f"User {user_key} staff replied, skip AI")
-                        return
+                # 2. 关键词预处理：检查是否命中关键词
+                keyword_result = await self._precheck_keyword(merged_wrapper.context)
 
-                # 3. 处理消息（带AI超时中断）
-                await self._process_message_with_ai_timeout(merged_wrapper)
+                if keyword_result:
+                    # 命中关键词
+                    if keyword_result.get('pass_to_ai', False):
+                        # pass_to_ai 关键词：发送回复后等待人工，再决定是否转AI
+                        self.logger.info(f"命中 pass_to_ai 关键词，发送回复后等待人工客服")
+
+                        # 发送关键词回复
+                        await self._send_keyword_reply(merged_wrapper.context, keyword_result)
+
+                        # 等待人工回复
+                        if event_id and isinstance(from_uid, str):
+                            staff_replied = await self._check_staff_reply_with_event(
+                                merged_wrapper.context,
+                                from_uid,
+                                event_id
+                            )
+                            if staff_replied:
+                                self.logger.info(f"pass_to_ai 关键词后人工客服已回复，跳过AI处理")
+                                return
+                        else:
+                            staff_replied = await self._check_staff_reply(merged_wrapper.context)
+                            if staff_replied:
+                                self.logger.info(f"pass_to_ai 关键词后人工客服已回复，跳过AI处理")
+                                return
+
+                        # 人工未回复，继续转AI（标记需要跳过关键词处理）
+                        metadata = merged_wrapper.to_metadata()
+                        try:
+                            kwargs = getattr(merged_wrapper.context, 'kwargs', None)
+                            if kwargs:
+                                metadata['shop_id'] = getattr(kwargs, 'shop_id', None)
+                                metadata['user_id'] = getattr(kwargs, 'user_id', None)
+                                metadata['from_uid'] = getattr(kwargs, 'from_uid', None)
+                        except Exception:
+                            pass
+                        metadata['user_key'] = user_key
+                        metadata['skip_keyword'] = True  # 标记跳过关键词处理
+
+                        # 继续AI处理
+                        await self._process_message_with_ai_timeout(merged_wrapper, metadata)
+                    else:
+                        # 普通关键词：立即发送回复，不等待人工
+                        self.logger.info(f"命中普通关键词，立即发送回复")
+                        await self._send_keyword_reply(merged_wrapper.context, keyword_result)
+                    return
+                else:
+                    # 未命中关键词，走原逻辑：等待人工回复
+
+                    # 2. 检查人工回复（使用提前创建的等待事件）
+                    if event_id and isinstance(from_uid, str):
+                        staff_replied = await self._check_staff_reply_with_event(
+                            merged_wrapper.context,
+                            from_uid,
+                            event_id
+                        )
+                        if staff_replied:
+                            self.logger.info(f"User {user_key} staff replied, skip AI")
+                            return
+                        else:
+                            # 等待超时，检查队列中是否有冷却期内被跳过的消息
+                            user_queue = self._user_queues.get(user_key)
+                            if user_queue:
+                                pending_messages = []
+                                while True:
+                                    try:
+                                        pending_wrapper = user_queue.get_nowait()
+                                        pending_messages.append(pending_wrapper)
+                                    except asyncio.QueueEmpty:
+                                        break
+
+                                if pending_messages:
+                                    self.logger.info(f"Found {len(pending_messages)} pending messages, merging...")
+                                    # 合并消息
+                                    all_messages = [merged_wrapper] + pending_messages
+                                    merged_wrapper = self._merge_messages(all_messages)
+                    else:
+                        # 配置关闭，直接处理
+                        staff_replied = await self._check_staff_reply(merged_wrapper.context)
+                        if staff_replied:
+                            self.logger.info(f"User {user_key} staff replied, skip AI")
+                            return
+
+                    # 3. 处理消息（带AI超时中断）
+                    await self._process_message_with_ai_timeout(merged_wrapper)
             finally:
                 # 清理等待事件
                 if event_id and isinstance(from_uid, str):
@@ -219,6 +270,70 @@ class EnhancedMessageConsumer:
 
         except Exception as e:
             self.logger.error(f"Failed to process message with debounce: {e}")
+
+    async def _precheck_keyword(self, context: Context) -> Optional[dict]:
+        """预处理关键词：检查消息是否命中关键词
+
+        Args:
+            context: 消息上下文
+
+        Returns:
+            关键词匹配结果，如果未命中则返回 None
+        """
+        try:
+            # 遍历处理器，找到关键词处理器
+            for handler in self.handlers:
+                if hasattr(handler, 'match_keyword') and callable(getattr(handler, 'match_keyword', None)):
+                    # 这是关键词处理器
+                    if context.type.name == "TEXT" and context.content:
+                        matched = handler.match_keyword(context.content)
+                        if matched:
+                            self.logger.info(f"关键词预处理命中: {matched.get('keyword')}")
+                            return matched
+            return None
+        except Exception as e:
+            self.logger.error(f"关键词预处理失败: {e}")
+            return None
+
+    async def _send_keyword_reply(self, context: Context, keyword_result: dict) -> bool:
+        """发送关键词回复
+
+        Args:
+            context: 消息上下文
+            keyword_result: 关键词匹配结果
+
+        Returns:
+            是否发送成功
+        """
+        try:
+            shop_id = context.kwargs.shop_id if hasattr(context, 'kwargs') else None
+            user_id = context.kwargs.user_id if hasattr(context, 'kwargs') else None
+            from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
+
+            if not shop_id or not user_id or not from_uid:
+                self.logger.warning(f"关键词回复缺少参数: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
+                return False
+
+            reply_content = keyword_result.get('reply_content')
+            if not reply_content:
+                self.logger.warning(f"关键词无回复内容: {keyword_result.get('keyword')}")
+                return False
+
+            # 发送回复
+            from Channel.pinduoduo.utils.API.send_message import SendMessage
+            sender = SendMessage(str(shop_id), str(user_id))
+            result = sender.send_text(str(from_uid), reply_content)
+
+            if hasattr(result, 'get') and result.get('success'):
+                self.logger.info(f"已发送关键词回复: {reply_content}")
+                return True
+            else:
+                self.logger.warning(f"发送关键词回复失败: {result}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"发送关键词回复失败: {e}")
+            return False
 
     async def _check_staff_reply(self, context: Context) -> bool:
         """检查人工客服是否已回复"""
@@ -306,22 +421,33 @@ class EnhancedMessageConsumer:
 
         return last_wrapper
 
-    async def _process_message_with_ai_timeout(self, wrapper: MessageWrapper):
-        """带AI超时中断的消息处理"""
+    async def _process_message_with_ai_timeout(self, wrapper: MessageWrapper, prebuilt_metadata: Optional[Dict[str, Any]] = None):
+        """带AI超时中断的消息处理
+
+        Args:
+            wrapper: 消息包装器
+            prebuilt_metadata: 预构建的 metadata（可选，用于 pass_to_ai 场景）
+        """
         user_key = self._extract_user_id(wrapper.context)
         context = wrapper.context
 
-        # 构建 metadata，补充渠道上下文
-        metadata = wrapper.to_metadata()
-        try:
-            kwargs = getattr(context, 'kwargs', None)
-            if kwargs:
-                metadata['shop_id'] = getattr(kwargs, 'shop_id', None)
-                metadata['user_id'] = getattr(kwargs, 'user_id', None)
-                metadata['from_uid'] = getattr(kwargs, 'from_uid', None)
-        except Exception:
-            pass
-        metadata['user_key'] = user_key
+        # 使用预构建的 metadata 或重新构建
+        if prebuilt_metadata:
+            metadata = prebuilt_metadata
+        else:
+            metadata = wrapper.to_metadata()
+            try:
+                kwargs = getattr(context, 'kwargs', None)
+                if kwargs:
+                    metadata['shop_id'] = getattr(kwargs, 'shop_id', None)
+                    metadata['user_id'] = getattr(kwargs, 'user_id', None)
+                    metadata['from_uid'] = getattr(kwargs, 'from_uid', None)
+            except Exception:
+                pass
+            metadata['user_key'] = user_key
+
+        # 检查是否需要跳过关键词处理
+        skip_keyword = metadata.get('skip_keyword', False)
 
         # 限流检查 - 在处理AI请求之前检查用户是否超出限流阈值
         from_uid = metadata.get('from_uid')
@@ -350,6 +476,13 @@ class EnhancedMessageConsumer:
             is_ai_handler = hasattr(handler, '_get_ai_reply')
             # 检查是否是CatchAllHandler
             is_catch_all = isinstance(handler, CatchAllHandler)
+            # 检查是否是关键词处理器
+            is_keyword_handler = hasattr(handler, 'match_keyword')
+
+            # 如果标记跳过关键词，则跳过关键词处理器
+            if skip_keyword and is_keyword_handler:
+                self.logger.debug(f"跳过关键词处理器（pass_to_ai 场景）")
+                continue
 
             if handler.can_handle(context):
                 if is_ai_handler:
@@ -373,7 +506,8 @@ class EnhancedMessageConsumer:
                         self.logger.error(f"Handler {handler.__class__.__name__} error: {e}")
 
         # 关键词pass_to_ai后，等待人工回复（与普通消息一致）
-        if should_continue_to_ai:
+        # 注意：pass_to_ai 场景已经在防抖后的人工回复等待阶段处理了，这里只处理旧逻辑
+        if should_continue_to_ai and not skip_keyword:
             from_uid_raw = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
             if from_uid_raw and isinstance(from_uid_raw, str):
                 staff_replied = await self._check_staff_reply(context)
