@@ -606,8 +606,12 @@ class EnhancedMessageConsumer:
                         self.logger.info(f"Staff replied during AI processing, cancel AI")
                         return
                     else:
-                        # 等待超时，继续等待AI完成
+                        # 等待超时，创建新的等待事件继续监听
                         self.logger.debug(f"Staff reply wait timed out during AI processing, continue waiting for AI")
+                        # 清理旧事件
+                        self.staff_reply_manager.stop_waiting(from_uid, staff_reply_event_id)
+                        # 创建新事件
+                        staff_reply_event_id = self.staff_reply_manager.start_waiting(from_uid)
                         staff_reply_task = asyncio.create_task(
                             self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=staff_wait_seconds)
                         )
