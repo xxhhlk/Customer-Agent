@@ -591,17 +591,26 @@ class EnhancedMessageConsumer:
                         queue_task = asyncio.create_task(self._user_queues[user_key].get())
 
                 elif staff_reply_task in done:
-                    # 人工客服回复了
-                    ai_task.cancel()
-                    queue_task.cancel()
-                    try:
-                        await ai_task
-                        await queue_task
-                    except asyncio.CancelledError:
-                        pass
+                    # 检查人工客服是否真的回复了（超时也会进入done，返回False）
+                    staff_replied = staff_reply_task.result()
+                    if staff_replied:
+                        # 人工客服回复了，取消AI
+                        ai_task.cancel()
+                        queue_task.cancel()
+                        try:
+                            await ai_task
+                            await queue_task
+                        except asyncio.CancelledError:
+                            pass
 
-                    self.logger.info(f"Staff replied during AI processing, cancel AI")
-                    return
+                        self.logger.info(f"Staff replied during AI processing, cancel AI")
+                        return
+                    else:
+                        # 等待超时，继续等待AI完成
+                        self.logger.debug(f"Staff reply wait timed out during AI processing, continue waiting for AI")
+                        staff_reply_task = asyncio.create_task(
+                            self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=staff_wait_seconds)
+                        )
 
         except Exception as e:
             ai_task.cancel()
