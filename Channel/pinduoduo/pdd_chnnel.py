@@ -368,7 +368,8 @@ class PDDChannel(Channel):
         except ws_exceptions.ConnectionClosed as e:
             self.status_manager.update_status(shop_id, user_id, username, ConnectionState.ERROR, str(e))
             self.logger.warning(f"WebSocket连接已关闭: {shop_id}-{username}, 错误: {str(e)}")
-            on_failure(f"WebSocket连接已关闭: {e}")
+            # 不在此处调用 on_failure，让 _connect_with_retry 决定是否回调
+            # 只有所有重连尝试都失败后才会调用 on_failure
             # 异常时也需要清理资源
             await self._cleanup_resources(f"pdd_{shop_id}")
             # 抛出异常，让 _connect_with_retry 能够捕获并触发重连
@@ -376,7 +377,8 @@ class PDDChannel(Channel):
         except Exception as e:
             self.status_manager.update_status(shop_id, user_id, username, ConnectionState.ERROR, str(e))
             self.logger.error(f"WebSocket连接错误: {shop_id}-{username}, 错误: {str(e)}")
-            on_failure(f"WebSocket连接错误: {e}")
+            # 不在此处调用 on_failure，让 _connect_with_retry 决定是否回调
+            # 只有所有重连尝试都失败后才会调用 on_failure
             # 异常时也需要清理资源
             await self._cleanup_resources(f"pdd_{shop_id}")
             # 抛出异常，让 _connect_with_retry 能够捕获并触发重连
