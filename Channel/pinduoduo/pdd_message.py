@@ -132,11 +132,27 @@ class PDDChatMessage(ChatMessage):
         self.to_uid = basic_info.get("to_uid")
         
         # 检查是否非用户消息
+        # from.role="mall_cs" 的消息包括：
+        # - 人工客服回复
+        # - 平台机器人回复
+        # - 系统自动提示（如type=31的资金安全提示）
+        # 大部分都应该算作客服回复，避免AI抢着回复
         if self.from_user == "mall_cs":
-            self.user_msg_type = ContextType.MALL_CS
-            self.content = self.msg.get("message",{}).get("content")
-            
-            return
+            msg_type = self.msg.get("message", {}).get("type")
+            # 只有特定的系统提示类型不算客服回复
+            # type=31: 资金安全提示等系统自动消息
+            system_hint_types = [31]  # 可以后续扩展
+            if msg_type in system_hint_types:
+                # 系统自动发送的提示消息，标记为SYSTEM_HINT
+                self.user_msg_type = ContextType.SYSTEM_HINT
+                self.content = self.msg.get("message",{}).get("content")
+                return
+            else:
+                # 其他所有来自 mall_cs 的消息都算客服回复
+                # 包括人工回复、平台机器人回复等
+                self.user_msg_type = ContextType.MALL_CS
+                self.content = self.msg.get("message",{}).get("content")
+                return
         # 处理消息
         self._process_message()
         
