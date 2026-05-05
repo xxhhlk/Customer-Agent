@@ -1,6 +1,7 @@
 # 账号管理界面
 
 import asyncio
+import webbrowser
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
@@ -253,7 +254,7 @@ class AccountCard(CardWidget):
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(10)
         action_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        
+
         # 状态标签
         status_badge = self.createStatusBadge()
         
@@ -262,7 +263,12 @@ class AccountCard(CardWidget):
         buttons_layout = QHBoxLayout(buttons_widget)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(8)
-        
+
+        # 打开店铺按钮
+        self.open_shop_btn = PushButton("打开店铺")
+        self.open_shop_btn.setIcon(FIF.GLOBE)
+        self.open_shop_btn.setFixedSize(100, 32)
+
         # 验证按钮
         self.verify_btn = PushButton("验证")
         self.verify_btn.setIcon(FIF.SYNC)
@@ -278,6 +284,7 @@ class AccountCard(CardWidget):
         self.delete_btn.setIcon(FIF.DELETE)
         self.delete_btn.setFixedSize(100, 32)
 
+        buttons_layout.addWidget(self.open_shop_btn)
         buttons_layout.addWidget(self.verify_btn)
         buttons_layout.addWidget(self.edit_btn)
         buttons_layout.addWidget(self.delete_btn)
@@ -307,9 +314,21 @@ class AccountCard(CardWidget):
     
     def connectSignals(self):
         """连接信号"""
+        self.open_shop_btn.clicked.connect(self.openShopInBrowser)
         self.verify_btn.clicked.connect(lambda: self.verify_clicked.emit(self.account_data))
         self.edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self.account_data))
         self.delete_btn.clicked.connect(lambda: self.delete_clicked.emit(self.account_data))
+
+    def openShopInBrowser(self):
+        """在浏览器中打开店铺页面"""
+        try:
+            # 拼多多店铺URL格式: https://mms.pinduoduo.com/home/
+            shop_url = "https://mms.pinduoduo.com/home/"
+            webbrowser.open(shop_url)
+            logger.info(f"已在浏览器中打开店铺后台: {shop_url}")
+        except Exception as e:
+            logger.error(f"打开店铺页面失败: {e}")
+            QMessageBox.warning(self, "错误", f"无法打开店铺页面: {str(e)}")
     
     def setVerifyStatus(self, is_verifying: bool):
         """设置验证状态"""
