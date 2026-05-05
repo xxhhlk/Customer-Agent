@@ -2,6 +2,8 @@
 
 import asyncio
 import webbrowser
+import os
+from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
@@ -13,6 +15,7 @@ from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
 from database.db_manager import db_manager
 from Channel.pinduoduo.pdd_login import login_pdd
 from utils.logger_loguru import get_logger
+from utils.path_utils import get_app_dir
 import requests
 
 logger = get_logger()
@@ -90,6 +93,80 @@ class LoginThread(QThread):
         except Exception as e:
             logger.error(f"登录线程异常: {e}")
             self.login_finished.emit(False)
+
+
+class OpenShopThread(QThread):
+    """打开店铺浏览器线程"""
+    
+    def __init__(self, username: str):
+        super().__init__()
+        self.username = username
+        self.setObjectName("OpenShopThread")
+        
+    def run(self):
+        """在后台线程中打开店铺浏览器"""
+        try:
+            # 创建事件循环
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # 执行打开店铺
+            loop.run_until_complete(self._open_shop_browser())
+            
+            loop.close()
+            
+        except Exception as e:
+            logger.error(f"打开店铺浏览器线程异常: {e}")
+    
+    async def _open_shop_browser(self):
+        """使用 Playwright 打开带用户数据的浏览器"""
+        from playwright.async_api import async_playwright
+        
+        try:
+            # 启动Playwright
+            playwright = await async_playwright().start()
+            
+            # 使用相同用户名的用户数据目录（与登录时保持一致）
+            app_dir = get_app_dir()
+            user_data_dir = str(app_dir / "user_data" / self.username)
+            
+            # 检查用户数据目录是否存在
+            if not os.path.exists(user_data_dir):
+                logger.warning(f"用户数据目录不存在: {user_data_dir}，使用默认浏览器打开")
+                webbrowser.open("https://mms.pinduoduo.com/home/")
+                await playwright.stop()
+                return
+            
+            logger.info(f"使用用户数据目录打开店铺: {user_data_dir}")
+            
+            # 使用持久化上下文启动浏览器（非无头模式，显示界面）
+            context = await playwright.chromium.launch_persistent_context(
+                user_data_dir,
+                headless=False,  # 显示浏览器界面
+                args=[
+                    '--disable-gpu',
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-notifications',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor'
+                ]
+            )
+            
+            # 创建新页面并访问店铺后台
+            page = await context.new_page()
+            await page.goto("https://mms.pinduoduo.com/home/")
+            
+            logger.info(f"已打开店铺后台浏览器: {self.username}")
+            
+            # 注意：不关闭 context，让浏览器保持打开状态
+            # 用户可以手动关闭浏览器窗口
+            
+        except Exception as e:
+            logger.error(f"打开店铺浏览器失败: {e}")
+            # 失败时回退到默认浏览器
+            webbrowser.open("https://mms.pinduoduo.com/home/")
 
 
 class AccountCard(CardWidget):
@@ -174,9 +251,15 @@ class AccountCard(CardWidget):
     def cleanup(self):
         """程序退出时清理资源"""
         try:
+            # 清理 Logo 加载线程
             if hasattr(self, 'logo_loader_thread') and self.logo_loader_thread and self.logo_loader_thread.isRunning():
                 self.logo_loader_thread.requestInterruption()
                 self.logo_loader_thread.wait(3000)
+            
+            # 清理打开店铺线程
+            if hasattr(self, 'open_shop_thread') and self.open_shop_thread and self.open_shop_thread.isRunning():
+                self.open_shop_thread.requestInterruption()
+                self.open_shop_thread.wait(3000)
         except Exception as e:
             logger.error(f"清理账号卡片资源失败: {e}")
 
@@ -320,12 +403,12 @@ class AccountCard(CardWidget):
         self.delete_btn.clicked.connect(lambda: self.delete_clicked.emit(self.account_data))
 
     def openShopInBrowser(self):
-        """在浏览器中打开店铺页面"""
+        """在浏览器中打开店铺页面（使用带账户信息的浏览器）"""
         try:
-            # 拼多多店铺URL格式: https://mms.pinduoduo.com/home/
-            shop_url = "https://mms.pinduoduo.com/home/"
-            webbrowser.open(shop_url)
-            logger.info(f"已在浏览器中打开店铺后台: {shop_url}")
+            # 创建并启动打开店铺线程
+            self.open_shop_thread = OpenShopThread(self.account_name)
+            self.open_shop_thread.start()
+            logger.info(f"正在为账号 {self.account_name} 打开店铺浏览器...")
         except Exception as e:
             logger.error(f"打开店铺页面失败: {e}")
             QMessageBox.warning(self, "错误", f"无法打开店铺页面: {str(e)}")
