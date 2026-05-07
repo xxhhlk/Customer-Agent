@@ -204,21 +204,54 @@ class EnhancedMessageConsumer:
                                 self.logger.info(f"pass_to_ai 关键词后人工客服已回复，跳过AI处理")
                                 return
 
-                        # 人工未回复，继续转AI（标记需要跳过关键词处理）
-                        metadata = merged_wrapper.to_metadata()
-                        try:
-                            kwargs = getattr(merged_wrapper.context, 'kwargs', None)
-                            if kwargs:
-                                metadata['shop_id'] = getattr(kwargs, 'shop_id', None)
-                                metadata['user_id'] = getattr(kwargs, 'user_id', None)
-                                metadata['from_uid'] = getattr(kwargs, 'from_uid', None)
-                        except Exception:
-                            pass
-                        metadata['user_key'] = user_key
-                        metadata['skip_keyword'] = True  # 标记跳过关键词处理
+                        # 人工未回复，检查是否有有意义的内容传递给AI
+                        # 从消息中移除关键词，检查是否还有内容
+                        original_content = merged_wrapper.context.content or ""
+                        keyword = keyword_result.get('keyword', '')
+                        match_type = keyword_result.get('match_type', 'partial')
+                        
+                        # 获取关键词处理器（需要访问其方法）
+                        keyword_handler = None
+                        for handler in self.handlers:
+                            if hasattr(handler, 'match_keyword') and callable(getattr(handler, 'match_keyword', None)):
+                                keyword_handler = handler
+                                break
+                        
+                        # 检查移除后是否有有意义的内容
+                        should_pass_to_ai = False
+                        if keyword_handler:
+                            cleaned_content = keyword_handler._remove_keyword_from_message(
+                                original_content,
+                                keyword,
+                                match_type
+                            )
+                            should_pass_to_ai = keyword_handler._has_meaningful_content(cleaned_content)
+                            
+                            if should_pass_to_ai:
+                                self.logger.info(f"移除关键词后仍有有意义的内容，传递给AI: '{cleaned_content}'")
+                            else:
+                                self.logger.info(f"移除关键词后无有意义的内容，跳过AI处理")
+                        else:
+                            # 找不到关键词处理器，保守处理：传给AI
+                            self.logger.warning("未找到关键词处理器，保守处理：传递给AI")
+                            should_pass_to_ai = True
+                        
+                        if should_pass_to_ai:
+                            # 有内容，继续转AI（标记需要跳过关键词处理）
+                            metadata = merged_wrapper.to_metadata()
+                            try:
+                                kwargs = getattr(merged_wrapper.context, 'kwargs', None)
+                                if kwargs:
+                                    metadata['shop_id'] = getattr(kwargs, 'shop_id', None)
+                                    metadata['user_id'] = getattr(kwargs, 'user_id', None)
+                                    metadata['from_uid'] = getattr(kwargs, 'from_uid', None)
+                            except Exception:
+                                pass
+                            metadata['user_key'] = user_key
+                            metadata['skip_keyword'] = True  # 标记跳过关键词处理
 
-                        # 继续AI处理
-                        await self._process_message_with_ai_timeout(merged_wrapper, metadata)
+                            # 继续AI处理
+                            await self._process_message_with_ai_timeout(merged_wrapper, metadata)
                     else:
                         # 普通关键词：立即发送回复，不等待人工
                         self.logger.info(f"命中普通关键词，立即发送回复")
