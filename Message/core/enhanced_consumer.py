@@ -314,18 +314,29 @@ class EnhancedMessageConsumer:
                 self.logger.warning(f"关键词回复缺少参数: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
                 return False
 
-            reply_content = keyword_result.get('reply_content')
-            if not reply_content:
-                self.logger.warning(f"关键词无回复内容: {keyword_result.get('keyword')}")
-                return False
+            # 获取回复列表（优先）或单个回复（向后兼容）
+            reply_list = keyword_result.get('reply_list', [])
+            if not reply_list:
+                # 向后兼容：如果没有 reply_list，尝试使用 reply_content
+                reply_content = keyword_result.get('reply_content')
+                if reply_content:
+                    reply_list = [reply_content]
+                else:
+                    self.logger.warning(f"关键词无回复内容: {keyword_result.get('keyword')}")
+                    return False
+
+            # 随机选择一个回复
+            import random
+            reply_text = random.choice(reply_list)
+            self.logger.info(f"发送关键词回复（从{len(reply_list)}条中随机选择）: {reply_text}")
 
             # 发送回复
             from Channel.pinduoduo.utils.API.send_message import SendMessage
             sender = SendMessage(str(shop_id), str(user_id))
-            result = sender.send_text(str(from_uid), reply_content)
+            result = sender.send_text(str(from_uid), reply_text)
 
             if hasattr(result, 'get') and result.get('success'):
-                self.logger.info(f"已发送关键词回复: {reply_content}")
+                self.logger.info(f"已发送关键词回复: {reply_text}")
                 return True
             else:
                 self.logger.warning(f"发送关键词回复失败: {result}")

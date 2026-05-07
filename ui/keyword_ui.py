@@ -206,11 +206,28 @@ class GroupDialog(QDialog):
         self.name_edit.setText(self.group_data.get('group_name', ''))
         layout.addRow('分组名称:', self.name_edit)
 
-        # 回复内容
+        # 回复内容（支持多条回复，每行一条）
         self.reply_edit = TextEdit()
-        self.reply_edit.setPlaceholderText('输入回复内容（可选）')
-        self.reply_edit.setMaximumHeight(100)
-        self.reply_edit.setText(self.group_data.get('reply', '') or '')
+        self.reply_edit.setPlaceholderText('每行输入一条回复，支持多条回复随机抽取\n示例：\n感谢您的好评！\n谢谢亲的支持！')
+        self.reply_edit.setMaximumHeight(150)  # 增加高度以显示多行
+
+        # 加载已有数据时解析回复列表
+        reply_data = self.group_data.get('reply', '') or ''
+        if reply_data:
+            # 尝试解析为列表，否则按单字符串处理
+            try:
+                import json
+                parsed = json.loads(reply_data)
+                if isinstance(parsed, list):
+                    # 多条回复：每行显示一条
+                    self.reply_edit.setText('\n'.join(parsed))
+                else:
+                    # 单条回复：直接显示
+                    self.reply_edit.setText(str(parsed))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # 解析失败：按单字符串处理
+                self.reply_edit.setText(reply_data)
+
         layout.addRow('回复内容:', self.reply_edit)
 
         # 是否转人工
@@ -242,9 +259,29 @@ class GroupDialog(QDialog):
 
     def get_data(self) -> dict:
         """获取对话框数据"""
+        # 获取多行回复
+        reply_text = self.reply_edit.toPlainText().strip()
+
+        # 分割成列表并过滤空行
+        if reply_text:
+            reply_list = [line.strip() for line in reply_text.splitlines() if line.strip()]
+        else:
+            reply_list = []
+
+        # 序列化为存储格式
+        if not reply_list:
+            reply_serialized = None
+        elif len(reply_list) == 1:
+            # 单条回复保持字符串格式（向后兼容）
+            reply_serialized = reply_list[0]
+        else:
+            # 多条回复序列化为JSON数组
+            import json
+            reply_serialized = json.dumps(reply_list, ensure_ascii=False)
+
         return {
             'group_name': self.name_edit.text().strip(),
-            'reply': self.reply_edit.toPlainText().strip() or None,
+            'reply': reply_serialized,
             'is_transfer': self.transfer_check.isChecked(),
             'pass_to_ai': self.pass_to_ai_check.isChecked(),
             'priority': self.priority_spin.value()
@@ -585,6 +622,7 @@ class KeywordManagerWidget(QFrame):
         self.groups_data: List[dict] = []
         self.keywords_data: List[dict] = []
         self.current_group_id: int = 0
+        self.keyword_handler = KeywordDetectionHandler()  # 新增：用于热加载
         self.setupUI()
         self.loadGroupsFromDB()
 
@@ -914,6 +952,9 @@ class KeywordManagerWidget(QFrame):
                         self.group_list.setCurrentItem(item)
                         self.onGroupSelected(group_id, data['group_name'])
                         break
+                
+                # 触发关键词热加载
+                self.keyword_handler.reload_keywords()
                 QMessageBox.information(self, '成功', f'分组 "{data["group_name"]}" 添加成功！')
             else:
                 QMessageBox.warning(self, '失败', '分组添加失败，可能已存在！')
@@ -942,6 +983,9 @@ class KeywordManagerWidget(QFrame):
                 # 如果当前正在显示这个分组，刷新显示
                 if self.current_group_id == group_id:
                     self.onGroupSelected(group_id, data['group_name'])
+                
+                # 触发关键词热加载
+                self.keyword_handler.reload_keywords()
                 QMessageBox.information(self, '成功', '分组修改成功！')
             else:
                 QMessageBox.warning(self, '失败', '分组修改失败！')
@@ -982,6 +1026,9 @@ class KeywordManagerWidget(QFrame):
                     self.group_info_label.setText("")
                     self.keywords_data = []
                     self.refreshKeywordList()
+                
+                # 触发关键词热加载
+                self.keyword_handler.reload_keywords()
                 QMessageBox.information(self, '成功', f'分组 "{group_data["group_name"]}" 删除成功！')
             else:
                 QMessageBox.warning(self, '失败', '分组删除失败！')
@@ -1006,6 +1053,8 @@ class KeywordManagerWidget(QFrame):
 
             if db_manager.add_keyword(**data):
                 self.loadKeywordsByGroup(self.current_group_id)
+                # 触发关键词热加载
+                self.keyword_handler.reload_keywords()
                 QMessageBox.information(self, '成功', f'关键词 "{data["keyword"]}" 添加成功！')
             else:
                 QMessageBox.warning(self, '失败', f'关键词 "{data["keyword"]}" 添加失败，可能已存在！')
@@ -1037,6 +1086,8 @@ class KeywordManagerWidget(QFrame):
             ):
                 # 刷新当前分组的关键词列表
                 self.loadKeywordsByGroup(self.current_group_id)
+                # 触发关键词热加载
+                self.keyword_handler.reload_keywords()
                 QMessageBox.information(self, '成功', '关键词修改成功！')
             else:
                 QMessageBox.warning(self, '失败', '关键词修改失败！')
@@ -1066,6 +1117,8 @@ class KeywordManagerWidget(QFrame):
             if db_manager.delete_keyword(keyword_id):
                 self.keywords_data = [k for k in self.keywords_data if k.get('id') != keyword_id]
                 self.refreshKeywordList()
+                # 触发关键词热加载
+                self.keyword_handler.reload_keywords()
                 QMessageBox.information(self, '成功', f'关键词 "{keyword}" 删除成功！')
             else:
                 QMessageBox.warning(self, '失败', f'删除关键词 "{keyword}" 失败！')

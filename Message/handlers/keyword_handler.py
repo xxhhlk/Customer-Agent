@@ -93,7 +93,8 @@ class KeywordDetectionHandler(BaseHandler):
                     'keyword': kw.get('keyword'),
                     'group_name': kw.get('group_name', 'default'),
                     'match_type': kw.get('match_type', 'partial'),
-                    'reply_content': kw.get('reply_content'),
+                    'reply_content': kw.get('reply_content'),      # 保持原字段
+                    'reply_list': kw.get('reply_list', []),        # 新增：解析后的列表
                     'transfer_to_human': kw.get('transfer_to_human', False),
                     'pass_to_ai': kw.get('pass_to_ai', False),
                     'priority': kw.get('priority', 0)
@@ -128,10 +129,13 @@ class KeywordDetectionHandler(BaseHandler):
                 self.logger.info(f"转人工: {matched.get('keyword')}")
                 return await self._transfer_to_human(shop_id, user_id, from_uid)
             
-            # 如果有回复内容，发送回复
-            reply_content = matched.get('reply_content')
-            if reply_content:
-                self.logger.info(f"发送关键词回复: {reply_content}")
+            # 如果有回复内容，发送回复（支持多条随机选择）
+            reply_list = matched.get('reply_list', [])
+            if reply_list:
+                # 随机选择一个回复
+                import random
+                reply_content = random.choice(reply_list)
+                self.logger.info(f"发送关键词回复（从{len(reply_list)}条中随机选择）: {reply_content}")
                 sender = SendMessage(shop_id, user_id)
                 sender.send_text(from_uid, reply_content)
                 self.logger.info(f"已发送关键词回复: {reply_content}")

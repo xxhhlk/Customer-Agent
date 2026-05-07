@@ -67,6 +67,34 @@ class DatabaseManager:
         description = "拼多多"
         self.add_channel(channel_name, description)
 
+    @staticmethod
+    def parse_reply_content(reply_str: Optional[str]) -> List[str]:
+        """解析回复内容，支持单字符串和JSON数组
+
+        Args:
+            reply_str: 数据库中的回复字符串
+
+        Returns:
+            回复列表（至少包含一个元素或为空列表）
+        """
+        if not reply_str or not reply_str.strip():
+            return []
+
+        reply_str = reply_str.strip()
+
+        # 尝试解析为JSON数组
+        try:
+            parsed = json.loads(reply_str)
+            if isinstance(parsed, list):
+                # 过滤空元素并转换为字符串
+                return [str(item).strip() for item in parsed if item and str(item).strip()]
+            elif isinstance(parsed, str):
+                return [parsed] if parsed.strip() else []
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+        # 向后兼容：单字符串
+        return [reply_str]
 
     def get_session(self):
         """获取数据库会话"""
@@ -992,6 +1020,7 @@ class DatabaseManager:
                     'group_name': kw.group.group_name,
                     'match_type': kw.match_type,
                     'reply_content': kw.group.reply,
+                    'reply_list': self.parse_reply_content(kw.group.reply),  # 新增：解析后的列表
                     'transfer_to_human': bool(kw.group.is_transfer),
                     'pass_to_ai': bool(kw.group.pass_to_ai),
                     'priority': kw.group.priority,
