@@ -208,7 +208,7 @@ class GroupDialog(QDialog):
 
         # 回复内容（支持多条回复，每行一条）
         self.reply_edit = TextEdit()
-        self.reply_edit.setPlaceholderText('每行输入一条回复，支持多条回复随机抽取\n示例：\n感谢您的好评！\n谢谢亲的支持！')
+        self.reply_edit.setPlaceholderText('每行输入一条回复，支持多条回复随机抽取\n单条回复换行用 \\n 表示\n示例：\n感谢您的好评！\\n祝您生活愉快~\n谢谢亲的支持！')
         self.reply_edit.setMaximumHeight(150)  # 增加高度以显示多行
 
         # 加载已有数据时解析回复列表

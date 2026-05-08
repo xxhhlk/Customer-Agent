@@ -361,6 +361,8 @@ class EnhancedMessageConsumer:
             # 随机选择一个回复
             import random
             reply_text = random.choice(reply_list)
+            # 将 \n 转义字符替换为实际换行符
+            reply_text = reply_text.replace('\\n', '\n')
             self.logger.info(f"发送关键词回复（从{len(reply_list)}条中随机选择）: {reply_text}")
 
             # 发送回复
