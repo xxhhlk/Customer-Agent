@@ -126,6 +126,10 @@ class DebounceProcessorAdapter:
                             self.logger.info(f"人工客服在防抖期间回复了 {from_uid}，取消自动回复")
                             # 清理等待事件
                             staff_reply_manager.stop_waiting(from_uid, event_id)
+                            # 重置防抖状态，让新消息能够正常处理
+                            user_key = self._extract_user_id(wrapper.context)
+                            if user_key in self._last_message_time:
+                                del self._last_message_time[user_key]
                             return None  # 返回None表示取消自动回复
                     except Exception as e:
                         self.logger.error(f"检查人工回复结果时出错: {e}")
