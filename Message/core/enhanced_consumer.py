@@ -596,7 +596,17 @@ class EnhancedMessageConsumer:
 
                 if ai_task in done:
                     # AI完成
-                    queue_task.cancel()
+                    # 如果 queue_task 也完成了（取到了用户队列中的消息），需要将消息放回队列，避免丢失
+                    if queue_task in done and not queue_task.cancelled():
+                        try:
+                            pending_msg = queue_task.result()
+                            if pending_msg is not None:
+                                await self._user_queues[user_key].put(pending_msg)
+                                self.logger.info(f"AI完成时queue_task已取到消息，已放回用户队列")
+                        except Exception as e:
+                            self.logger.warning(f"获取queue_task结果失败: {e}")
+                    else:
+                        queue_task.cancel()
                     staff_reply_task.cancel()
                     try:
                         await queue_task
@@ -730,6 +740,10 @@ class EnhancedMessageConsumer:
         # 等待所有正在处理的任务完成
         await self.semaphore.acquire()
         self.semaphore.release()
+
+        # 清空用户队列和任务引用，避免重连后残留数据导致消息无法处理
+        self._user_queues.clear()
+        self._user_tasks.clear()
 
         self.logger.info(f"Enhanced Consumer {self.queue_name} stopped")
 
