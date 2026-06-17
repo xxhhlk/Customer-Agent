@@ -117,8 +117,8 @@ class PDDLogin():
             # 启动Playwright
             playwright = await async_playwright().start()
             
-            # 使用相同的用户数据目录
-            user_data_dir = str(app_dir / "user_data" / str(hash(self.name)))
+            # 使用相同的用户数据目录（与 login 方法保持一致，使用账号名而非哈希值）
+            user_data_dir = str(app_dir / "user_data" / self.name)
             self.logger.debug(f"使用用户数据目录刷新cookies: {user_data_dir}")
             
             # 检查用户数据目录是否存在

@@ -103,18 +103,41 @@ class SimpleMessageQueue:
         self.logger.info(f"Queue {self.name} closed")
 
     def _should_deduplicate(self, wrapper: MessageWrapper) -> bool:
-        """检查是否应该去重"""
+        """检查是否应该去重
+
+        去重依据为消息唯一标识（msg_id），而非消息内容。
+        同一内容可以出现在不同时间/不同买家的不同消息中，不应被去重。
+        仅当同一 msg_id 重复入队时才视为重复消息。
+        """
         if self._deduplication_cache is None:
             return False
 
-        content_hash = str(hash(wrapper.context.content))
-        if content_hash in self._deduplication_cache:
+        # 优先使用渠道消息ID（msg_id）作为去重键
+        dedup_key = self._get_dedup_key(wrapper)
+        if dedup_key in self._deduplication_cache:
             return True
 
         # 添加到缓存并定期清理
-        self._deduplication_cache.add(content_hash)
+        self._deduplication_cache.add(dedup_key)
         self._cleanup_deduplication_cache()
         return False
+
+    def _get_dedup_key(self, wrapper: MessageWrapper) -> str:
+        """获取去重键：优先使用渠道消息ID，其次使用队列内的消息ID"""
+        # 从 context.kwargs 中获取渠道消息ID
+        kwargs = wrapper.context.kwargs
+        if isinstance(kwargs, dict):
+            msg_id = kwargs.get("msg_id")
+        elif hasattr(kwargs, "msg_id"):
+            msg_id = kwargs.msg_id
+        else:
+            msg_id = None
+
+        if msg_id:
+            return str(msg_id)
+
+        # 没有渠道消息ID时，使用队列内的消息ID（每条消息唯一的UUID）
+        return wrapper.message_id
 
     def _cleanup_deduplication_cache(self):
         """清理过期的去重缓存"""
