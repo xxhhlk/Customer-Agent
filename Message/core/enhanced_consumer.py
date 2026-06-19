@@ -137,13 +137,7 @@ class EnhancedMessageConsumer:
 
             # 提前获取买家ID，用于人工回复监听
             from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
-            
-            # 检查是否在冷却期内且有人在等待人工回复（跳过新消息，让它们合并到下一条）
-            if from_uid and isinstance(from_uid, str):
-                if self.staff_reply_manager.is_in_cooldown(from_uid) and self.staff_reply_manager.is_waiting(from_uid):
-                    self.logger.info(f"User {user_key} in cooldown and has waiting event, skip this message (will merge to next)")
-                    return
-            
+
             # 检查是否需要监听人工回复（配置开启即可，不再限制时段）
             should_watch_staff_reply = False
             if from_uid and isinstance(from_uid, str):
@@ -253,7 +247,21 @@ class EnhancedMessageConsumer:
                             # 继续AI处理
                             await self._process_message_with_ai_timeout(merged_wrapper, metadata)
                     else:
-                        # 普通关键词：立即发送回复，不等待人工
+                        # 普通关键词：检查人工回复冷却期
+                        if from_uid and isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
+                            # 冷却期内：先等待人工回复，如果人工不回复再发关键词回复
+                            self.logger.info(f"命中关键词但买家 {from_uid} 在人工回复冷却期内，等待人工回复")
+                            if event_id and isinstance(from_uid, str):
+                                staff_replied = await self._check_staff_reply_with_event(
+                                    merged_wrapper.context,
+                                    from_uid,
+                                    event_id
+                                )
+                                if staff_replied:
+                                    self.logger.info(f"冷却期内命中关键词，人工客服已回复，跳过自动回复")
+                                    return
+                            # 人工未回复，发送关键词回复
+                            self.logger.info(f"冷却期内命中关键词，人工未回复，发送关键词回复")
                         self.logger.info(f"命中普通关键词，立即发送回复")
                         await self._send_keyword_reply(merged_wrapper.context, keyword_result)
                     return
