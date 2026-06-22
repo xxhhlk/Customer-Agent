@@ -1,4 +1,5 @@
 import sys
+import traceback
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
@@ -84,7 +85,20 @@ class MainWindow(FluentWindow):
         gap = now - self._freeze_check_last
         self._freeze_check_last = now
         if gap > 5:
-            self.logger.warning(f"⚠️ 主线程卡顿检测: 事件循环间隔 {gap:.1f}s（正常应≈3s），可能存在阻塞操作")
+            # 输出主线程当前堆栈，帮助定位阻塞来源
+            main_thread_id = self.thread()
+            stack_frames = []
+            for thread_id, frame in sys._current_frames().items():
+                # 找到主线程的堆栈
+                frame_info = traceback.extract_stack(frame)
+                # 通过堆栈深度和内容判断是否是主线程（Qt主线程通常有app.exec）
+                stack_str = ''.join(traceback.format_list(frame_info[-5:]))
+                stack_frames.append(stack_str)
+            
+            self.logger.warning(
+                f"⚠️ 主线程卡顿检测: 事件循环间隔 {gap:.1f}s（正常应≈3s），可能存在阻塞操作\n"
+                f"主线程堆栈（最近5帧）:\n{stack_frames[0] if stack_frames else '无法获取'}"
+            )
 
     def lazy_load_views(self):
         """延迟加载各个视图，提高启动速度"""
@@ -188,10 +202,15 @@ class MainWindow(FluentWindow):
         # 设置默认尺寸（避免几何冲突）
         self.resize(1400, 800)
         
-        # 设置标题栏文字颜色，确保深色模式下清晰可见
+        # 延迟最大化显示，避免在 paint engine 初始化前触发 QPainter 错误
+        # 同时延迟标题栏颜色设置，避免 setStyleSheet → PaletteChange 乒乓
+        QTimer.singleShot(0, self._deferred_show)
+    
+    def _deferred_show(self):
+        """延迟显示窗口，确保 paint engine 已初始化"""
+        # 设置标题栏文字颜色
         self._update_title_bar_color()
-        
-        # 最后最大化显示
+        # 最大化显示
         self.showMaximized()
     
     def _update_title_bar_color(self):
@@ -336,6 +355,13 @@ class MainWindow(FluentWindow):
         super().changeEvent(event)
         
         # 当调色板改变时（主题切换会触发此事件），更新标题栏颜色
-        # 使用 QTimer.singleShot 防止 setStyleSheet → PaletteChange 递归循环
+        # 防抖：避免 setStyleSheet → PaletteChange → singleShot(0, setStyleSheet) 乒乓循环
         if event.type() == QEvent.Type.PaletteChange:
-            QTimer.singleShot(0, self._update_title_bar_color) 
+            if not getattr(self, '_palette_pending', False):
+                self._palette_pending = True
+                QTimer.singleShot(100, self._do_palette_update) 
+
+    def _do_palette_update(self):
+        """实际执行调色板更新"""
+        self._palette_pending = False
+        self._update_title_bar_color()

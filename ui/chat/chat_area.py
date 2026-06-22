@@ -200,5 +200,13 @@ class ChatAreaPanel(QWidget):
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:
-            QTimer.singleShot(0, self._apply_theme)
+            # 防抖：避免 setStyleSheet → PaletteChange → singleShot 乒乓循环
+            if not getattr(self, '_palette_pending', False):
+                self._palette_pending = True
+                QTimer.singleShot(100, self._do_palette_update)
         super().changeEvent(event)
+
+    def _do_palette_update(self):
+        """实际执行调色板更新"""
+        self._palette_pending = False
+        self._apply_theme()

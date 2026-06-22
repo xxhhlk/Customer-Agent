@@ -63,7 +63,7 @@ def setup_playwright_browsers_path():
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_path)
     return browsers_path
 
-async def main():
+def main():
     """ 应用程序主函数 """
     # 设置 Playwright 浏览器路径
     browsers_path = setup_playwright_browsers_path()
@@ -98,7 +98,6 @@ async def main():
     logger.info(f"  MainWindow 模块导入耗时: {time.perf_counter() - t_import:.2f}s")
     t_window = time.perf_counter()
     window = MainWindow()
-    window.show()
     logger.info(f"  MainWindow 实例化耗时: {time.perf_counter() - t_window:.2f}s")
     logger.info(f"窗口创建与显示总耗时: {time.perf_counter() - t0:.2f}s")
 
@@ -116,4 +115,4 @@ async def main():
     sys.exit(exit_code)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()

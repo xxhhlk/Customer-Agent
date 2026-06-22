@@ -412,8 +412,15 @@ class GroupListWidget(QListWidget):
     def changeEvent(self, event):
         """监听主题切换事件"""
         super().changeEvent(event)
+        # 防抖：避免 setStyleSheet → PaletteChange → singleShot 乒乓循环
         if event.type() == QEvent.Type.PaletteChange:
-            QTimer.singleShot(0, self._update_style)
+            if not getattr(self, '_palette_pending', False):
+                self._palette_pending = True
+                QTimer.singleShot(100, self._do_palette_update)
+
+    def _do_palette_update(self):
+        self._palette_pending = False
+        self._update_style()
 
     def _update_style(self):
         """更新样式以适配当前主题"""
@@ -643,8 +650,15 @@ class KeywordManagerWidget(QFrame):
     def changeEvent(self, event):
         """监听主题切换事件"""
         super().changeEvent(event)
+        # 防抖：避免 setStyleSheet → PaletteChange → singleShot 乒乓循环
         if event.type() == QEvent.Type.PaletteChange:
-            QTimer.singleShot(0, self._update_label_styles)
+            if not getattr(self, '_palette_pending', False):
+                self._palette_pending = True
+                QTimer.singleShot(100, self._do_palette_update)
+
+    def _do_palette_update(self):
+        self._palette_pending = False
+        self._update_label_styles()
 
     def _update_label_styles(self):
         """更新标签样式以适配当前主题"""
