@@ -329,7 +329,7 @@ class KnowledgeUI(QWidget):
         """监听主题切换事件"""
         super().changeEvent(event)
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_label_styles()
+            QTimer.singleShot(0, self._update_label_styles)
 
     def _update_label_styles(self):
         """更新所有标签样式以适配当前主题"""

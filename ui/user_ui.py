@@ -482,8 +482,9 @@ class UserManagerWidget(QFrame):
         super().changeEvent(event)
         
         # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        # 使用 QTimer.singleShot 防止 setStyleSheet → PaletteChange 递归循环
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_label_styles()
+            QTimer.singleShot(0, self._update_label_styles)
     
     def _update_label_styles(self):
         """更新标签样式以适配当前主题"""
@@ -522,8 +523,12 @@ class UserManagerWidget(QFrame):
 
     def _on_accounts_loaded(self, accounts: list):
         """后台线程加载完成后，在主线程更新 UI"""
+        logger.info(f"账号数据加载完成，共 {len(accounts)} 条，开始渲染卡片...")
+        import time as _t
+        t0 = _t.perf_counter()
         self.accounts_data = accounts
         self.refreshAccountList()
+        logger.info(f"账号卡片渲染耗时: {_t.perf_counter()-t0:.2f}s")
         
     def setupUI(self):
         """设置主界面UI"""

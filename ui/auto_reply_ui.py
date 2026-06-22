@@ -739,8 +739,9 @@ class AutoReplyUI(QFrame):
         super().changeEvent(event)
         
         # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        # 使用 QTimer.singleShot 防止 setStyleSheet → PaletteChange 递归循环
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_label_styles()
+            QTimer.singleShot(0, self._update_label_styles)
     
     def _update_label_styles(self):
         """更新标签样式以适配当前主题"""
@@ -770,6 +771,8 @@ class AutoReplyUI(QFrame):
 
     def _loadAccountsAsync(self):
         """在后台线程加载账号数据，避免阻塞主线程"""
+        import time as _t
+        _t0 = _t.perf_counter()
         class _AccountLoader(QThread):
             result = pyqtSignal(list)
 
@@ -785,11 +788,15 @@ class AutoReplyUI(QFrame):
         self._account_loader = _AccountLoader(self)
         self._account_loader.result.connect(self._on_accounts_loaded)
         self._account_loader.start()
+        self.logger.info(f"  _loadAccountsAsync 启动耗时: {_t.perf_counter()-_t0:.3f}s")
 
     def _on_accounts_loaded(self, accounts: list):
         """后台线程加载完成后，在主线程更新 UI"""
+        self.logger.info(f"  账号数据加载完成，共 {len(accounts)} 条，开始渲染卡片...")
+        t = time.perf_counter()
         self.accounts_data = accounts
         self.refreshAccountList()
+        self.logger.info(f"  卡片渲染耗时: {time.perf_counter()-t:.2f}s")
 
     def setupUI(self):
         """设置主界面UI"""

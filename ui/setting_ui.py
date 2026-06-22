@@ -536,8 +536,9 @@ class SettingUI(QFrame):
         super().changeEvent(event)
         
         # 当调色板改变时（主题切换会触发此事件），更新标签颜色
+        # 使用 QTimer.singleShot 防止 setStyleSheet → PaletteChange 递归循环
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_label_styles()
+            QTimer.singleShot(0, self._update_label_styles)
     
     def _update_label_styles(self):
         """更新标签样式以适配当前主题"""

@@ -48,6 +48,13 @@ class MainWindow(FluentWindow):
         self.theme_listener.setObjectName("SystemThemeListener")
         self.theme_listener.start()
         
+        # 主线程卡顿检测定时器 — 每3秒检查事件循环是否畅通
+        self._freeze_check_timer = QTimer(self)
+        self._freeze_check_timer.setInterval(3000)
+        self._freeze_check_last = time.perf_counter()
+        self._freeze_check_timer.timeout.connect(self._check_freeze)
+        self._freeze_check_timer.start()
+        
         t = time.perf_counter()
         self.setWindowTitle('拼多多AI客服助手')
         self.setWindowIcon(QIcon("icon/icon.ico"))
@@ -70,6 +77,14 @@ class MainWindow(FluentWindow):
 
         # 延迟加载各个视图，让窗口先显示
         QTimer.singleShot(200, self.lazy_load_views)
+    
+    def _check_freeze(self):
+        """检测主线程是否卡顿 — 如果3秒定时器触发时发现距离上次超过5秒，说明中间有阻塞"""
+        now = time.perf_counter()
+        gap = now - self._freeze_check_last
+        self._freeze_check_last = now
+        if gap > 5:
+            self.logger.warning(f"⚠️ 主线程卡顿检测: 事件循环间隔 {gap:.1f}s（正常应≈3s），可能存在阻塞操作")
 
     def lazy_load_views(self):
         """延迟加载各个视图，提高启动速度"""
@@ -96,31 +111,40 @@ class MainWindow(FluentWindow):
 
         t = time.perf_counter()
         self.monitor_view = AutoReplyUI(self)
-        self.logger.info(f"  AutoReplyUI: {time.perf_counter()-t:.2f}s")
+        dt = time.perf_counter()-t
+        self.logger.info(f"  AutoReplyUI: {dt:.2f}s" + (" ⚠️>0.5s" if dt > 0.5 else ""))
         t = time.perf_counter()
         self.keyword_manager_view = KeywordManagerWidget(self)
-        self.logger.info(f"  KeywordManagerWidget: {time.perf_counter()-t:.2f}s")
+        dt = time.perf_counter()-t
+        self.logger.info(f"  KeywordManagerWidget: {dt:.2f}s" + (" ⚠️>0.5s" if dt > 0.5 else ""))
         t = time.perf_counter()
         self.user_manager_view = UserManagerWidget(self)
-        self.logger.info(f"  UserManagerWidget: {time.perf_counter()-t:.2f}s")
+        dt = time.perf_counter()-t
+        self.logger.info(f"  UserManagerWidget: {dt:.2f}s" + (" ⚠️>0.5s" if dt > 0.5 else ""))
         t = time.perf_counter()
         self.log_view = LogUI(self)
-        self.logger.info(f"  LogUI: {time.perf_counter()-t:.2f}s")
+        dt = time.perf_counter()-t
+        self.logger.info(f"  LogUI: {dt:.2f}s" + (" ⚠️>0.5s" if dt > 0.5 else ""))
         t = time.perf_counter()
         self.settingInterface = SettingUI(self)
-        self.logger.info(f"  SettingUI: {time.perf_counter()-t:.2f}s")
+        dt = time.perf_counter()-t
+        self.logger.info(f"  SettingUI: {dt:.2f}s" + (" ⚠️>0.5s" if dt > 0.5 else ""))
         t = time.perf_counter()
         self.knowledge_view = KnowledgeUI(self)
-        self.logger.info(f"  KnowledgeUI: {time.perf_counter()-t:.2f}s")
+        dt = time.perf_counter()-t
+        self.logger.info(f"  KnowledgeUI: {dt:.2f}s" + (" ⚠️>0.5s" if dt > 0.5 else ""))
         t = time.perf_counter()
         from ui.chat_ui import ChatUI
         self.logger.info(f"  import ChatUI: {time.perf_counter()-t:.2f}s")
         t = time.perf_counter()
         self.chat_view = ChatUI(self)
-        self.logger.info(f"  ChatUI: {time.perf_counter()-t:.2f}s")
+        dt = time.perf_counter()-t
+        self.logger.info(f"  ChatUI: {dt:.2f}s" + (" ⚠️>0.5s" if dt > 0.5 else ""))
 
         # 初始化导航
+        t = time.perf_counter()
         self.initNavigation()
+        self.logger.info(f"  initNavigation: {time.perf_counter()-t:.2f}s")
         self.logger.info(f"延迟视图初始化耗时: {time.perf_counter() - t0:.2f}s")
 
     # 初始化导航栏
@@ -172,6 +196,10 @@ class MainWindow(FluentWindow):
     
     def _update_title_bar_color(self):
         """更新标题栏文字颜色，适配深色/浅色模式"""
+        # 防递归：如果已经在更新中，跳过
+        if getattr(self, '_updating_title_bar', False):
+            return
+        self._updating_title_bar = True
         try:
             # 获取标题栏标签（PyQt-Fluent-Widgets 内部属性）
             title_label = getattr(self.titleBar, "titleLabel", None)
@@ -210,11 +238,19 @@ class MainWindow(FluentWindow):
                 self.titleBar.setStyleSheet("")
         except Exception as e:
             self.logger.warning(f"设置标题栏颜色失败: {e}")
+        finally:
+            self._updating_title_bar = False
     
     def _on_theme_changed(self):
-        """主题切换时更新标题栏颜色"""
-        # 直接更新标题栏颜色，不再强制 setTheme 切换
-        #（强制 setTheme 会触发额外的 PaletteChange 事件，可能导致界面卡顿）
+        """主题切换时更新标题栏颜色（防抖：500ms内只响应一次）"""
+        if getattr(self, '_theme_change_pending', False):
+            return
+        self._theme_change_pending = True
+        QTimer.singleShot(500, self._do_theme_change)
+    
+    def _do_theme_change(self):
+        """实际执行主题切换更新"""
+        self._theme_change_pending = False
         self._update_title_bar_color()
         
         # 强制更新标题栏按钮

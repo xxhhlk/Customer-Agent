@@ -413,7 +413,7 @@ class GroupListWidget(QListWidget):
         """监听主题切换事件"""
         super().changeEvent(event)
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_style()
+            QTimer.singleShot(0, self._update_style)
 
     def _update_style(self):
         """更新样式以适配当前主题"""
@@ -644,7 +644,7 @@ class KeywordManagerWidget(QFrame):
         """监听主题切换事件"""
         super().changeEvent(event)
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_label_styles()
+            QTimer.singleShot(0, self._update_label_styles)
 
     def _update_label_styles(self):
         """更新标签样式以适配当前主题"""
