@@ -203,7 +203,7 @@ class ConversationListPanel(QWidget):
         layout.addWidget(scroll)
 
     def refresh(self, shop_id: str | None = None):
-        """刷新会话列表"""
+        """刷新会话列表（全量重建）"""
         self._current_shop_filter = shop_id
         try:
             from services.message_persistence import message_persistence_service
@@ -214,11 +214,42 @@ class ConversationListPanel(QWidget):
         self._rebuild_cards(convs)
 
     def on_new_message(self, msg_data: dict):
-        """新消息到达时更新"""
+        """新消息到达时增量更新 — 不重建全部卡片"""
         # 检查店铺筛选
         if self._current_shop_filter and msg_data.get("shop_id") != self._current_shop_filter:
             return
-        self.refresh(self._current_shop_filter)
+
+        buyer_uid = msg_data.get("buyer_uid", "")
+        shop_id = msg_data.get("shop_id", "")
+        content = msg_data.get("content", "") or ""
+        nickname = msg_data.get("nickname", "")
+        timestamp = msg_data.get("timestamp", "")
+
+        # 查找现有卡片
+        existing_card = None
+        for card in self._cards:
+            if card.shop_id == shop_id and card.buyer_uid == buyer_uid:
+                existing_card = card
+                break
+
+        if existing_card:
+            # 更新预览内容
+            preview = content[:28] + "..." if len(content) > 30 else content or ""
+            existing_card._preview_label.setText(preview)
+            if timestamp:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp)
+                    existing_card._time_label.setText(dt.strftime("%H:%M"))
+                except (ValueError, TypeError):
+                    pass
+            # 如果该买家不在 _all_data 中，简单追加
+            if not any(d.get("buyer_uid") == buyer_uid and d.get("shop_id") == shop_id for d in self._all_data):
+                # 只是预览数据不够完整，轻度刷新
+                self.refresh(self._current_shop_filter)
+        else:
+            # 新会话，全量刷新
+            self.refresh(self._current_shop_filter)
 
     def _rebuild_cards(self, convs: list[dict]):
         """重建卡片列表"""

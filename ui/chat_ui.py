@@ -139,10 +139,8 @@ class ChatUI(QFrame):
         if current_filter and msg_data.get("shop_id") != current_filter:
             return
 
-        # 更新会话列表
-        shop_id = msg_data.get("shop_id", "")
-        if current_filter is None or current_filter == shop_id:
-            self.conversation_list.refresh(shop_id=current_filter)
+        # 增量更新会话列表（不全部重建）
+        self.conversation_list.on_new_message(msg_data)
 
         # 追加到当前聊天
         self.chat_area.append_message(msg_data)
