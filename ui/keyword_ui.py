@@ -1,7 +1,7 @@
 # 关键词管理界面 - 分组视图
 
 from typing import Optional, List
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                              QTableWidgetItem, QHeaderView, QAbstractItemView,
                              QMessageBox, QDialog, QFormLayout, QLineEdit,
