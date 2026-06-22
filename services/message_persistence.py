@@ -80,17 +80,10 @@ class MessagePersistenceService:
             to_uid = str(kwargs.to_uid) if kwargs.to_uid else ""
             from_user = str(kwargs.from_user) if kwargs.from_user else from_uid
 
-            # 从 PinduoduoKwargs 的 raw_data 中提取 from_role 和 to_role
-            from_role = "user"
-            to_role = "mall_cs"
-            raw_data = kwargs.raw_data if hasattr(kwargs, 'raw_data') and kwargs.raw_data else {}
-            if isinstance(raw_data, dict):
-                from_info = raw_data.get("from", {})
-                to_info = raw_data.get("to", {})
-                if isinstance(from_info, dict):
-                    from_role = str(from_info.get("role", "user"))
-                if isinstance(to_info, dict):
-                    to_role = str(to_info.get("role", "mall_cs"))
+            # 直接使用 PDDChatMessage 已解析好的 from_user（即 from.role）判断方向
+            # 不再从 raw_data 重新解析，因为 raw_data 顶层没有 from/to（它们在 message 子对象下）
+            from_role = str(kwargs.from_user) if kwargs.from_user else "user"
+            to_role = str(kwargs.to_user) if kwargs.to_user else "mall_cs"
 
             # 判断方向
             direction = "inbound" if from_role == "user" else "outbound"
