@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ui.log_ui import LogUI
     from ui.setting_ui import SettingUI
     from ui.Knowledge_ui import KnowledgeUI
+    from ui.chat_ui import ChatUI
     from PyQt6.QtGui import QCloseEvent
 
 class Widget(QFrame):
@@ -60,6 +61,7 @@ class MainWindow(FluentWindow):
         self.log_view: Optional["LogUI"] = None
         self.knowledge_view: Optional["KnowledgeUI"] = None
         self.settingInterface: Optional["SettingUI"] = None
+        self.chat_view: Optional["ChatUI"] = None
 
         t = time.perf_counter()
         # 立即初始化导航和窗口
@@ -110,6 +112,12 @@ class MainWindow(FluentWindow):
         t = time.perf_counter()
         self.knowledge_view = KnowledgeUI(self)
         self.logger.info(f"  KnowledgeUI: {time.perf_counter()-t:.2f}s")
+        t = time.perf_counter()
+        from ui.chat_ui import ChatUI
+        self.logger.info(f"  import ChatUI: {time.perf_counter()-t:.2f}s")
+        t = time.perf_counter()
+        self.chat_view = ChatUI(self)
+        self.logger.info(f"  ChatUI: {time.perf_counter()-t:.2f}s")
 
         # 初始化导航
         self.initNavigation()
@@ -122,6 +130,7 @@ class MainWindow(FluentWindow):
         assert self.keyword_manager_view is not None
         assert self.user_manager_view is not None
         assert self.knowledge_view is not None
+        assert self.chat_view is not None
         assert self.log_view is not None
         assert self.settingInterface is not None
 
@@ -131,6 +140,7 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.keyword_manager_view, FIF.EDIT, '关键词管理')
         self.addSubInterface(self.user_manager_view, FIF.PEOPLE, '账号管理')
         self.addSubInterface(self.knowledge_view, FIF.LIBRARY, '知识库管理')
+        self.addSubInterface(self.chat_view, FIF.CHAT, '聊天记录')
         self.addSubInterface(self.log_view, FIF.HISTORY, '日志管理')
         # 添加二维码按钮
         self.navigationInterface.addItem(
@@ -274,6 +284,13 @@ class MainWindow(FluentWindow):
         try:
             if self.knowledge_view:
                 self.knowledge_view.cleanup()
+        except Exception:
+            pass
+        
+        # 清理聊天记录界面资源（断开消息信号）
+        try:
+            if self.chat_view:
+                self.chat_view.cleanup()
         except Exception:
             pass
         

@@ -384,6 +384,17 @@ class EnhancedMessageConsumer:
 
             if hasattr(result, 'get') and result.get('success'):
                 self.logger.info(f"已发送关键词回复: {reply_text}")
+                # === 持久化关键词回复（接入点C） ===
+                try:
+                    from services.message_persistence import message_persistence_service
+                    msg_dict = message_persistence_service.save_outbound_message(
+                        shop_id=str(shop_id), user_id=str(user_id),
+                        buyer_uid=str(from_uid), reply_content=reply_text, reply_source='keyword'
+                    )
+                    if msg_dict:
+                        message_persistence_service.notify_new_message(msg_dict)
+                except Exception as e:
+                    self.logger.warning(f"持久化关键词回复失败: {e}")
                 return True
             else:
                 self.logger.warning(f"发送关键词回复失败: {result}")
@@ -852,6 +863,17 @@ class EnhancedMessageConsumer:
             result = sender.send_text(str(from_uid), reply_text)
             if isinstance(result, dict) and result.get("success"):
                 self.logger.info(f"已发送兜底回复给用户 {from_uid}")
+                # === 持久化兜底回复（接入点C） ===
+                try:
+                    from services.message_persistence import message_persistence_service
+                    msg_dict = message_persistence_service.save_outbound_message(
+                        shop_id=str(shop_id), user_id=str(user_id),
+                        buyer_uid=str(from_uid), reply_content=reply_text, reply_source='fallback'
+                    )
+                    if msg_dict:
+                        message_persistence_service.notify_new_message(msg_dict)
+                except Exception as e:
+                    self.logger.warning(f"持久化兜底回复失败: {e}")
             else:
                 self.logger.warning(f"发送兜底回复失败: {result}")
         except Exception as e:

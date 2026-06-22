@@ -1,9 +1,10 @@
 from typing import List, Optional, TYPE_CHECKING
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, create_engine, DateTime, Float
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, create_engine, DateTime, Float, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker, Mapped, mapped_column
 from datetime import datetime
 import json
+import uuid
 
 Base = declarative_base()
 
@@ -99,3 +100,38 @@ class Keyword(Base):
 
     def __repr__(self):
         return f"<Keyword(keyword='{self.keyword}', group_id={self.group_id}, match_type='{self.match_type}')>"
+
+
+class ChatMessageRecord(Base):
+    """聊天消息记录表，存储买家-客服对话历史"""
+    __tablename__ = 'chat_message_records'
+    __allow_unmapped__ = True
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    msg_id: Mapped[str] = mapped_column(String(100), nullable=False, comment='平台消息ID/手动生成ID')
+    shop_id: Mapped[str] = mapped_column(String(100), nullable=False, comment='店铺ID')
+    user_id: Mapped[str] = mapped_column(String(100), nullable=False, comment='登录账号user_id（用于手动发送）')
+    shop_name: Mapped[Optional[str]] = mapped_column(String(100), comment='店铺名称')
+    buyer_uid: Mapped[str] = mapped_column(String(100), nullable=False, index=True, comment='买家UID（会话分组键）')
+    from_uid: Mapped[str] = mapped_column(String(100), nullable=False, comment='发送者UID')
+    from_role: Mapped[str] = mapped_column(String(50), nullable=False, comment='发送者角色(user/mall_cs)')
+    to_uid: Mapped[Optional[str]] = mapped_column(String(100), comment='接收者UID')
+    to_role: Mapped[Optional[str]] = mapped_column(String(50), comment='接收者角色')
+    nickname: Mapped[Optional[str]] = mapped_column(String(100), comment='发送者昵称')
+    content: Mapped[Optional[str]] = mapped_column(Text, comment='消息内容')
+    msg_type: Mapped[Optional[str]] = mapped_column(String(50), comment='消息类型')
+    context_type: Mapped[Optional[str]] = mapped_column(String(50), comment='上下文类型')
+    direction: Mapped[str] = mapped_column(String(20), nullable=False, default='inbound',
+                                            comment='inbound=买家发来, outbound=客服发出')
+    reply_source: Mapped[Optional[str]] = mapped_column(String(50), comment='回复来源: ai/keyword/staff/fallback/manual')
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, comment='消息时间')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_chat_msg_buyer_ts', 'buyer_uid', 'timestamp'),
+        Index('ix_chat_msg_shop_ts', 'shop_id', 'timestamp'),
+        Index('ix_chat_msg_msg_id', 'msg_id'),
+    )
+
+    def __repr__(self):
+        return f"<ChatMessageRecord(buyer_uid='{self.buyer_uid}', direction='{self.direction}', shop='{self.shop_name}')>"

@@ -867,6 +867,15 @@ class PDDChannel(Channel):
                 return
 
             if context:
+                # === 持久化入站消息（接入点A） ===
+                try:
+                    from services.message_persistence import message_persistence_service
+                    msg_dict = message_persistence_service.save_inbound_message(context)
+                    if msg_dict:
+                        message_persistence_service.notify_new_message(msg_dict)
+                except Exception as e:
+                    self.logger.warning(f"持久化入站消息失败: {e}")
+
                 # 根据消息类型决定处理方式
                 if self._should_process_immediately(context):
                     # 立即处理的消息类型

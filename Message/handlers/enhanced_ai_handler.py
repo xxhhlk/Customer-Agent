@@ -195,6 +195,17 @@ class EnhancedAIReplyHandler(BaseHandler):
             sender = SendMessage(str(shop_id), str(user_id))
             result = sender.send_text(str(from_uid), reply)
             if isinstance(result, dict) and result.get("success"):
+                # === 持久化AI回复（接入点B） ===
+                try:
+                    from services.message_persistence import message_persistence_service
+                    msg_dict = message_persistence_service.save_outbound_message(
+                        shop_id=str(shop_id), user_id=str(user_id),
+                        buyer_uid=str(from_uid), reply_content=reply, reply_source='ai'
+                    )
+                    if msg_dict:
+                        message_persistence_service.notify_new_message(msg_dict)
+                except Exception as e:
+                    logger.warning(f"持久化AI回复失败: {e}")
                 return True
             return False
 

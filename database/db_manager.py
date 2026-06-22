@@ -1173,6 +1173,25 @@ class DatabaseManager:
         finally:
             session.close()
 
+    # ========== 店铺汇总查询 ==========
+
+    def get_all_shops(self) -> List[Dict[str, Any]]:
+        """获取所有渠道下的所有店铺（用于 ShopFilterBar）
+
+        Returns:
+            List[Dict]: 每个元素包含 channel_name, shop_id, shop_name
+        """
+        channels = self.get_all_channels()
+        result = []
+        for ch in channels:
+            for shop in self.get_shops_by_channel(ch["channel_name"]):
+                result.append({
+                    "channel_name": ch["channel_name"],
+                    "shop_id": shop["shop_id"],
+                    "shop_name": shop["shop_name"],
+                })
+        return result
+
 def get_db_manager() -> "DatabaseManager":
     """从 DI 容器获取 DatabaseManager 单例"""
     from core.di_container import container
