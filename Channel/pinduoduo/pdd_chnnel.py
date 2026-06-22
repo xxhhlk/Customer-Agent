@@ -976,6 +976,10 @@ class PDDChannel(Channel):
                 buyer_uid = context.kwargs.to_uid
                 from Message.handlers.staff_reply_event import staff_reply_event_manager
                 staff_reply_event_manager.notify_staff_reply(buyer_uid)
+                # 缓存客服消息，供AI回复时作为上下文
+                if context.content and buyer_uid:
+                    from Message.handlers.staff_message_cache import staff_message_cache
+                    staff_message_cache.add_message(buyer_uid, context.content)
                 
             elif context.type == ContextType.SYSTEM_BIZ:
                 # 系统业务消息

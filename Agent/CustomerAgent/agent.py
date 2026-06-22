@@ -146,6 +146,24 @@ class CustomerAgent(Bot):
 
         try:
             assert self._agent is not None, "Agent未初始化"
+
+            # 查询人工客服消息上下文
+            staff_context = ""
+            if context and hasattr(context, 'kwargs'):
+                from_uid = context.kwargs.from_uid
+                if from_uid:
+                    from Message.handlers.staff_message_cache import staff_message_cache
+                    staff_messages = staff_message_cache.get_messages(from_uid)
+                    if staff_messages:
+                        staff_context = "\n[人工客服已回复]\n" + "\n".join(
+                            f"客服({time_str}): {content}" for time_str, content in staff_messages
+                        )
+
+            # 拼接客服消息到 input
+            final_input = query
+            if staff_context:
+                final_input = f"{query}{staff_context}"
+
             # 确保session_id是字符串
             session_id = f"{context.channel_type}{context.kwargs.user_id}"
             # 确保dependencies中的值是安全的类型
@@ -156,11 +174,11 @@ class CustomerAgent(Bot):
                 "user_id": str(context.kwargs.user_id),
                 "from_uid": str(context.kwargs.from_uid),
             }
-            
+
             response: RunOutput = await self._agent.arun(
-                user_id=context.kwargs.user_id, 
-                session_id=session_id, 
-                input=query, 
+                user_id=context.kwargs.user_id,
+                session_id=session_id,
+                input=final_input,
                 dependencies=dependencies
             )
             return Reply(ReplyType.TEXT, response.content)
