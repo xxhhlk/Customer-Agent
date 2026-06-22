@@ -287,13 +287,20 @@ class MessagePersistenceService:
             result = []
             for row in rows:
                 ts = row.timestamp
+                # raw SQL 返回的 timestamp 可能是 str 而非 datetime，需要兼容
+                if ts and isinstance(ts, str):
+                    last_time = ts  # 已经是 ISO 格式字符串
+                elif ts and hasattr(ts, "isoformat"):
+                    last_time = ts.isoformat()
+                else:
+                    last_time = ""
                 result.append({
                     "shop_id": row.shop_id,
                     "shop_name": row.shop_name or row.shop_id,
                     "buyer_uid": row.buyer_uid,
                     "nickname": row.nickname or row.buyer_uid,
                     "last_content": row.content or "",
-                    "last_time": ts.isoformat() if ts else "",
+                    "last_time": last_time,
                     "last_direction": row.direction,
                     "msg_count": row.msg_count,
                 })

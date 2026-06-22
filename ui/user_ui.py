@@ -498,7 +498,32 @@ class UserManagerWidget(QFrame):
     def _maybeLoadOnShow(self):
         if not self._loaded_once and self.isVisible():
             self._loaded_once = True
-            self.loadAccountsFromDB()
+            self._loadAccountsAsync()
+
+    def _loadAccountsAsync(self):
+        """在后台线程加载账号数据，避免阻塞主线程"""
+        from PyQt6.QtCore import QThread, pyqtSignal
+
+        class _AccountLoader(QThread):
+            result = pyqtSignal(list)
+
+            def run(self):
+                try:
+                    from database.db_manager import get_db_manager
+                    db = get_db_manager()
+                    accounts = db.get_all_accounts_flat()
+                except Exception:
+                    accounts = []
+                self.result.emit(accounts)
+
+        self._account_loader = _AccountLoader(self)
+        self._account_loader.result.connect(self._on_accounts_loaded)
+        self._account_loader.start()
+
+    def _on_accounts_loaded(self, accounts: list):
+        """后台线程加载完成后，在主线程更新 UI"""
+        self.accounts_data = accounts
+        self.refreshAccountList()
         
     def setupUI(self):
         """设置主界面UI"""
@@ -697,8 +722,8 @@ class UserManagerWidget(QFrame):
         self.stats_label.setText(f"共 {count} 个账号")
 
     def reloadAccounts(self):
-        """重新加载账号"""
-        self.loadAccountsFromDB()
+        """重新加载账号（异步）"""
+        self._loadAccountsAsync()
     
     def onVerifyAccount(self, account_data: dict):
         """验证账号"""

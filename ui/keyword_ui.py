@@ -622,9 +622,23 @@ class KeywordManagerWidget(QFrame):
         self.groups_data: List[dict] = []
         self.keywords_data: List[dict] = []
         self.current_group_id: int = 0
+        self._loaded_once = False
         self.keyword_handler = KeywordDetectionHandler()  # 新增：用于热加载
         self.setupUI()
-        self.loadGroupsFromDB()
+        # 延迟加载数据，避免在构造函数中同步查库阻塞主线程
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(300, self._maybeLoadOnShow)
+
+    def _maybeLoadOnShow(self):
+        """延迟加载数据，确保 UI 先渲染"""
+        if not self._loaded_once and self.isVisible():
+            self._loaded_once = True
+            self.loadGroupsFromDB()
+
+    def showEvent(self, event):
+        """页面显示时加载数据（首次）"""
+        super().showEvent(event)
+        self._maybeLoadOnShow()
 
     def changeEvent(self, event):
         """监听主题切换事件"""

@@ -1,8 +1,9 @@
 import os
 import json
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import PoolEvents
 from typing import List, Dict, Any, Optional, Union
 from utils.logger_loguru import get_logger
 from database.models import Base, Channel, Shop, Account, Keyword, KeywordGroup
@@ -71,14 +72,29 @@ class DatabaseManager:
         self.init_db()
 
     def _enable_wal_mode(self):
-        """启用 SQLite WAL 模式，允许读写并发，避免后台线程读阻塞主线程写"""
+        """启用 SQLite WAL 模式，允许读写并发，避免后台线程读阻塞主线程写
+
+        通过 SQLAlchemy PoolEvents.connect 事件在每个新连接上设置 PRAGMA，
+        而不是只设置一次——SQLite 的 PRAGMA 是 per-connection 的。
+        """
         try:
+            # 先在当前连接上设置 WAL 模式（WAL 是数据库级别，设置一次即可持久）
             with self.engine.connect() as conn:
                 conn.execute(text("PRAGMA journal_mode=WAL"))
-                conn.execute(text("PRAGMA busy_timeout=5000"))
                 conn.commit()
         except Exception as e:
             print(f"[DatabaseManager] 启用 WAL 模式失败: {e}")
+
+        # 每个新连接都设置 busy_timeout（PRAGMA 是 per-connection 的）
+        @event.listens_for(self.engine, "connect")
+        def _set_sqlite_pragma(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            try:
+                cursor.execute("PRAGMA busy_timeout=5000")
+            except Exception as e:
+                print(f"[DatabaseManager] 设置 PRAGMA busy_timeout 失败: {e}")
+            finally:
+                cursor.close()
 
     def init_db(self):
         """初始化渠道信息"""
@@ -1197,19 +1213,74 @@ class DatabaseManager:
     def get_all_shops(self) -> List[Dict[str, Any]]:
         """获取所有渠道下的所有店铺（用于 ShopFilterBar）
 
+        使用单条 JOIN 查询替代 N+1，避免多次数据库访问阻塞主线程。
+
         Returns:
             List[Dict]: 每个元素包含 channel_name, shop_id, shop_name
         """
-        channels = self.get_all_channels()
-        result = []
-        for ch in channels:
-            for shop in self.get_shops_by_channel(ch["channel_name"]):
-                result.append({
-                    "channel_name": ch["channel_name"],
-                    "shop_id": shop["shop_id"],
-                    "shop_name": shop["shop_name"],
-                })
-        return result
+        session = self.get_session()
+        try:
+            rows = session.query(
+                Channel.channel_name, Shop.shop_id, Shop.shop_name
+            ).join(Shop, Shop.channel_id == Channel.id).all()
+            return [
+                {
+                    "channel_name": row.channel_name,
+                    "shop_id": row.shop_id,
+                    "shop_name": row.shop_name,
+                }
+                for row in rows
+            ]
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取店铺列表失败: {str(e)}")
+            return []
+        finally:
+            session.close()
+
+    def get_all_accounts_flat(self) -> List[Dict[str, Any]]:
+        """获取所有账号的扁平化数据（单条 JOIN 查询，避免 N+1）
+
+        AutoReplyUI 和 UserManagerWidget 使用此方法替代 loadAccountsFromDB 中的
+        三层嵌套同步查询（get_all_channels → get_shops_by_channel → get_accounts_by_shop）。
+
+        Returns:
+            List[Dict]: 每个元素包含 channel_name, shop_id, shop_name, shop_logo,
+                        user_id, username, password, status, cookies
+        """
+        session = self.get_session()
+        try:
+            rows = session.query(
+                Channel.channel_name,
+                Shop.shop_id,
+                Shop.shop_name,
+                Shop.shop_logo,
+                Account.user_id,
+                Account.username,
+                Account.password,
+                Account.status,
+                Account.cookies,
+            ).join(Shop, Shop.channel_id == Channel.id
+            ).join(Account, Account.shop_id == Shop.id).all()
+
+            return [
+                {
+                    "channel_name": row.channel_name,
+                    "shop_id": row.shop_id,
+                    "shop_name": row.shop_name,
+                    "shop_logo": row.shop_logo,
+                    "user_id": row.user_id,
+                    "username": row.username,
+                    "password": row.password,
+                    "status": row.status,
+                    "cookies": row.cookies,
+                }
+                for row in rows
+            ]
+        except SQLAlchemyError as e:
+            self.logger.error(f"获取账号列表失败: {str(e)}")
+            return []
+        finally:
+            session.close()
 
 def get_db_manager() -> "DatabaseManager":
     """从 DI 容器获取 DatabaseManager 单例"""

@@ -761,12 +761,35 @@ class AutoReplyUI(QFrame):
     def _maybeLoadOnShow(self):
         if not self._loaded_once and self.isVisible():
             self._loaded_once = True
-            self.loadAccountsFromDB()
-            
+            self._loadAccountsAsync()
+
             # 检查是否启用启动时自动开始回复
             if config.get("auto_start_on_launch", False):
                 # 延迟执行，确保 UI 完全加载
                 QTimer.singleShot(500, self._autoStartAllReply)
+
+    def _loadAccountsAsync(self):
+        """在后台线程加载账号数据，避免阻塞主线程"""
+        class _AccountLoader(QThread):
+            result = pyqtSignal(list)
+
+            def run(self):
+                try:
+                    from database.db_manager import get_db_manager
+                    db = get_db_manager()
+                    accounts = db.get_all_accounts_flat()
+                except Exception:
+                    accounts = []
+                self.result.emit(accounts)
+
+        self._account_loader = _AccountLoader(self)
+        self._account_loader.result.connect(self._on_accounts_loaded)
+        self._account_loader.start()
+
+    def _on_accounts_loaded(self, accounts: list):
+        """后台线程加载完成后，在主线程更新 UI"""
+        self.accounts_data = accounts
+        self.refreshAccountList()
 
     def setupUI(self):
         """设置主界面UI"""
@@ -1029,8 +1052,8 @@ class AutoReplyUI(QFrame):
             self.logger.error(f"同步自动回复状态失败: {str(e)}")
     
     def reloadAccounts(self):
-        """重新加载账号"""
-        self.loadAccountsFromDB()
+        """重新加载账号（异步）"""
+        self._loadAccountsAsync()
     
     def _autoStartAllReply(self):
         """启动时自动开始所有符合条件的账号的自动回复"""

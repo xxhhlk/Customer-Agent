@@ -25,6 +25,7 @@ class ChatUI(QFrame):
         super().__init__(parent)
         self.setObjectName("ChatUI")
         self._shops: list[dict] = []
+        self._loader = None  # DataLoader 实例引用，用于取消旧任务
         self._init_ui()
         self._apply_theme()
         # 延迟加载数据，放到事件队列末尾确保窗口先渲染
@@ -34,6 +35,16 @@ class ChatUI(QFrame):
     def _load_data(self, shop_id: str | None):
         """在后台线程加载数据库数据，避免阻塞 UI"""
         from PyQt6.QtCore import QThread
+
+        # 取消旧 loader（防止多个 loader 同时运行导致竞态条件）
+        if self._loader is not None:
+            try:
+                self._loader.result.disconnect(self._on_data_loaded)
+            except (TypeError, RuntimeError):
+                pass
+            self._loader.quit()
+            self._loader.wait(500)
+            self._loader = None
 
         class DataLoader(QThread):
             result = pyqtSignal(list, list)  # shops, conversations
@@ -172,16 +183,41 @@ class ChatUI(QFrame):
             result = sender.send_text(str(buyer_uid), text)
 
             if isinstance(result, dict) and result.get("success"):
-                # 持久化
-                try:
+                # 在后台线程持久化，避免阻塞主线程
+                from PyQt6.QtCore import QThread
+
+                class _PersistWorker(QThread):
+                    done = pyqtSignal(dict)
+
+                    def __init__(self, sid, uid, buid, txt):
+                        super().__init__()
+                        self._sid = sid
+                        self._uid = uid
+                        self._buid = buid
+                        self._txt = txt
+
+                    def run(self):
+                        try:
+                            from services.message_persistence import message_persistence_service
+                            msg_dict = message_persistence_service.save_manual_reply(
+                                shop_id=self._sid, user_id=self._uid,
+                                buyer_uid=self._buid, text=self._txt
+                            )
+                            if msg_dict:
+                                self.done.emit(msg_dict)
+                        except Exception:
+                            pass
+
+                worker = _PersistWorker(shop_id, user_id, buyer_uid, text)
+
+                def _on_persist_done(msg_dict: dict):
                     from services.message_persistence import message_persistence_service
-                    msg_dict = message_persistence_service.save_manual_reply(
-                        shop_id=shop_id, user_id=user_id, buyer_uid=buyer_uid, text=text
-                    )
-                    if msg_dict:
-                        message_persistence_service.notify_new_message(msg_dict)
-                except Exception as e:
-                    logger.warning(f"持久化手动回复失败: {e}")
+                    message_persistence_service.notify_new_message(msg_dict)
+
+                worker.done.connect(_on_persist_done)
+                worker.start()
+                # 保持引用防止 GC
+                self._persist_worker = worker
             else:
                 logger.warning(f"发送手动回复失败: {result}")
         except Exception as e:
