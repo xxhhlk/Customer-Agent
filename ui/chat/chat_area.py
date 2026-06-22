@@ -4,7 +4,7 @@
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QFrame,
 )
 from PyQt6.QtGui import QFont
 from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel
@@ -53,7 +53,7 @@ class ChatAreaPanel(QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll_area.setFrameShape(QWidget.Shape.NoFrame)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
 
         self._msg_container = QWidget()
         self._msg_layout = QVBoxLayout(self._msg_container)
