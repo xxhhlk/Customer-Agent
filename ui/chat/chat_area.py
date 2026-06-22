@@ -178,9 +178,25 @@ class ChatAreaPanel(QWidget):
         """清空消息气泡"""
         while self._msg_layout.count() > 1:  # 保留底部 stretch
             item = self._msg_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+            elif item.layout() is not None:
+                # 嵌套布局项，递归清理
+                self._clear_sub_layout(item.layout())
+
+    @staticmethod
+    def _clear_sub_layout(layout):
+        """递归清理嵌套布局中的 widget"""
+        while layout.count():
+            child = layout.takeAt(0)
+            w = child.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+            elif child.layout() is not None:
+                ChatAreaPanel._clear_sub_layout(child.layout())
 
     def _on_input_message(self, text: str):
         """输入框发送消息"""
