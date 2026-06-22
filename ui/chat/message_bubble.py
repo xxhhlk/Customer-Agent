@@ -149,5 +149,6 @@ class MessageBubble(QFrame):
         """监听主题切换"""
         from PyQt6.QtCore import QEvent
         if event.type() == QEvent.Type.PaletteChange:
-            self._apply_theme()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, self._apply_theme)
         super().changeEvent(event)

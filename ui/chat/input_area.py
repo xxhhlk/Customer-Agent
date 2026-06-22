@@ -114,5 +114,6 @@ class InputArea(QWidget):
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:
-            self._apply_theme()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, self._apply_theme)
         super().changeEvent(event)
