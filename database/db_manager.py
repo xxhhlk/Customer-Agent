@@ -3,7 +3,6 @@ import json
 from sqlalchemy import create_engine, text, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import PoolEvents
 from typing import List, Dict, Any, Optional, Union
 from utils.logger_loguru import get_logger
 from database.models import Base, Channel, Shop, Account, Keyword, KeywordGroup
