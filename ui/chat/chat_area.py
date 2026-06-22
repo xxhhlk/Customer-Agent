@@ -2,7 +2,7 @@
 聊天区域面板 - 消息气泡区 + 输入区
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent, QThread
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QFrame, QScrollArea,
 )
@@ -11,6 +11,26 @@ from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel, isDarkThem
 
 from ui.chat.message_bubble import MessageBubble
 from ui.chat.input_area import InputArea
+
+
+class _MessageLoader(QThread):
+    """后台线程加载消息记录"""
+    result = pyqtSignal(str, str, list)  # shop_id, buyer_uid, messages
+
+    def __init__(self, shop_id: str, buyer_uid: str, parent=None):
+        super().__init__(parent)
+        self._shop_id = shop_id
+        self._buyer_uid = buyer_uid
+
+    def run(self):
+        try:
+            from services.message_persistence import message_persistence_service
+            messages = message_persistence_service.get_messages_by_uid(
+                shop_id=self._shop_id, buyer_uid=self._buyer_uid, limit=200
+            )
+        except Exception:
+            messages = []
+        self.result.emit(self._shop_id, self._buyer_uid, messages)
 
 
 class ChatAreaPanel(QWidget):
@@ -24,6 +44,7 @@ class ChatAreaPanel(QWidget):
         self._current_shop_id: str = ""
         self._current_user_id: str = ""
         self._current_buyer_uid: str = ""
+        self._loader: _MessageLoader | None = None
 
         self._init_ui()
         self._apply_theme()
@@ -92,28 +113,36 @@ class ChatAreaPanel(QWidget):
         layout.addWidget(self.input_area)
 
     def load_messages(self, shop_id: str, buyer_uid: str):
-        """加载指定买家在指定店铺的消息"""
-        # 缓存 shop_id/user_id/buyer_uid 用于手动发送
+        """加载指定买家在指定店铺的消息（异步后台加载）"""
+        # 缓存 shop_id/buyer_uid 用于手动发送
         self._current_shop_id = shop_id
         self._current_buyer_uid = buyer_uid
 
         # 清空旧消息
         self._clear_messages()
+        self.header_title.setText("加载中...")
+        self.header_detail.setText("")
+        self.input_area.set_enabled(False)
 
-        # 查询消息
-        try:
-            from services.message_persistence import message_persistence_service
-            messages = message_persistence_service.get_messages_by_uid(
-                shop_id=shop_id, buyer_uid=buyer_uid, limit=200
-            )
-        except Exception:
-            messages = []
+        # 后台线程加载
+        if self._loader is not None:
+            self._loader.result.disconnect(self._on_messages_loaded)
+            self._loader.quit()
+            self._loader.wait(500)
+        self._loader = _MessageLoader(shop_id, buyer_uid, self)
+        self._loader.result.connect(self._on_messages_loaded)
+        self._loader.start()
+
+    def _on_messages_loaded(self, shop_id: str, buyer_uid: str, messages: list):
+        """后台线程加载完成后，在主线程渲染气泡"""
+        # 防止过期结果（用户已切换到其他会话）
+        if shop_id != self._current_shop_id or buyer_uid != self._current_buyer_uid:
+            return
 
         if messages:
             # 从首条消息提取 user_id
             self._current_user_id = messages[0].get("user_id", "")
             nickname = messages[0].get("nickname", buyer_uid)
-
             self.header_title.setText(nickname)
             self.header_detail.setText(f"({buyer_uid})")
 

@@ -27,9 +27,61 @@ class ChatUI(QFrame):
         self._shops: list[dict] = []
         self._init_ui()
         self._apply_theme()
-        # 延迟加载店铺列表
+        # 延迟加载数据，放到事件队列末尾确保窗口先渲染
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(300, self._load_shops)
+        QTimer.singleShot(500, lambda: self._load_data(shop_id=None))
+
+    def _load_data(self, shop_id: str | None):
+        """在后台线程加载数据库数据，避免阻塞 UI"""
+        from PyQt6.QtCore import QThread
+
+        class DataLoader(QThread):
+            result = pyqtSignal(list, list)  # shops, conversations
+
+            def run(self):
+                try:
+                    from database.db_manager import get_db_manager
+                    db = get_db_manager()
+                    shops = db.get_all_shops()
+                except Exception:
+                    shops = []
+                try:
+                    from services.message_persistence import message_persistence_service
+                    convs = message_persistence_service.get_conversations(shop_id=shop_id, limit=100)
+                except Exception:
+                    convs = []
+                self.result.emit(shops, convs)
+
+        self._loader = DataLoader(self)
+        self._loader.result.connect(self._on_data_loaded)
+        self._loader.start()
+
+    def _on_data_loaded(self, shops: list[dict], convs: list[dict]):
+        """后台线程加载完成后，在主线程更新 UI"""
+        self._shops = shops
+
+        self.shop_combo.blockSignals(True)
+        self.shop_combo.clear()
+        self.shop_combo.addItem("全部店铺", None)
+        for shop in shops:
+            display = f"{shop['shop_name']} ({shop['shop_id']})"
+            self.shop_combo.addItem(display, shop["shop_id"])
+        self.shop_combo.blockSignals(False)
+
+        if len(shops) <= 1:
+            self.shop_filter_container.hide()
+        else:
+            self.shop_filter_container.show()
+
+        self.conversation_list._all_data = convs
+        self.conversation_list._rebuild_cards(convs)
+
+    def _on_shop_changed(self, index: int):
+        """店铺筛选切换 — 后台加载"""
+        shop_id = self.shop_combo.currentData()
+        self.conversation_list._rebuild_cards([])  # 先清空
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(50, lambda: self._load_data(shop_id=shop_id))
 
     def _apply_theme(self):
         dark = isDarkTheme()
@@ -41,8 +93,7 @@ class ChatUI(QFrame):
             }}
         """)
         # 店铺筛选栏背景
-        filter_bg = "transparent" if dark else "transparent"
-        self.shop_filter_container.setStyleSheet(f"background-color: {filter_bg};")
+        self.shop_filter_container.setStyleSheet(f"background-color: transparent;")
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -95,38 +146,6 @@ class ChatUI(QFrame):
             message_persistence_service.signals.new_message.connect(self._on_new_message)
         except Exception as e:
             logger.warning(f"连接消息信号失败: {e}")
-
-    def _load_shops(self):
-        """加载店铺列表到 ComboBox"""
-        try:
-            from database.db_manager import get_db_manager
-            db = get_db_manager()
-            self._shops = db.get_all_shops()
-        except Exception as e:
-            logger.warning(f"加载店铺列表失败: {e}")
-            self._shops = []
-
-        self.shop_combo.blockSignals(True)
-        self.shop_combo.clear()
-        self.shop_combo.addItem("全部店铺", None)
-        for shop in self._shops:
-            display = f"{shop['shop_name']} ({shop['shop_id']})"
-            self.shop_combo.addItem(display, shop["shop_id"])
-        self.shop_combo.blockSignals(False)
-
-        # 单店自动隐藏
-        if len(self._shops) <= 1:
-            self.shop_filter_container.hide()
-        else:
-            self.shop_filter_container.show()
-
-        # 加载会话列表
-        self.conversation_list.refresh(shop_id=None)
-
-    def _on_shop_changed(self, index: int):
-        """店铺筛选切换"""
-        shop_id = self.shop_combo.currentData()
-        self.conversation_list.refresh(shop_id=shop_id)
 
     def _on_conversation_selected(self, shop_id: str, buyer_uid: str):
         """选中会话"""

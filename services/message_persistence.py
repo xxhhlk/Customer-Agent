@@ -252,6 +252,8 @@ class MessagePersistenceService:
     def get_conversations(self, shop_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
         """获取会话列表，按 (shop_id, buyer_uid) 分组
 
+        使用窗口函数一次性完成分组+计数，避免 N+1 查询阻塞主线程。
+
         Args:
             shop_id: 店铺 ID 过滤，None 表示全部
             limit: 最大返回数
@@ -259,59 +261,41 @@ class MessagePersistenceService:
         db_manager = get_db_manager()
         session: Session = db_manager.Session()
         try:
-            # 子查询：每个 (shop_id, buyer_uid) 的最大 timestamp
-            subq = (
-                session.query(
-                    ChatMessageRecord.shop_id,
-                    ChatMessageRecord.buyer_uid,
-                    func.max(ChatMessageRecord.timestamp).label("max_ts"),
-                )
-                .group_by(ChatMessageRecord.shop_id, ChatMessageRecord.buyer_uid)
-            )
-            if shop_id:
-                subq = subq.filter(ChatMessageRecord.shop_id == shop_id)
-            subq = subq.order_by(desc("max_ts")).limit(limit).subquery()
+            from sqlalchemy import text
 
-            # 主查询：关联 subq 获取该分组最后一行的详细信息
-            rows = (
-                session.query(ChatMessageRecord)
-                .join(
-                    subq,
-                    (ChatMessageRecord.shop_id == subq.c.shop_id)
-                    & (ChatMessageRecord.buyer_uid == subq.c.buyer_uid)
-                    & (ChatMessageRecord.timestamp == subq.c.max_ts),
-                )
-                .order_by(desc(ChatMessageRecord.timestamp))
-                .limit(limit)
-                .all()
-            )
+            sql = text("""
+                SELECT * FROM (
+                    SELECT
+                        shop_id, buyer_uid, shop_name, nickname, content,
+                        direction, timestamp,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY shop_id, buyer_uid ORDER BY timestamp DESC
+                        ) AS rn,
+                        COUNT(*) OVER (
+                            PARTITION BY shop_id, buyer_uid
+                        ) AS msg_count
+                    FROM chat_message_records
+                    WHERE (:shop_id IS NULL OR shop_id = :shop_id)
+                ) sub
+                WHERE rn = 1
+                ORDER BY timestamp DESC
+                LIMIT :limit
+            """)
 
-            # 统计每个会话的消息数
-            buyer_keys = [(r.shop_id, r.buyer_uid) for r in rows]
-            count_map = {}
-            for shop, buyer in buyer_keys:
-                count = (
-                    session.query(func.count(ChatMessageRecord.id))
-                    .filter(
-                        ChatMessageRecord.shop_id == shop,
-                        ChatMessageRecord.buyer_uid == buyer,
-                    )
-                    .scalar()
-                )
-                count_map[(shop, buyer)] = count or 0
+            rows = session.execute(sql, {"shop_id": shop_id, "limit": limit}).fetchall()
 
             result = []
-            for r in rows:
-                key = (r.shop_id, r.buyer_uid)
+            for row in rows:
+                ts = row.timestamp
                 result.append({
-                    "shop_id": r.shop_id,
-                    "shop_name": r.shop_name or r.shop_id,
-                    "buyer_uid": r.buyer_uid,
-                    "nickname": r.nickname or r.buyer_uid,
-                    "last_content": r.content or "",
-                    "last_time": r.timestamp.isoformat() if r.timestamp else "",
-                    "last_direction": r.direction,
-                    "msg_count": count_map.get(key, 0),
+                    "shop_id": row.shop_id,
+                    "shop_name": row.shop_name or row.shop_id,
+                    "buyer_uid": row.buyer_uid,
+                    "nickname": row.nickname or row.buyer_uid,
+                    "last_content": row.content or "",
+                    "last_time": ts.isoformat() if ts else "",
+                    "last_direction": row.direction,
+                    "msg_count": row.msg_count,
                 })
             return result
         except Exception as e:

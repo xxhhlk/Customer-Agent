@@ -2,7 +2,7 @@
 会话列表面板 + ConversationCard
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QThread
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QFrame,
 )
@@ -11,6 +11,24 @@ from qfluentwidgets import (
     CardWidget, StrongBodyLabel, CaptionLabel, BodyLabel, SearchLineEdit,
     ScrollArea, isDarkTheme,
 )
+
+
+class _ConversationLoader(QThread):
+    """后台线程加载会话列表"""
+    result = pyqtSignal(list)  # conversations
+
+    def __init__(self, shop_id: str | None = None, limit: int = 100, parent=None):
+        super().__init__(parent)
+        self._shop_id = shop_id
+        self._limit = limit
+
+    def run(self):
+        try:
+            from services.message_persistence import message_persistence_service
+            convs = message_persistence_service.get_conversations(shop_id=self._shop_id, limit=self._limit)
+        except Exception:
+            convs = []
+        self.result.emit(convs)
 
 
 class ConversationCard(CardWidget):
@@ -159,6 +177,7 @@ class ConversationListPanel(QWidget):
         self._selected_card: ConversationCard | None = None
         self._current_shop_filter: str | None = None
         self._all_data: list[dict] = []
+        self._loader: _ConversationLoader | None = None
         self._init_ui()
         self._apply_theme()
 
@@ -203,13 +222,19 @@ class ConversationListPanel(QWidget):
         layout.addWidget(scroll)
 
     def refresh(self, shop_id: str | None = None):
-        """刷新会话列表（全量重建）"""
+        """刷新会话列表（后台异步加载）"""
         self._current_shop_filter = shop_id
-        try:
-            from services.message_persistence import message_persistence_service
-            convs = message_persistence_service.get_conversations(shop_id=shop_id, limit=100)
-        except Exception:
-            convs = []
+        # 取消旧的加载任务
+        if self._loader is not None:
+            self._loader.result.disconnect(self._on_conversations_loaded)
+            self._loader.quit()
+            self._loader.wait(500)
+        self._loader = _ConversationLoader(shop_id=shop_id, limit=100, parent=self)
+        self._loader.result.connect(self._on_conversations_loaded)
+        self._loader.start()
+
+    def _on_conversations_loaded(self, convs: list[dict]):
+        """后台线程加载完成后在主线程更新 UI"""
         self._all_data = convs
         self._rebuild_cards(convs)
 
@@ -243,12 +268,13 @@ class ConversationListPanel(QWidget):
                     existing_card._time_label.setText(dt.strftime("%H:%M"))
                 except (ValueError, TypeError):
                     pass
-            # 如果该买家不在 _all_data 中，简单追加
-            if not any(d.get("buyer_uid") == buyer_uid and d.get("shop_id") == shop_id for d in self._all_data):
-                # 只是预览数据不够完整，轻度刷新
-                self.refresh(self._current_shop_filter)
+            # 将该卡片移到列表顶部
+            idx = self._card_layout.indexOf(existing_card)
+            if idx > 0:
+                self._card_layout.removeWidget(existing_card)
+                self._card_layout.insertWidget(0, existing_card)
         else:
-            # 新会话，全量刷新
+            # 新会话 — 异步刷新（不阻塞主线程）
             self.refresh(self._current_shop_filter)
 
     def _rebuild_cards(self, convs: list[dict]):

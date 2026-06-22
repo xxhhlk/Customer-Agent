@@ -213,22 +213,13 @@ class MainWindow(FluentWindow):
     
     def _on_theme_changed(self):
         """主题切换时更新标题栏颜色"""
-        # 强制重新应用主题
-        try:
-            current_theme = qconfig.theme
-            setTheme(Theme.LIGHT)
-            setTheme(current_theme)
-        except Exception:
-            pass
-        
+        # 直接更新标题栏颜色，不再强制 setTheme 切换
+        #（强制 setTheme 会触发额外的 PaletteChange 事件，可能导致界面卡顿）
         self._update_title_bar_color()
         
         # 强制更新标题栏按钮
         try:
-            # 获取标题栏的所有子控件并更新
             self.titleBar.update()
-            
-            # 尝试直接访问按钮并更新
             for btn_name in ['minBtn', 'maxBtn', 'closeBtn']:
                 btn = getattr(self.titleBar, btn_name, None)
                 if btn is not None:
@@ -309,5 +300,6 @@ class MainWindow(FluentWindow):
         super().changeEvent(event)
         
         # 当调色板改变时（主题切换会触发此事件），更新标题栏颜色
+        # 使用 QTimer.singleShot 防止 setStyleSheet → PaletteChange 递归循环
         if event.type() == QEvent.Type.PaletteChange:
-            self._update_title_bar_color() 
+            QTimer.singleShot(0, self._update_title_bar_color) 

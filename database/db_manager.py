@@ -1,6 +1,6 @@
 import os
 import json
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 from typing import List, Dict, Any, Optional, Union
@@ -34,8 +34,17 @@ class DatabaseManager:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         
         # 创建数据库引擎
-        self.engine = create_engine(f'sqlite:///{db_path}')
+        # WAL 模式：允许读写并发（读不阻塞写，写不阻塞读）
+        # check_same_thread=False：允许跨线程使用连接（QThread 后台查询需要）
+        self.engine = create_engine(
+            f'sqlite:///{db_path}',
+            connect_args={'check_same_thread': False},
+            pool_pre_ping=True,
+        )
         self.Session = sessionmaker(bind=self.engine)
+        
+        # 启用 WAL 模式，避免读写互锁导致界面卡顿
+        self._enable_wal_mode()
         
         # 创建表结构（先创建 keyword_groups，因为 keywords 外键依赖它）
         Base.metadata.create_all(self.engine, tables=[
@@ -60,6 +69,16 @@ class DatabaseManager:
         self.logger = get_logger()
         # 初始化数据库
         self.init_db()
+
+    def _enable_wal_mode(self):
+        """启用 SQLite WAL 模式，允许读写并发，避免后台线程读阻塞主线程写"""
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("PRAGMA journal_mode=WAL"))
+                conn.execute(text("PRAGMA busy_timeout=5000"))
+                conn.commit()
+        except Exception as e:
+            print(f"[DatabaseManager] 启用 WAL 模式失败: {e}")
 
     def init_db(self):
         """初始化渠道信息"""
