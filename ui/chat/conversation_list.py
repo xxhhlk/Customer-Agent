@@ -34,7 +34,8 @@ class _ConversationLoader(QThread):
 class ConversationCard(CardWidget):
     """会话卡片 - 显示在左侧列表"""
 
-    clicked = pyqtSignal(str, str)  # shop_id, buyer_uid
+    # 用 conversation_clicked 避免与父类 CardWidget.clicked (无参数) 冲突
+    conversation_clicked = pyqtSignal(str, str)  # shop_id, buyer_uid
 
     def __init__(self, conv_data: dict, parent=None):
         super().__init__(parent)
@@ -142,8 +143,14 @@ class ConversationCard(CardWidget):
         self.setStyleSheet(f"background-color: {bg}; border-radius: 6px;")
 
     def mousePressEvent(self, event):
-        self.clicked.emit(self.shop_id, self.buyer_uid)
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """重写父类 mouseReleaseEvent，emit 带参数的 conversation_clicked 信号"""
+        super().mouseReleaseEvent(event)
+        # 父类 CardWidget.mouseReleaseEvent 会调用 self.clicked.emit()（无参数）
+        # 我们不使用父类的 clicked 信号，而是 emit 自定义的 conversation_clicked
+        self.conversation_clicked.emit(self.shop_id, self.buyer_uid)
 
     def set_selected(self, selected: bool):
         self._selected = selected
@@ -303,7 +310,7 @@ class ConversationListPanel(QWidget):
         # 创建新卡片
         for conv in convs:
             card = ConversationCard(conv)
-            card.clicked.connect(self._on_card_clicked)
+            card.conversation_clicked.connect(self._on_card_clicked)
             self._card_layout.addWidget(card)
             self._cards.append(card)
 
