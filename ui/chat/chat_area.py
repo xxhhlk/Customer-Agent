@@ -4,7 +4,7 @@
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QFrame, QScrollArea,
 )
 from PyQt6.QtGui import QFont
 from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel
