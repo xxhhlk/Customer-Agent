@@ -104,6 +104,10 @@ class EnhancedMessageConsumer:
             self.logger.debug(f"Created user queue for {user_key}")
 
         # 放入用户队列
+        content_preview = ""
+        if hasattr(wrapper.context, 'content') and wrapper.context.content:
+            content_preview = wrapper.context.content[:30]
+        self.logger.info(f"消息入队: {user_key}, 内容: {content_preview}")
         await self._user_queues[user_key].put(wrapper)
 
     async def _process_user_queue(self, user_key: str):
@@ -559,15 +563,9 @@ class EnhancedMessageConsumer:
                     except Exception as e:
                         self.logger.error(f"Handler {handler.__class__.__name__} error: {e}")
 
-        # 关键词pass_to_ai后，等待人工回复（与普通消息一致）
-        # 注意：pass_to_ai 场景已经在防抖后的人工回复等待阶段处理了，这里只处理旧逻辑
-        if should_continue_to_ai and not skip_keyword:
-            from_uid_raw = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
-            if from_uid_raw and isinstance(from_uid_raw, str):
-                staff_replied = await self._check_staff_reply(context)
-                if staff_replied:
-                    self.logger.info(f"关键词传递AI前，人工客服已回复，跳过AI处理")
-                    return
+        # 关键词pass_to_ai后，直接走AI（不再等人工，因为防抖阶段已经等过了）
+        # 注意：pass_to_ai 场景如果在防抖阶段等人工时人工已回复，不会走到这里（已return）
+        # 走到这里说明防抖阶段人工没回复，这里不需要再等一遍
 
         # 如果没有AI处理器，执行CatchAllHandler
         if not ai_handler:
@@ -575,20 +573,69 @@ class EnhancedMessageConsumer:
                 await catch_all_handler.handle(context, metadata)
             return
 
-        # 执行AI处理器（带超时中断机制）
+        # 执行AI处理器
+        # 如果是关键词pass_to_ai场景，不监听新消息（避免循环发送关键词回复）
+        # 新消息留在队列中，等AI完成后由_process_user_queue取出走正常防抖流程
         ai_start_time = time.time()
         from_uid_raw = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
         from_uid = from_uid_raw if from_uid_raw else "unknown"
 
-        # 创建任务
-        ai_task = asyncio.create_task(ai_handler.handle(context, metadata))
-        queue_task = asyncio.create_task(self._user_queues[user_key].get())
-
-        # 人工回复监听任务
         # 读取配置的等待时间
         from config import get_config
         staff_wait_config = get_config("staff_reply_wait", {})
         staff_wait_seconds = staff_wait_config.get("wait_seconds", 30)
+
+        if should_continue_to_ai:
+            # pass_to_ai场景：只等AI完成和人工回复，不监听新消息
+            self.logger.info(f"关键词pass_to_ai，直接执行AI（不监听新消息）")
+            staff_reply_event_id = self.staff_reply_manager.start_waiting(from_uid)
+            staff_reply_task = asyncio.create_task(
+                self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=staff_wait_seconds)
+            )
+            ai_task = asyncio.create_task(ai_handler.handle(context, metadata))
+
+            try:
+                while True:
+                    done, pending = await asyncio.wait(
+                        {ai_task, staff_reply_task},
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    if ai_task in done:
+                        staff_reply_task.cancel()
+                        try:
+                            await staff_reply_task
+                        except asyncio.CancelledError:
+                            pass
+                        break
+
+                    elif staff_reply_task in done:
+                        staff_replied = staff_reply_task.result()
+                        if staff_replied:
+                            ai_task.cancel()
+                            try:
+                                await ai_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+                            self.logger.info(f"关键词pass_to_ai后AI处理中，人工客服已回复，取消AI")
+                            return
+                        else:
+                            # 超时，创建新事件继续监听
+                            self.staff_reply_manager.stop_waiting(from_uid, staff_reply_event_id)
+                            staff_reply_event_id = self.staff_reply_manager.start_waiting(from_uid)
+                            staff_reply_task = asyncio.create_task(
+                                self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=staff_wait_seconds)
+                            )
+            except Exception as e:
+                ai_task.cancel()
+                self.logger.error(f"pass_to_ai AI处理错误: {e}")
+            finally:
+                self.staff_reply_manager.stop_waiting(from_uid, staff_reply_event_id)
+            return
+
+        # 正常场景：AI处理 + 新消息监听 + 人工回复监听
+        ai_task = asyncio.create_task(ai_handler.handle(context, metadata))
+        queue_task = asyncio.create_task(self._user_queues[user_key].get())
 
         staff_reply_event_id = self.staff_reply_manager.start_waiting(from_uid)
         staff_reply_task = asyncio.create_task(
@@ -604,7 +651,6 @@ class EnhancedMessageConsumer:
 
                 if ai_task in done:
                     # AI完成
-                    # 如果 queue_task 也完成了（取到了用户队列中的消息），需要将消息放回队列，避免丢失
                     if queue_task in done and not queue_task.cancelled():
                         try:
                             pending_msg = queue_task.result()
@@ -672,9 +718,7 @@ class EnhancedMessageConsumer:
                     else:
                         # 等待超时，创建新的等待事件继续监听
                         self.logger.debug(f"Staff reply wait timed out during AI processing, continue waiting for AI")
-                        # 清理旧事件
                         self.staff_reply_manager.stop_waiting(from_uid, staff_reply_event_id)
-                        # 创建新事件
                         staff_reply_event_id = self.staff_reply_manager.start_waiting(from_uid)
                         staff_reply_task = asyncio.create_task(
                             self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=staff_wait_seconds)
