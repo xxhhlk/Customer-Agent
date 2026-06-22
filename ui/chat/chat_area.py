@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QFrame, QScrollArea,
 )
 from PyQt6.QtGui import QFont
-from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel
+from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel, isDarkTheme
 
 from ui.chat.message_bubble import MessageBubble
 from ui.chat.input_area import InputArea
@@ -26,6 +26,27 @@ class ChatAreaPanel(QWidget):
         self._current_buyer_uid: str = ""
 
         self._init_ui()
+        self._apply_theme()
+
+    def _apply_theme(self):
+        dark = isDarkTheme()
+        # 整体背景透明，由上层决定
+        self.setStyleSheet(f"""
+            #ChatAreaPanel {{
+                background-color: transparent;
+                border: none;
+            }}
+        """)
+        # Header 背景
+        header_bg = "#2b2b2b" if dark else "#f5f5f5"
+        header_border = "#3a3a3a" if dark else "#e0e0e0"
+        self.header.setStyleSheet(f"""
+            background-color: {header_bg};
+            border-bottom: 1px solid {header_border};
+        """)
+        # 消息容器背景
+        msg_bg = "#1e1e1e" if dark else "#fafafa"
+        self._msg_container.setStyleSheet(f"background-color: {msg_bg};")
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -147,3 +168,8 @@ class ChatAreaPanel(QWidget):
         """滚动到底部"""
         vbar = self.scroll_area.verticalScrollBar()
         vbar.setValue(vbar.maximum())
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.PaletteChange:
+            self._apply_theme()
+        super().changeEvent(event)

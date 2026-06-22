@@ -2,10 +2,10 @@
 输入区域组件 - 消息输入框 + 发送按钮
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, QLabel
 from PyQt6.QtGui import QFont, QKeyEvent
-from qfluentwidgets import PrimaryPushButton
+from qfluentwidgets import PrimaryPushButton, isDarkTheme
 
 
 class InputArea(QWidget):
@@ -18,6 +18,32 @@ class InputArea(QWidget):
         self.setObjectName("InputArea")
         self.setFixedHeight(120)
         self._init_ui()
+        self._apply_theme()
+
+    def _apply_theme(self):
+        dark = isDarkTheme()
+        bg = "#2b2b2b" if dark else "#f5f5f5"
+        border = "#3a3a3a" if dark else "#e0e0e0"
+        input_bg = "#1e1e1e" if dark else "#ffffff"
+        input_color = "#e0e0e0" if dark else "#333333"
+        self.setStyleSheet(f"""
+            #InputArea {{
+                background-color: {bg};
+                border-top: 1px solid {border};
+            }}
+        """)
+        self.text_edit.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {input_bg};
+                color: {input_color};
+                border: 1px solid {border};
+                border-radius: 6px;
+                padding: 6px 8px;
+            }}
+            QTextEdit:focus {{
+                border-color: #4a90d9;
+            }}
+        """)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -85,3 +111,8 @@ class InputArea(QWidget):
 
     def clear(self):
         self.text_edit.clear()
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.PaletteChange:
+            self._apply_theme()
+        super().changeEvent(event)

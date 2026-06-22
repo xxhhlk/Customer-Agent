@@ -159,6 +159,21 @@ class ConversationListPanel(QWidget):
         self._current_shop_filter: str | None = None
         self._all_data: list[dict] = []
         self._init_ui()
+        self._apply_theme()
+
+    def _apply_theme(self):
+        dark = isDarkTheme()
+        # 面板背景
+        list_bg = "#1e1e1e" if dark else "#fafafa"
+        self.setStyleSheet(f"""
+            #ConversationListPanel {{
+                background-color: {list_bg};
+                border: none;
+            }}
+        """)
+        # 卡片容器背景
+        card_container_bg = "#252525" if dark else "#f0f0f0"
+        self._card_container.setStyleSheet(f"background-color: {card_container_bg};")
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -254,3 +269,8 @@ class ConversationListPanel(QWidget):
             or kw in (d.get("shop_name", "") or "").lower()
         ]
         self._rebuild_cards(filtered)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.PaletteChange:
+            self._apply_theme()
+        super().changeEvent(event)

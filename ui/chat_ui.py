@@ -26,9 +26,23 @@ class ChatUI(QFrame):
         self.setObjectName("ChatUI")
         self._shops: list[dict] = []
         self._init_ui()
+        self._apply_theme()
         # 延迟加载店铺列表
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(300, self._load_shops)
+
+    def _apply_theme(self):
+        dark = isDarkTheme()
+        # ChatUI 容器透明，继承 FluentWindow 背景
+        self.setStyleSheet(f"""
+            #ChatUI {{
+                background-color: transparent;
+                border: none;
+            }}
+        """)
+        # 店铺筛选栏背景
+        filter_bg = "transparent" if dark else "transparent"
+        self.shop_filter_container.setStyleSheet(f"background-color: {filter_bg};")
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -166,6 +180,5 @@ class ChatUI(QFrame):
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:
-            # 子组件自行处理主题，此处不需要额外操作
-            pass
+            self._apply_theme()
         super().changeEvent(event)
