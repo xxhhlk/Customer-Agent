@@ -3,9 +3,11 @@
 将实时消息存入 SQLite 数据库，通过 pyqtSignal 线程安全地通知 UI 更新。
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Set
 from datetime import datetime
 import uuid
+
+from bridge.context import ContextType
 
 from PyQt6.QtCore import QObject, pyqtSignal
 from sqlalchemy.orm import Session
@@ -55,8 +57,24 @@ class MessagePersistenceService:
         从 context.kwargs 提取字段，统一处理买家和客服消息。
         - from_role="user" → direction='inbound', reply_source=None
         - from_role="mall_cs" → direction='outbound', reply_source='staff'
+
+        不应持久化的系统消息类型（如认证、系统状态、商城系统消息等）会被直接跳过。
         """
         try:
+            # 过滤不应在聊天界面展示的系统消息类型
+            _SKIP_PERSIST_TYPES: Set[str] = {
+                ContextType.AUTH.value,             # 认证消息
+                ContextType.SYSTEM_STATUS.value,    # 系统状态（心跳、不支持的消息类型等）
+                ContextType.MALL_SYSTEM_MSG.value,  # 商城系统消息（如 {"user_id": "xxx"}）
+                ContextType.WITHDRAW.value,         # 撤回消息
+                ContextType.TRANSFER.value,         # 转接消息
+                ContextType.SYSTEM_HINT.value,      # 系统提示（资金安全提示等）
+            }
+            context_type_value = context.type.value if hasattr(context.type, 'value') else str(context.type)
+            if context_type_value in _SKIP_PERSIST_TYPES:
+                logger.debug(f"跳过持久化系统消息: type={context_type_value}")
+                return None
+
             kwargs = context.kwargs if hasattr(context, 'kwargs') else None
             if kwargs is None:
                 logger.debug("save_inbound_message: kwargs is None")
