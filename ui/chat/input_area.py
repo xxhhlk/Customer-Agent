@@ -2,7 +2,7 @@
 输入区域组件 - 消息输入框 + 发送按钮
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, QLabel
 from PyQt6.QtGui import QFont, QKeyEvent
 from qfluentwidgets import PrimaryPushButton, isDarkTheme

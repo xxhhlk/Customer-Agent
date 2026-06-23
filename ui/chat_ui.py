@@ -3,7 +3,7 @@
 双栏布局：左侧会话列表 + 右侧聊天区域，顶部店铺筛选
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSplitter, QComboBox,
     QSizePolicy, QWidget,

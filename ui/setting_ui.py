@@ -3,7 +3,7 @@
 import json
 import os
 from typing import Optional
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QFormLayout, QGroupBox, QMessageBox)
 from PyQt6.QtGui import QFont

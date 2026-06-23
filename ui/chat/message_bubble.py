@@ -2,7 +2,7 @@
 消息气泡组件 - 聊天界面中的单条消息展示
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy, QTextEdit,
 )

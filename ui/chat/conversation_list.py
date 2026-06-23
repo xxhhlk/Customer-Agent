@@ -2,7 +2,7 @@
 会话列表面板 + ConversationCard
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QThread, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QFrame,
 )
