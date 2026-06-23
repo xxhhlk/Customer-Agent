@@ -169,9 +169,25 @@ class EnhancedMessageConsumer:
                 )
 
                 if not merged_wrapper:
-                    # 消息被合并，清理等待事件并返回
+                    # 消息被合并或人工回复取消
                     if event_id and isinstance(from_uid, str):
                         self.staff_reply_manager.stop_waiting(from_uid, event_id)
+
+                    # 检查是否因为人工回复取消（在冷却期内说明人工刚回复过）
+                    if from_uid and isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
+                        # 人工回复取消防抖，清空该用户队列中的待处理消息
+                        # 这些消息是客服回复前买家发的，客服已看到并回复，不需要AI再处理
+                        user_queue = self._user_queues.get(user_key)
+                        if user_queue:
+                            drained = 0
+                            while True:
+                                try:
+                                    user_queue.get_nowait()
+                                    drained += 1
+                                except asyncio.QueueEmpty:
+                                    break
+                            if drained > 0:
+                                self.logger.info(f"人工回复取消防抖，清空用户 {from_uid} 队列中 {drained} 条待处理消息")
                     return
 
                 # 2. 关键词预处理：检查是否命中关键词
