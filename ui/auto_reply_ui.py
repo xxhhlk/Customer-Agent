@@ -250,7 +250,7 @@ class AutoReplyThread(QThread):
         
     def run(self):
         """启动后端 PDDChannel 引擎"""
-        from Channel.pinduoduo.pdd_chnnel import PDDChannel
+        from Channel.pinduoduo.pdd_channel import PDDChannel
         
         try:
             # 为当前线程创建并设置新的事件循环

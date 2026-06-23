@@ -152,7 +152,7 @@ a = Analysis(
         "Agent.CustomerAgent.agent_knowledge",
         "Agent.CustomerAgent.agent_description",
         "Channel.channel",
-        "Channel.pinduoduo.pdd_chnnel",
+        "Channel.pinduoduo.pdd_channel",
         "Channel.pinduoduo.pdd_message",
         "Channel.pinduoduo.pdd_login",
         "Channel.pinduoduo.utils.base_request",

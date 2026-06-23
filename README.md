@@ -127,7 +127,7 @@ Customer-Agent/
 ├── Channel/            # 渠道接口模块
 │   ├── channel.py         # 渠道基类
 │   └── pinduoduo/      # 拼多多渠道
-│       ├── pdd_chnnel.py    # 渠道主类
+│       ├── pdd_channel.py    # 渠道主类
 │       ├── pdd_login.py     # 登录处理
 │       └── utils/        # API工具
 ├── Message/            # 消息处理模块

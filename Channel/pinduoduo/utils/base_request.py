@@ -70,13 +70,26 @@ class BaseRequest:
             self._init_account_info()
     
     def _init_account_info(self):
-        """初始化账户信息"""
+        """初始化账户信息，优先从共享缓存读取 cookie"""
+        from Channel.pinduoduo.cookie_cache import cookie_cache
+
         try:
+            # 优先从共享缓存获取 cookie
+            cached = cookie_cache.get(self.channel_name, self.shop_id, self.user_id)
+            if cached is not None:
+                self.cookies = cached
+                # 仍需从 DB 获取账户名
+                account_info = db_manager.get_account(self.channel_name, self.shop_id, self.user_id)
+                if account_info:
+                    self.account_name = account_info.get('username', '未知账号')
+                return
+
+            # 缓存未命中，从 DB 加载
             account_info = db_manager.get_account(self.channel_name, self.shop_id, self.user_id)
             if account_info:
                 self.account_name = account_info.get('username', '未知账号')
                 cookies_data = account_info.get('cookies')
-                
+
                 # 处理cookies格式
                 if isinstance(cookies_data, str):
                     try:
@@ -89,6 +102,10 @@ class BaseRequest:
                 else:
                     self.logger.warning(f"账号 {self.account_name} 的cookies为空")
                     self.cookies = {}
+
+                # 写入共享缓存
+                if self.cookies:
+                    cookie_cache.set(self.channel_name, self.shop_id, self.user_id, self.cookies)
             else:
                 self.logger.error(f"无法在数据库中找到账户: shop_id={self.shop_id}, user_id={self.user_id}")
         except Exception as e:
@@ -162,9 +179,21 @@ class BaseRequest:
         Returns:
             是否重新获取cookies成功
         """
+        from Channel.pinduoduo.cookie_utils import relogin_guard
+        from Channel.pinduoduo.cookie_cache import cookie_cache
+
+        # 尝试获取重登权（防止并发重复重登）
+        if not relogin_guard.try_acquire(self.channel_name, self.shop_id, self.user_id):
+            self.logger.info(f"重登已在其他线程进行中或冷却期内: {self.account_name}，从缓存读取最新cookie")
+            cached = cookie_cache.get(self.channel_name, self.shop_id, self.user_id)
+            if cached:
+                self.cookies = cached
+            return cached is not None
+
         try:
             credentials = self._get_account_credentials()
             if not credentials:
+                relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=False)
                 return False
             username, password = credentials
 
@@ -183,6 +212,7 @@ class BaseRequest:
                     if new_cookies:
                         self._apply_new_cookies(new_cookies)
                         self.logger.info(f"账号 {self.account_name} cookies刷新成功")
+                        relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=True)
                         return True
                     else:
                         self.logger.warning(f"账号 {self.account_name} cookies刷新返回无效数据")
@@ -192,16 +222,17 @@ class BaseRequest:
             except Exception as refresh_error:
                 self.logger.warning(f"账号 {self.account_name} cookies刷新异常: {str(refresh_error)}")
 
-            # 回退到完整重新登录
+            # 回退到完整重新登录（headless 模式，避免弹出浏览器窗口）
             if not password:
                 self.logger.error(f"账号 {self.account_name} 缺少密码，无法进行完整重新登录")
+                relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=False)
                 return False
 
-            self.logger.info(f"回退到完整重新登录模式（账号 {self.account_name}）...")
+            self.logger.info(f"回退到完整重新登录模式（headless，账号 {self.account_name}）...")
 
             try:
                 login_result = self._run_async_login_func(
-                    pdd_login_module.login_pdd, username, password
+                    pdd_login_module.login_pdd, username, password, True
                 )
 
                 if login_result and isinstance(login_result, dict):
@@ -209,20 +240,25 @@ class BaseRequest:
                     if new_cookies:
                         self._apply_new_cookies(new_cookies)
                         self.logger.info(f"账号 {self.account_name} 完整重新登录成功，cookies已更新")
+                        relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=True)
                         return True
                     else:
                         self.logger.error(f"账号 {self.account_name} 完整重新登录失败：未获取到有效cookies")
+                        relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=False)
                         return False
                 else:
                     self.logger.error(f"账号 {self.account_name} 完整重新登录失败")
+                    relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=False)
                     return False
 
             except Exception as login_error:
                 self.logger.error(f"账号 {self.account_name} 完整重新登录异常: {str(login_error)}")
+                relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=False)
                 return False
 
         except Exception as e:
             self.logger.error(f"账号 {self.account_name} 重新获取cookies过程中发生错误: {str(e)}")
+            relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=False)
             return False
     
     def _should_retry(self, response: Optional[requests.Response] = None, exception: Optional[Exception] = None) -> bool:
@@ -548,12 +584,15 @@ class BaseRequest:
     
     def _apply_new_cookies(self, new_cookies: Any) -> None:
         """
-        应用新cookies到当前实例并持久化到数据库
+        应用新cookies到当前实例、共享缓存并持久化到数据库
 
         Args:
             new_cookies: 新cookies
         """
+        from Channel.pinduoduo.cookie_cache import cookie_cache
+
         self.update_cookies(new_cookies)
+        cookie_cache.set(self.channel_name, self.shop_id, self.user_id, self.cookies)
         db_manager.update_account_cookies(
             self.channel_name,
             self.shop_id,

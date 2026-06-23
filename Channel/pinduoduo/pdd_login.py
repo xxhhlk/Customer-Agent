@@ -37,12 +37,11 @@ class PDDLogin():
         self.base_url = "https://mms.pinduoduo.com/login"
         self.name = name
         self.password = password
-    async def login(self):
+    async def login(self, headless=False):
         """使用账号密码登录
-        
+
         Args:
-            name: 账号名称
-            password: 账号密码
+            headless: 是否使用无头模式（自动回退时使用 True，避免弹出浏览器窗口）
 
         """
         try:
@@ -56,7 +55,7 @@ class PDDLogin():
             # 使用持久化上下文，自动处理用户数据目录
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir,
-                headless=False,
+                headless=headless,
                 args=[
                     '--disable-gpu',
                     '--no-sandbox',
@@ -198,7 +197,7 @@ class PDDLogin():
         shop_id, shop_name, mallLogo = result
         return shop_id, shop_name, mallLogo
     
-async def login_pdd(name, password):
+async def login_pdd(name, password, headless=False):
     """
     使用账号密码登录并返回账号、店铺信息，不直接操作数据库。
     如果登录成功，返回包含详细信息的字典。
@@ -206,10 +205,11 @@ async def login_pdd(name, password):
 
     :param name: 用户名
     :param password: 密码
+    :param headless: 是否使用无头模式（自动回退时使用 True，避免弹出浏览器窗口）
     :return: dict or bool
     """
     pdd_login = PDDLogin(name=name, password=password)
-    cookies_json = await pdd_login.login()
+    cookies_json = await pdd_login.login(headless=headless)
     if not cookies_json:
         pdd_login.logger.error(f"账号 '{name}' 登录失败，未能获取cookies")
         return False
