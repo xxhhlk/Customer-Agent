@@ -419,8 +419,16 @@ class GroupListWidget(QListWidget):
                 QTimer.singleShot(100, self._do_palette_update)
 
     def _do_palette_update(self):
+        # 先执行更新，再延迟重置标志 —— 避免 setStyleSheet 触发的 PaletteChange
+        # 在标志仍为 True 时被忽略，从而打破乒乓循环
+        try:
+            self._update_style()
+        finally:
+            QTimer.singleShot(200, self._reset_palette_pending)
+
+    def _reset_palette_pending(self):
+        """重置调色板更新标志"""
         self._palette_pending = False
-        self._update_style()
 
     def _update_style(self):
         """更新样式以适配当前主题"""
@@ -657,8 +665,16 @@ class KeywordManagerWidget(QFrame):
                 QTimer.singleShot(100, self._do_palette_update)
 
     def _do_palette_update(self):
+        # 先执行更新，再延迟重置标志 —— 避免 setStyleSheet 触发的 PaletteChange
+        # 在标志仍为 True 时被忽略，从而打破乒乓循环
+        try:
+            self._update_label_styles()
+        finally:
+            QTimer.singleShot(200, self._reset_palette_pending)
+
+    def _reset_palette_pending(self):
+        """重置调色板更新标志"""
         self._palette_pending = False
-        self._update_label_styles()
 
     def _update_label_styles(self):
         """更新标签样式以适配当前主题"""

@@ -158,5 +158,13 @@ class MessageBubble(QFrame):
 
     def _do_palette_update(self):
         """实际执行调色板更新"""
+        # 先执行更新，再延迟重置标志 —— 避免 setStyleSheet 触发的 PaletteChange
+        # 在标志仍为 True 时被忽略，从而打破乒乓循环
+        try:
+            self._apply_theme()
+        finally:
+            QTimer.singleShot(200, self._reset_palette_pending)
+
+    def _reset_palette_pending(self):
+        """重置调色板更新标志"""
         self._palette_pending = False
-        self._apply_theme()
