@@ -12,7 +12,7 @@ from utils.logger_loguru import get_logger
 import time
 
 if TYPE_CHECKING:
-    from ui.auto_reply_ui import AutoReplyUI
+    from ui.auto_reply import AutoReplyUI
     from ui.keyword_ui import KeywordManagerWidget
     from ui.user_ui import UserManagerWidget
     from ui.log_ui import LogUI
@@ -105,7 +105,7 @@ class MainWindow(FluentWindow):
         t0 = time.perf_counter()
         # 局部按需导入，减少启动时的重依赖加载
         t = time.perf_counter()
-        from ui.auto_reply_ui import AutoReplyUI
+        from ui.auto_reply import AutoReplyUI
         self.logger.info(f"  import AutoReplyUI: {time.perf_counter()-t:.2f}s")
         t = time.perf_counter()
         from ui.keyword_ui import KeywordManagerWidget

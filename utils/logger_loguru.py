@@ -64,7 +64,7 @@ if not is_frozen:
         level=log_level.upper(),
         colorize=True,
         backtrace=True,
-        diagnose=True
+        diagnose=not is_frozen
     )
 
 # 添加文件处理器（自动轮转和压缩）
@@ -77,7 +77,7 @@ logger.add(
     compression="zip",
     encoding="utf-8",
     backtrace=True,
-    diagnose=True
+    diagnose=not is_frozen
 )
 
 # 全局logger对象（保持向后兼容）

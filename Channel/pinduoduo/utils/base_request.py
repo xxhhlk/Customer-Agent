@@ -427,11 +427,30 @@ class BaseRequest:
             self.logger.error(f"处理响应时发生错误: {str(e)}")
             return None
     
+    _SENSITIVE_KEYS = {'password', 'cookies', 'token', 'api_key', 'access_token', 'anti-content', 'anti_content'}
+
+    def _sanitize_for_log(self, data: Any) -> Any:
+        """对日志中的敏感字段进行脱敏处理"""
+        if not isinstance(data, dict):
+            return data
+        result = {}
+        for k, v in data.items():
+            if k.lower() in self._SENSITIVE_KEYS or any(s in k.lower() for s in self._SENSITIVE_KEYS):
+                result[k] = '***'
+            elif isinstance(v, dict):
+                result[k] = self._sanitize_for_log(v)
+            elif isinstance(v, list):
+                result[k] = [self._sanitize_for_log(i) if isinstance(i, dict) else i for i in v]
+            else:
+                result[k] = v
+        return result
+
     def _log_request(self, method: str, url: str, **kwargs):
-        """记录请求日志"""
+        """记录请求日志（自动脱敏敏感字段）"""
         self.logger.debug(f"发起{method}请求: {url}")
         if 'data' in kwargs or 'json' in kwargs:
-            self.logger.debug(f"请求参数: {kwargs.get('data') or kwargs.get('json')}")
+            params = kwargs.get('data') or kwargs.get('json')
+            self.logger.debug(f"请求参数: {self._sanitize_for_log(params)}")
     
     def get(self, url: str, params: Optional[Dict] = None, headers: Optional[Dict[str, str]] = None, 
             timeout: int = 30, expect_json: bool = True, **kwargs) -> Optional[Dict[str, Any]]:

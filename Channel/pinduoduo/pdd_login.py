@@ -44,14 +44,16 @@ class PDDLogin():
             headless: 是否使用无头模式（自动回退时使用 True，避免弹出浏览器窗口）
 
         """
+        playwright = None
+        context = None
         try:
             # 启动Playwright
             playwright = await async_playwright().start()
-            
+
             # 创建独立的用户数据目录，避免多实例冲突
             user_data_dir = str(app_dir / "user_data" / self.name)
             self.logger.debug(f"使用用户数据目录: {user_data_dir}")
-            
+
             # 使用持久化上下文，自动处理用户数据目录
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir,
@@ -66,66 +68,71 @@ class PDDLogin():
                     '--disable-features=VizDisplayCompositor'
                 ]
             )
-            
+
             page = await context.new_page()
-            
+
             # 访问登录页面
             await page.goto(self.base_url)
-            
+
             # 点击账号密码登录
             await page.click("div.Common_item__3diIn:has-text('账号登录')")
-            
+
             # 等待页面加载
             await page.wait_for_selector("input[type='text']")
-            
+
             # 输入店铺名
             await page.fill("input[type='text']", self.name)
-            
+
             # 输入密码
             await page.fill("input[type='password']", self.password)
-            
+
             # 点击登录按钮
             await page.click("button:has-text('登录')")
-            
+
             # 等待页面 title等于 拼多多 商家后台，首页或者订单查询
             await page.wait_for_function("() => document.title === '拼多多 商家后台' || document.title === '首页' || document.title === '订单查询'", timeout=30000)
-            
+
             # 获取cookies并转换为字典格式
             cookies_list = await context.cookies()
             # 将playwright格式的cookies列表转换为字典格式，使用安全的get方法
             cookies_dict = {cookie.get('name', ''): cookie.get('value', '') for cookie in cookies_list if cookie.get('name')}
             cookies_json = json.dumps(cookies_dict)
-            # 关闭浏览器上下文
-            await context.close()
-            await playwright.stop()
-                
+
             return cookies_json
-            
+
         except Exception as e:
             self.logger.error(f"登录失败: {str(e)}")
             return False
+        finally:
+            if context:
+                await context.close()
+            if playwright:
+                try:
+                    await playwright.stop()
+                except Exception:
+                    pass
         
     async def refresh_cookies(self):
         """重新获取cookies，使用已保存的用户数据，无需再次登录
-        
+
         Returns:
             str: cookies的JSON字符串，如果失败返回False
         """
         playwright = None
+        context = None
         try:
             # 启动Playwright
             playwright = await async_playwright().start()
-            
-            # 使用相同的用户数据目录（与 login 方法保持一致，使用账号名而非哈希值）
+
+            # 使用相同的用户数据目录（与login保持一致）
             user_data_dir = str(app_dir / "user_data" / self.name)
             self.logger.debug(f"使用用户数据目录刷新cookies: {user_data_dir}")
-            
+
             # 检查用户数据目录是否存在
             if not os.path.exists(user_data_dir):
                 self.logger.error(f"用户数据目录不存在: {user_data_dir}，请先登录")
-                await playwright.stop()
                 return False
-            
+
             # 使用持久化上下文，自动加载用户数据
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir,
@@ -140,44 +147,41 @@ class PDDLogin():
                     '--disable-features=VizDisplayCompositor'
                 ]
             )
-            
+
             page = await context.new_page()
-            
+
             # 访问拼多多商家后台首页，验证登录状态
             await page.goto("https://mms.pinduoduo.com/home/")
-            
+
             # 等待页面加载，检查是否需要重新登录
             try:
                 # 如果页面跳转到登录页面，说明登录状态已失效
                 await page.wait_for_url("**/login**", timeout=5000)
                 self.logger.warning("登录状态已失效，需要重新登录")
-                await context.close()
-                await playwright.stop()
                 return False
-            except:
+            except asyncio.TimeoutError:
                 # 没有跳转到登录页面，说明登录状态有效
                 pass
-            
+
             # 获取最新的cookies
             cookies_list = await context.cookies()
             cookies_dict = {cookie.get('name', ''): cookie.get('value', '') for cookie in cookies_list if cookie.get('name')}
             cookies_json = json.dumps(cookies_dict)
-            
-            # 关闭浏览器上下文
-            await context.close()
-            await playwright.stop()
-            
+
             self.logger.info(f"成功刷新账号 '{self.name}' 的cookies")
             return cookies_json
-            
+
         except Exception as e:
             self.logger.error(f"刷新cookies失败: {str(e)}")
+            return False
+        finally:
+            if context:
+                await context.close()
             if playwright:
                 try:
                     await playwright.stop()
-                except:
+                except Exception:
                     pass
-            return False
 
     def Set_user_info(self,cookies_json):
         user_info = GetUserInfo(cookies_json)

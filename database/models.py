@@ -1,5 +1,5 @@
 from typing import List, Optional, TYPE_CHECKING
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, create_engine, DateTime, Float, Index
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, create_engine, DateTime, Float, Index, Boolean, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker, Mapped, mapped_column
 from datetime import datetime
@@ -135,3 +135,55 @@ class ChatMessageRecord(Base):
 
     def __repr__(self):
         return f"<ChatMessageRecord(buyer_uid='{self.buyer_uid}', direction='{self.direction}', shop='{self.shop_name}')>"
+
+
+class ProductKnowledge(Base):
+    """产品知识表，存储LLM提取的商品详细知识"""
+    __tablename__ = 'product_knowledge'
+    __allow_unmapped__ = True
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    shop_id: Mapped[int] = mapped_column(Integer, ForeignKey('shops.id', ondelete='CASCADE'), nullable=False, comment='店铺ID')
+    goods_id: Mapped[int] = mapped_column(Integer, nullable=False, comment='商品ID')
+    goods_name: Mapped[str] = mapped_column(String(255), nullable=False, comment='商品名称')
+    price: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, comment='价格范围（文本格式）')
+    price_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment='最低价（分）')
+    price_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment='最高价（分）')
+    sold_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment='已售数量')
+    thumb_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment='商品缩略图URL')
+    specifications: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='规格信息（JSON格式）')
+    extracted_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='LLM提取的详细产品知识')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment='创建时间')
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment='更新时间')
+    last_extracted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment='上次提取时间')
+
+    __table_args__ = (
+        UniqueConstraint('shop_id', 'goods_id', name='uix_product_knowledge_shop_goods'),
+    )
+
+    # 关联关系
+    shop: Mapped['Shop'] = relationship('Shop', backref='product_knowledge')
+
+    def __repr__(self):
+        return f"<ProductKnowledge(goods_id='{self.goods_id}', goods_name='{self.goods_name}')>"
+
+
+class CustomerServiceKnowledge(Base):
+    """客服知识表，存储人工添加的客服话术和规则知识"""
+    __tablename__ = 'customer_service_knowledge'
+    __allow_unmapped__ = True
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    shop_id: Mapped[int] = mapped_column(Integer, ForeignKey('shops.id', ondelete='CASCADE'), nullable=False, comment='店铺ID')
+    title: Mapped[str] = mapped_column(String(255), nullable=False, comment='知识标题')
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment='知识内容')
+    tags: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment='标签（逗号分隔）')
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, comment='是否启用')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment='创建时间')
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment='更新时间')
+
+    # 关联关系
+    shop: Mapped['Shop'] = relationship('Shop', backref='customer_service_knowledge')
+
+    def __repr__(self):
+        return f"<CustomerServiceKnowledge(title='{self.title}', enabled={self.enabled})>"

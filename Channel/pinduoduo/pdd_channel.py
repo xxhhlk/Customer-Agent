@@ -78,7 +78,7 @@ class PDDChannel(ConnectionMixin, MessageHandlerMixin, LifecycleMixin, StatusMix
         self._threading_stop_event = threading.Event()  # 线程安全的停止事件
         self.loop: Optional[asyncio.AbstractEventLoop] = None  # 事件循环引用（由AutoReplyThread设置）
         self.base_url = "wss://m-ws.pinduoduo.com/"
-        self.ws: Any = None
+        self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.businessHours = config.get("businessHours")
 
         # WebSocket优化功能
