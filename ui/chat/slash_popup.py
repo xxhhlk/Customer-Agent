@@ -194,12 +194,17 @@ class SlashKnowledgePopup(QListWidget):
     """
 
     item_selected = pyqtSignal(str)  # 选中后 emit(content)
-    popup_hidden = pyqtSignal()  # 浮窗关闭（失去焦点等）
+    popup_hidden = pyqtSignal()     # 浮窗关闭（失去焦点等）
+    position_requested = pyqtSignal()  # 需要重新定位浮窗位置
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._apply_style()
-        self.setWindowFlags(Qt.WindowType.Popup)
+        # 改用 Tool 窗口类型，不抢焦点，输入焦点留在输入框
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+        )
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self.setFixedWidth(400)
@@ -210,26 +215,6 @@ class SlashKnowledgePopup(QListWidget):
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self._do_search)
         self._pending_query: str = ""
-
-    def keyPressEvent(self, event):
-        """处理键盘事件（Popup 窗口会抢焦点，eventFilter 收不到）"""
-        key = event.key()
-        if key == Qt.Key.Key_Escape:
-            self.hide()
-            return
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.confirm_selection()
-            return
-        if key == Qt.Key.Key_Up:
-            self.select_prev()
-            return
-        if key == Qt.Key.Key_Down:
-            self.select_next()
-            return
-        if key == Qt.Key.Key_Tab:
-            self.confirm_selection()
-            return
-        super().keyPressEvent(event)
 
     def hideEvent(self, event):
         """浮窗关闭时通知 InputArea"""
@@ -266,8 +251,15 @@ class SlashKnowledgePopup(QListWidget):
         """)
 
     def search(self, query: str):
-        """触发搜索（带防抖 200ms）"""
+        """触发搜索（带防抖 200ms）
+
+        query 为空时不弹浮窗，避免输入"/"就弹出无关内容。
+        """
         self._pending_query = query
+        if not query.strip():
+            # 无关键词时隐藏浮窗
+            self.hide()
+            return
         self._debounce_timer.start(200)
 
     def _do_search(self):
@@ -309,8 +301,11 @@ class SlashKnowledgePopup(QListWidget):
 
         # 自适应高度
         self.adjust_height()
+        # 先 show 再定位，保证 height 已确定
         self.show()
         self.raise_()
+        # 通知 InputArea 重新定位
+        self.position_requested.emit()
 
         # 默认选中第一项
         if self.count() > 0:

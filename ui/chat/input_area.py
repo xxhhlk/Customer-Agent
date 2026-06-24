@@ -3,8 +3,8 @@
 支持斜杠"/"快捷检索知识库
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, QLabel
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer, QPoint
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, QLabel, QApplication
 from PyQt6.QtGui import QFont, QKeyEvent, QTextCursor
 from qfluentwidgets import PrimaryPushButton, isDarkTheme
 
@@ -91,6 +91,9 @@ class InputArea(QWidget):
         self._slash_popup = SlashKnowledgePopup(self)
         self._slash_popup.item_selected.connect(self._on_slash_item_selected)
         self._slash_popup.popup_hidden.connect(self._on_popup_hidden)
+        self._slash_popup.position_requested.connect(self._update_popup_position)
+        # 安装全局鼠标事件过滤器，用于点击浮窗外部时关闭浮窗
+        self._install_global_click_filter()
 
     def _on_popup_hidden(self):
         """浮窗被关闭（如点击外部）时重置状态"""
@@ -129,22 +132,22 @@ class InputArea(QWidget):
                 self._cancel_slash()
                 return
 
-            # 触发搜索
+            # 触发搜索（空 query 时 popup 内部会 hide）
             self._slash_popup.search(query)
-            # 更新浮窗位置
-            self._update_popup_position()
+            # 更新浮窗位置（仅当浮窗可见时）
+            if self._slash_popup.isVisible():
+                self._update_popup_position()
         else:
             # 不在检索模式：检查光标前一个字符是否是斜杠
             # 且斜杠位于行首或文本开头
             if pos > 0 and pos <= len(text) and text[pos - 1] == '/':
                 # 检查斜杠前是否是行首或换行
                 if pos == 1 or text[pos - 2] == '\n':
-                    # 触发斜杠检索
+                    # 触发斜杠检索模式（但不弹浮窗，等输入关键词）
                     self._slash_active = True
                     self._slash_start_pos = pos - 1
-                    query = text[self._slash_start_pos + 1:pos]
-                    self._slash_popup.search(query)
-                    self._update_popup_position()
+                    # query 为空，search 内部不会弹出浮窗
+                    # 不主动调 search，等用户输入关键词
 
     def _update_popup_position(self):
         """将浮窗定位到输入框上方"""
@@ -152,7 +155,7 @@ class InputArea(QWidget):
         text_rect = self.text_edit.rect()
         bottom_left = self.text_edit.mapToGlobal(text_rect.bottomLeft())
         popup_height = self._slash_popup.height()
-        if popup_height == 0:
+        if popup_height <= 0:
             popup_height = 200  # 默认高度
         x = bottom_left.x()
         y = bottom_left.y() - popup_height - 4
@@ -190,7 +193,16 @@ class InputArea(QWidget):
     # ========== 事件处理 ==========
 
     def eventFilter(self, obj, event):
-        """拦截键盘事件"""
+        """拦截键盘事件 + 全局鼠标点击（关闭浮窗）"""
+        # 全局鼠标点击：如果点在浮窗外，关闭浮窗
+        if obj is QApplication.instance() and event.type() == QEvent.Type.MouseButtonPress:
+            if self._slash_active and self._slash_popup.isVisible():
+                # 检查点击是否在浮窗外
+                popup_rect = self._slash_popup.geometry()
+                if not popup_rect.contains(event.globalPosition().toPoint()):
+                    self._cancel_slash()
+            return False
+
         if obj is self.text_edit and event.type() == QKeyEvent.Type.KeyPress:
             key = event.key()
             modifiers = event.modifiers()
@@ -239,6 +251,14 @@ class InputArea(QWidget):
 
         return super().eventFilter(obj, event)
 
+    def _install_global_click_filter(self):
+        """安装全局鼠标事件过滤器，用于点击外部关闭浮窗"""
+        QApplication.instance().installEventFilter(self)
+
+    def _remove_global_click_filter(self):
+        """移除全局鼠标事件过滤器"""
+        QApplication.instance().removeEventFilter(self)
+
     def _on_send_clicked(self):
         """发送按钮 / Enter 触发"""
         # 如果斜杠检索浮窗可见，先关闭
@@ -266,6 +286,7 @@ class InputArea(QWidget):
     def cleanup(self):
         """清理资源"""
         self._slash_popup.cleanup()
+        self._remove_global_click_filter()
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:
