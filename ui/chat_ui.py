@@ -183,6 +183,14 @@ class ChatUI(QFrame):
             result = sender.send_text(str(buyer_uid), text)
 
             if isinstance(result, dict) and result.get("success"):
+                # 通知客服回复事件管理器：手动回复等同于人工客服回复，
+                # 需要取消正在等待的AI处理流程
+                try:
+                    from Message.handlers.staff_reply_event import staff_reply_event_manager
+                    staff_reply_event_manager.notify_staff_reply(buyer_uid)
+                except Exception:
+                    pass
+
                 # 在后台线程持久化，避免阻塞主线程
                 from PyQt6.QtCore import QThread
 
