@@ -152,13 +152,6 @@ class ChatAreaPanel(QWidget):
                 self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
 
             self.input_area.set_enabled(True)
-
-            # 将 shop_id 传给输入框用于斜杠检索
-            try:
-                db_shop_id = self._resolve_db_shop_id(shop_id)
-                self.input_area.set_shop_id(db_shop_id)
-            except Exception:
-                pass
         else:
             self.header_title.setText("暂无消息")
             self.header_detail.setText("")
@@ -217,16 +210,6 @@ class ChatAreaPanel(QWidget):
             text,
             self._current_buyer_uid,
         )
-
-    @staticmethod
-    def _resolve_db_shop_id(shop_id: str) -> int | None:
-        """将原始 shop_id 转为数据库 Shop.id"""
-        try:
-            from database.knowledge_service import KnowledgeService
-            svc = KnowledgeService()
-            return svc._resolve_shop_id(int(shop_id))
-        except Exception:
-            return None
 
     def _scroll_to_bottom(self):
         """滚动到底部"""

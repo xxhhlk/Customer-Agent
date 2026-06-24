@@ -23,7 +23,6 @@ class InputArea(QWidget):
         super().__init__(parent)
         self.setObjectName("InputArea")
         self.setFixedHeight(120)
-        self._shop_id: int | None = None  # 数据库 Shop.id
         self._slash_active = False  # 斜杠检索模式
         self._slash_start_pos = 0  # 斜杠位置
         self._init_ui()
@@ -102,11 +101,6 @@ class InputArea(QWidget):
         """如果浮窗不可见了，退出斜杠模式"""
         if not self._slash_popup.isVisible():
             self._slash_active = False
-
-    def set_shop_id(self, shop_id: int | None):
-        """设置当前店铺 ID（数据库 Shop.id），用于知识库检索"""
-        self._shop_id = shop_id
-        self._slash_popup.set_shop_id(shop_id)
 
     # ========== 斜杠检索逻辑 ==========
 
