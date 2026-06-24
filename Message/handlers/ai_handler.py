@@ -8,6 +8,9 @@ from bridge.context import Context, ContextType
 from .base import BaseHandler
 from .preprocessor import MessagePreprocessor
 from Agent.bot import Bot
+from utils.logger_loguru import get_logger
+
+logger = get_logger("AIReplyHandler")
 
 
 class AIReplyHandler(BaseHandler):
@@ -22,8 +25,7 @@ class AIReplyHandler(BaseHandler):
                 from Agent.CustomerAgent.agent import CustomerAgent
                 bot = container.get(CustomerAgent)
             except Exception as e:
-                from utils.logger_loguru import get_logger
-                get_logger("AIReplyHandler").warning(f"从DI容器获取CustomerAgent失败: {e}, 将使用无Bot模式")
+                logger.warning(f"从DI容器获取CustomerAgent失败: {e}, 将使用无Bot模式")
         self.bot = bot
         self.preprocessor = MessagePreprocessor()
         self.auto_reply_types = auto_reply_types or {
@@ -55,7 +57,7 @@ class AIReplyHandler(BaseHandler):
                 return await self._handle_fallback(context, metadata)
 
             # 3. 发送回复
-            success = await self._send_reply(context, reply, metadata)
+            success = await self._send_reply(context, reply, metadata, reply_source='ai')
             if success:
                 await self.log_message(context, "AI回复发送成功", f"回复: {reply}...")
             else:
@@ -89,8 +91,13 @@ class AIReplyHandler(BaseHandler):
             self.logger.error(f"AI Bot调用失败: {e}")
             return None
 
-    async def _send_reply(self, context: Context, reply: str, metadata: Dict[str, Any]) -> bool:
-        """发送回复"""
+    async def _send_reply(self, context: Context, reply: str, metadata: Dict[str, Any],
+                          reply_source: str = 'ai') -> bool:
+        """发送回复并持久化
+
+        Args:
+            reply_source: 回复来源标记，'ai' 或 'fallback'
+        """
         try:
             # 从metadata中提取必要信息
             shop_id = metadata.get('shop_id')
@@ -106,6 +113,17 @@ class AIReplyHandler(BaseHandler):
             sender = SendMessage(str(shop_id), str(user_id))
             result = sender.send_text(str(from_uid), reply)
             if isinstance(result, dict) and result.get("success"):
+                # === 持久化回复消息（接入点B） ===
+                try:
+                    from services.message_persistence import message_persistence_service
+                    msg_dict = message_persistence_service.save_outbound_message(
+                        shop_id=str(shop_id), user_id=str(user_id),
+                        buyer_uid=str(from_uid), reply_content=reply, reply_source=reply_source
+                    )
+                    if msg_dict:
+                        message_persistence_service.notify_new_message(msg_dict)
+                except Exception as e:
+                    logger.warning(f"持久化回复失败: {e}")
                 return True
             return False
 
@@ -122,8 +140,8 @@ class AIReplyHandler(BaseHandler):
             # 记录备用回复
             self.logger.info("使用备用回复")
 
-            # 尝试发送备用回复
-            success = await self._send_reply(context, reply_text, metadata)
+            # 尝试发送备用回复（reply_source='fallback'）
+            success = await self._send_reply(context, reply_text, metadata, reply_source='fallback')
             if not success:
                 # 如果发送失败，至少记录日志
                 await self.log_message(context, "备用回复发送失败", f"内容: {reply_text}")
