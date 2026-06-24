@@ -162,35 +162,11 @@ class LanceDbWithProgress(LanceDb):
 
         # 直接实现插入逻辑，不调用父类的 insert()
         try:
-            logger.info(f"直接实现插入逻辑，保存 {len(documents)} 个文档")
-            logger.info(f"embedder 类型: {type(self.embedder).__name__}")
-            logger.info(f"embedder.dimensions: {self.embedder.dimensions}")
-            
-            # 检查表状态
             if self.table is None:
                 logger.error("self.table is None!")
                 return
-            logger.info(f"self.table 类型: {type(self.table)}")
-            logger.info(f"self.table 对象: {self.table}")
-            # 直接调用属性，不使用 getattr
-            try:
-                tbl_name = self.table.name
-                tbl_schema = self.table.schema
-                logger.info(f"self.table.name: {tbl_name}")
-                logger.info(f"self.table.schema: {tbl_schema}")
-            except Exception as e:
-                logger.error(f"获取表属性失败: {e}")
-            logger.info(f"self._vector_col: {getattr(self, '_vector_col', 'not set')}")
-            logger.info(f"self._id: {getattr(self, '_id', 'not set')}")
-            
-            # 检查文档嵌入前的状态
-            for i, doc in enumerate(documents):
-                logger.debug(f"文档 {i} 嵌入前: embedding={doc.embedding is not None}, content={doc.content[:50] if doc.content else 'None'}")
-            
-            # 构建数据列表
-            import json
 
-            logger.info(f"开始处理文档，当前表版本: {self.table.version}")
+            import json
 
             data = []
             for document in documents:
@@ -207,10 +183,7 @@ class LanceDbWithProgress(LanceDb):
                 
                 # 嵌入文档（如果还没有嵌入）
                 if not document.embedding:
-                    logger.info(f"文档 {document.name} 没有嵌入，调用 embed()")
                     document.embed(embedder=self.embedder)
-                else:
-                    logger.info(f"文档 {document.name} 已有嵌入，维度: {len(document.embedding)}")
                 
                 # 准备数据
                 payload = {
@@ -224,12 +197,10 @@ class LanceDbWithProgress(LanceDb):
                 
                 # 准备向量
                 vector = self._prepare_vector(document.embedding)
-                logger.info(f"文档 {document.name} 向量准备完成: 维度={len(vector)}, 类型={type(vector)}, 前5个值={vector[:5]}")
                 
                 # 确保向量是列表类型
                 if not isinstance(vector, list):
                     vector = list(vector)
-                    logger.info(f"向量转换为列表，维度={len(vector)}")
                 
                 # 注意：字段顺序必须与 LanceDB schema 一致：vector, id, payload
                 data.append({
@@ -240,14 +211,6 @@ class LanceDbWithProgress(LanceDb):
             
             # 添加到 LanceDB
             if data:
-                logger.info(f"准备添加 {len(data)} 条记录到 LanceDB")
-                # 详细打印每条记录
-                for i, record in enumerate(data):
-                    logger.info(f"记录 {i}: id={record['id']}, vector类型={type(record['vector'])}, vector维度={len(record['vector']) if record['vector'] else 0}")
-                    if record['vector']:
-                        logger.info(f"  vector前5个值: {record['vector'][:5]}")
-
-                # 添加数据到表
                 if self.table is None:
                     logger.error("self.table is None, 无法添加数据")
                     return
@@ -261,35 +224,9 @@ class LanceDbWithProgress(LanceDb):
                     )
                 else:
                     result = self.table.add(data)
-                logger.info(f"成功添加 {len(data)} 条记录, 结果: {result}")
-                
-                # 立即验证数据是否正确写入
-                logger.info("验证写入的数据...")
-                # 使用 Arrow API 直接查询
-                arrow_table = self.table.to_arrow()
-                vector_col = arrow_table.column('vector')
-                vector_list = vector_col.to_pylist()
-                for i, vec in enumerate(vector_list):
-                    dim = len(vec) if vec is not None else 0
-                    logger.info(f"  Arrow 记录 {i}: 向量维度={dim}")
-                
-                # 强制刷新表连接
-                self.table = cast(Optional["LanceTable"], self.connection.open_table(name=self.table_name))
-                if self.table is None:
-                    logger.error("刷新表连接失败")
-                    return
-                df = self.table.to_pandas()
-                for i, row in df.iterrows():
-                    row_id = row['id']
-                    vector = row['vector']
-                    dim = len(vector) if vector is not None else 0
-                    logger.info(f"  Pandas 记录 {i}: ID={row_id}, 向量维度={dim}")
+                logger.info(f"成功添加 {len(data)} 条记录, 版本: {result.version}")
             else:
                 logger.info("没有新数据需要添加")
-            
-            # 检查文档嵌入后的状态
-            for i, doc in enumerate(documents):
-                logger.info(f"文档 {i} 嵌入后: embedding={doc.embedding is not None}, 维度={len(doc.embedding) if doc.embedding else 0}")
 
             # 报告完成
             if self.progress_callback:
@@ -360,15 +297,6 @@ class LanceDbWithProgress(LanceDb):
 
         # 直接调用我们的 insert 方法
         try:
-            logger.info(f"直接调用 insert() 保存 {len(documents)} 个文档")
-            logger.info(f"embedder 类型: {type(self.embedder).__name__}")
-            logger.info(f"embedder.enable_batch: {getattr(self.embedder, 'enable_batch', 'N/A')}")
-            logger.info(f"embedder.dimensions: {self.embedder.dimensions}")
-            
-            # 检查文档嵌入前的状态
-            for i, doc in enumerate(documents):
-                logger.debug(f"文档 {i} 嵌入前: embedding={doc.embedding is not None}, content={doc.content[:50] if doc.content else 'None'}")
-            
             # 嵌入文档（如果还没有嵌入）
             if self.embedder.enable_batch:
                 # 检查是否有批量嵌入方法
@@ -397,10 +325,6 @@ class LanceDbWithProgress(LanceDb):
             
             # 调用我们的 insert 方法
             self.insert(content_hash, documents, filters)
-            
-            # 检查文档嵌入后的状态
-            for i, doc in enumerate(documents):
-                logger.info(f"文档 {i} 嵌入后: embedding={doc.embedding is not None}, 维度={len(doc.embedding) if doc.embedding else 0}")
 
             # 报告完成
             if self.progress_callback:
