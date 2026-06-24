@@ -7,6 +7,7 @@
 from __future__ import annotations
 import asyncio
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional, List
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -16,7 +17,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QEvent
 from qfluentwidgets import (
     FluentIcon, PrimaryPushButton, PushButton,
-    InfoBar, InfoBarPosition, SearchLineEdit, isDarkTheme
+    InfoBar, InfoBarPosition, SearchLineEdit, isDarkTheme,
+    MessageBoxBase, SubtitleLabel, BodyLabel, RadioButton
 )
 
 if TYPE_CHECKING:
@@ -254,6 +256,182 @@ class LoadDataWorker(QThread):
             raise
 
 
+class ExportFormatDialog(QDialog):
+    """导出格式选择对话框"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择导出格式")
+        self.setFixedWidth(420)
+
+        from qfluentwidgets import (
+            SubtitleLabel, BodyLabel, RadioButton,
+            PrimaryPushButton, PushButton
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        # 标题
+        title_label = SubtitleLabel("选择导出格式")
+        layout.addWidget(title_label)
+
+        # 说明
+        desc = BodyLabel("请选择知识库导出格式：")
+        layout.addWidget(desc)
+
+        # CSV 选项
+        self.csv_radio = RadioButton("CSV格式（推荐，可直接重新导入）")
+        self.csv_radio.setChecked(True)
+        layout.addWidget(self.csv_radio)
+
+        csv_desc = BodyLabel(
+            "  · 格式与导入系统完全兼容，导出后可直接通过\"导入知识库\"重新加载\n"
+            "  · 包含列：标题、内容、标签、来源\n"
+            "  · 适合日常备份和数据迁移"
+        )
+        csv_desc.setStyleSheet("color: #888; font-size: 12px;")
+        layout.addWidget(csv_desc)
+
+        # JSON 选项
+        self.json_radio = RadioButton("JSON格式（完整备份）")
+        layout.addWidget(self.json_radio)
+
+        json_desc = BodyLabel(
+            "  · 包含完整元数据和文档ID\n"
+            "  · 适合归档备份，不可直接导入\n"
+            "  · 需转换为CSV才能重新导入"
+        )
+        json_desc.setStyleSheet("color: #888; font-size: 12px;")
+        layout.addWidget(json_desc)
+
+        layout.addStretch(1)
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        cancel_btn = PushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        ok_btn = PrimaryPushButton("确定")
+        ok_btn.clicked.connect(self._on_confirm)
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+    def _on_confirm(self):
+        self.accept()
+
+    def get_format(self) -> str:
+        """获取选择的格式"""
+        if self.csv_radio.isChecked():
+            return "csv"
+        elif self.json_radio.isChecked():
+            return "json"
+        return "csv"
+
+
+class ClearConfirmDialog(QDialog):
+    """清空知识库确认对话框"""
+
+    def __init__(self, parent=None, doc_count: int = 0):
+        super().__init__(parent)
+        self.setWindowTitle("确认清空知识库")
+        self.setFixedWidth(480)
+
+        from qfluentwidgets import (
+            SubtitleLabel, BodyLabel, RadioButton,
+            PrimaryPushButton, PushButton
+        )
+
+        self._create_backup = True  # 默认创建备份
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        # 警告标题
+        warning_label = SubtitleLabel("⚠️ 危险操作：清空知识库")
+        warning_label.setStyleSheet("color: #d32f2f;")
+        layout.addWidget(warning_label)
+
+        # 内容说明
+        info_text = BodyLabel(
+            f"您即将清空知识库中的所有数据（共 {doc_count} 条记录）。\n\n"
+            "此操作不可撤销！清空后所有知识条目将被永久删除，"
+            "包括向量数据和内容数据库。\n\n"
+            "建议在清空前创建备份，以便在需要时恢复数据。"
+        )
+        info_text.setWordWrap(True)
+        layout.addWidget(info_text)
+
+        # 备份选项
+        backup_title = BodyLabel("备份选项：")
+        backup_title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(backup_title)
+
+        self.backup_yes = RadioButton("创建备份（推荐）")
+        self.backup_yes.setChecked(True)
+        self.backup_yes.toggled.connect(lambda checked: self._on_backup_changed(checked, True))
+        layout.addWidget(self.backup_yes)
+
+        backup_yes_desc = BodyLabel(
+            "  · 备份向量数据库和内容数据库到指定目录\n"
+            "  · 备份后可手动恢复数据"
+        )
+        backup_yes_desc.setStyleSheet("color: #888; font-size: 12px;")
+        layout.addWidget(backup_yes_desc)
+
+        self.backup_no = RadioButton("不创建备份（直接清空）")
+        self.backup_no.toggled.connect(lambda checked: self._on_backup_changed(checked, False))
+        layout.addWidget(self.backup_no)
+
+        backup_no_desc = BodyLabel(
+            "  · 跳过备份，直接清空所有数据\n"
+            "  · ⚠️ 清空后无法恢复！"
+        )
+        backup_no_desc.setStyleSheet("color: #d32f2f; font-size: 12px;")
+        layout.addWidget(backup_no_desc)
+
+        layout.addStretch(1)
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        cancel_btn = PushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        clear_btn = PrimaryPushButton("确认清空")
+        clear_btn.setStyleSheet(
+            "QPushButton { background-color: #d32f2f; }"
+            "QPushButton:hover { background-color: #b71c1c; }"
+        )
+        clear_btn.clicked.connect(self._on_confirm)
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(clear_btn)
+        layout.addLayout(btn_layout)
+
+    def _on_backup_changed(self, checked: bool, create_backup: bool):
+        """备份选项改变"""
+        if checked:
+            self._create_backup = create_backup
+
+    def _on_confirm(self):
+        """二次确认"""
+        reply = QMessageBox.warning(
+            self,
+            "最终确认",
+            "您确定要清空知识库吗？\n\n此操作不可撤销！",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.accept()
+
+    def get_create_backup(self) -> bool:
+        """是否创建备份"""
+        return self._create_backup
+
+
 class KnowledgeUI(QWidget):
     """
     知识库管理界面
@@ -438,6 +616,20 @@ class KnowledgeUI(QWidget):
         import_btn.setFixedHeight(self.BUTTON_HEIGHT)
         self.toolbar.addWidget(import_btn)
 
+        export_btn = PushButton("导出")
+        export_btn.clicked.connect(self.export_knowledge)
+        export_btn.setFixedWidth(80)
+        export_btn.setFixedHeight(self.BUTTON_HEIGHT)
+        export_btn.setIcon(FluentIcon.SHARE)
+        self.toolbar.addWidget(export_btn)
+
+        clear_btn = PushButton("清空")
+        clear_btn.clicked.connect(self.clear_knowledge)
+        clear_btn.setFixedWidth(80)
+        clear_btn.setFixedHeight(self.BUTTON_HEIGHT)
+        clear_btn.setIcon(FluentIcon.DELETE)
+        self.toolbar.addWidget(clear_btn)
+
         refresh_btn = PushButton("刷新")
         refresh_btn.clicked.connect(self.refresh_data)
         refresh_btn.setFixedWidth(self.BUTTON_WIDTH)
@@ -451,6 +643,8 @@ class KnowledgeUI(QWidget):
         self.search_input.setFixedHeight(self.BUTTON_HEIGHT)
         self.search_input.searchSignal.connect(self._on_search)
         self.search_input.clearSignal.connect(self._on_clear_search)
+        # 安装事件过滤器以支持 Enter 键搜索
+        self.search_input.installEventFilter(self)
         self.toolbar.addWidget(self.search_input)
 
         self.toolbar.addStretch(1)
@@ -671,10 +865,22 @@ class KnowledgeUI(QWidget):
                 logger.error(f"❌ 知识库管理器初始化失败: {e}")
                 self.knowledge_manager = None
 
+    def eventFilter(self, obj, event):
+        """事件过滤器：支持搜索框按 Enter 键搜索"""
+        if obj is self.search_input and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                text = self.search_input.text().strip()
+                if text:
+                    self._on_search(text)
+                else:
+                    self._on_clear_search()
+                return True
+        return super().eventFilter(obj, event)
+
     def cleanup(self):
         """程序退出时清理所有Worker线程"""
         # 清理自身持有的 Worker 线程
-        worker_attrs = ['_load_worker', '_add_worker', '_import_worker']
+        worker_attrs = ['_load_worker', '_add_worker', '_import_worker', '_export_worker', '_clear_worker']
         for attr in worker_attrs:
             worker = getattr(self, attr, None)
             if worker and worker.isRunning():
@@ -995,6 +1201,150 @@ class KnowledgeUI(QWidget):
         """
         self._hide_loading_indicator()
         QMessageBox.critical(self, "错误", f"导入失败：{msg}")
+
+    def export_knowledge(self) -> None:
+        """导出知识库数据"""
+        self._ensure_knowledge_manager()
+        if self.knowledge_manager is None:
+            QMessageBox.critical(self, "错误", "知识库管理器未初始化，无法导出。")
+            return
+
+        # 检查是否有数据
+        count = self.knowledge_manager.get_content_count()
+        if count == 0:
+            QMessageBox.information(self, "提示", "知识库为空，没有可导出的数据。")
+            return
+
+        # 选择导出格式
+        format_dialog = ExportFormatDialog(self)
+        if format_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        export_format = format_dialog.get_format()
+
+        # 设置默认文件名
+        default_name = f"knowledge_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
+
+        if export_format == "csv":
+            file_filter = "CSV文件 (*.csv);;所有文件 (*.*)"
+        else:
+            file_filter = "JSON文件 (*.json);;所有文件 (*.*)"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出知识库",
+            default_name,
+            file_filter
+        )
+
+        if not file_path:
+            return
+
+        # 确保扩展名正确
+        if export_format == "csv" and not file_path.lower().endswith('.csv'):
+            file_path += '.csv'
+        elif export_format == "json" and not file_path.lower().endswith('.json'):
+            file_path += '.json'
+
+        # 显示加载指示器
+        self._show_loading_indicator("正在导出知识库")
+
+        # 启动导出工作线程
+        from .knowledge.export_clear_workers import ExportWorker
+        self._export_worker = ExportWorker(self.knowledge_manager, file_path, export_format)
+        self._export_worker.success.connect(self._on_export_success)
+        self._export_worker.failed.connect(self._on_export_failed)
+        self._export_worker.progress.connect(self._on_export_progress)
+        self._export_worker.start()
+
+    def _on_export_success(self, file_path: str, count: int) -> None:
+        """导出成功回调"""
+        self._hide_loading_indicator()
+        QMessageBox.information(
+            self, "导出成功",
+            f"知识库导出完成！\n\n"
+            f"导出文件: {file_path}\n"
+            f"导出数量: {count} 条记录\n\n"
+            f"提示: CSV格式的导出文件可直接通过\"导入知识库\"功能重新导入。"
+        )
+
+    def _on_export_failed(self, msg: str) -> None:
+        """导出失败回调"""
+        self._hide_loading_indicator()
+        QMessageBox.critical(self, "错误", f"导出失败：{msg}")
+
+    def _on_export_progress(self, msg: str) -> None:
+        """导出进度回调"""
+        self._show_loading_indicator(msg)
+
+    def clear_knowledge(self) -> None:
+        """清空知识库"""
+        self._ensure_knowledge_manager()
+        if self.knowledge_manager is None:
+            QMessageBox.critical(self, "错误", "知识库管理器未初始化，无法清空。")
+            return
+
+        # 检查是否有数据
+        count = self.knowledge_manager.get_content_count()
+        if count == 0:
+            QMessageBox.information(self, "提示", "知识库已经是空的。")
+            return
+
+        # 显示确认对话框
+        confirm_dialog = ClearConfirmDialog(self, count)
+        if confirm_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        create_backup = confirm_dialog.get_create_backup()
+
+        # 如果需要备份，选择备份目录
+        backup_dir = ""
+        if create_backup:
+            backup_dir = QFileDialog.getExistingDirectory(
+                self,
+                "选择备份保存目录",
+                os.path.expanduser("~")
+            )
+            if not backup_dir:
+                QMessageBox.warning(self, "提示", "未选择备份目录，操作已取消。")
+                return
+
+        # 显示加载指示器
+        self._show_loading_indicator("正在清空知识库")
+
+        # 启动清空工作线程
+        from .knowledge.export_clear_workers import ClearAllWorker
+        self._clear_worker = ClearAllWorker(
+            self.knowledge_manager,
+            create_backup=create_backup,
+            backup_dir=backup_dir
+        )
+        self._clear_worker.success.connect(self._on_clear_success)
+        self._clear_worker.failed.connect(self._on_clear_failed)
+        self._clear_worker.progress.connect(self._on_clear_progress)
+        self._clear_worker.start()
+
+    def _on_clear_success(self, backup_path: str, deleted_count: int) -> None:
+        """清空成功回调"""
+        self._hide_loading_indicator()
+
+        message = f"知识库已清空！\n\n删除了 {deleted_count} 条记录。"
+        if backup_path:
+            message += f"\n\n备份已保存到:\n{backup_path}"
+
+        QMessageBox.information(self, "清空成功", message)
+
+        # 强制刷新数据
+        self.refresh_data(force_reload=True)
+
+    def _on_clear_failed(self, msg: str) -> None:
+        """清空失败回调"""
+        self._hide_loading_indicator()
+        QMessageBox.critical(self, "错误", f"清空失败：{msg}")
+
+    def _on_clear_progress(self, msg: str) -> None:
+        """清空进度回调"""
+        self._show_loading_indicator(msg)
 
     def refresh_data(self, force_reload: bool = False) -> None:
         """

@@ -11,13 +11,16 @@ from .models import (
     ImportError as KnowledgeImportError  # 重命名避免与内置冲突
 )
 from .widgets import KnowledgeCard, AddKnowledgeDialog, KnowledgeDetailFlyout
+from .export_clear_workers import ExportWorker, ClearAllWorker
 
 __all__ = [
     'SimpleDocument',
     'DocumentTitleExtractor',
     'MarkdownConverter',
-    'KnowledgeImportError',  # 使用重命名后的版本
+    'KnowledgeImportError',
     'KnowledgeCard',
     'AddKnowledgeDialog',
     'KnowledgeDetailFlyout',
+    'ExportWorker',
+    'ClearAllWorker',
 ]

@@ -634,3 +634,101 @@ class KnowledgeManager:
         except Exception as e:
             logger.error(f"获取文档向量信息失败 {doc_id}: {str(e)}")
             return {"has_vector": False, "vector_dimension": 0, "vector_sample": None}
+
+    def clear_all_knowledge(self) -> int:
+        """
+        清空所有知识库数据（向量数据库 + 内容数据库）
+
+        Returns:
+            删除的文档数量
+        """
+        try:
+            # 获取删除前的数量
+            count_before = self.get_content_count()
+
+            if count_before == 0:
+                logger.info("知识库已为空，无需清空")
+                return 0
+
+            # 清空向量数据库
+            self._clear_vector_db()
+
+            # 清空内容数据库
+            self._clear_contents_db()
+
+            logger.info(f"清空完成，删除了 {count_before} 条记录")
+            return count_before
+
+        except Exception as e:
+            logger.error(f"清空知识库失败: {str(e)}")
+            raise
+
+    def _clear_vector_db(self) -> None:
+        """清空向量数据库"""
+        import lancedb
+
+        if not self.knowledge.vector_db:
+            logger.warning("向量数据库未初始化")
+            return
+
+        db_path = self.knowledge.vector_db.uri
+        table_name = self.knowledge.vector_db.table_name
+
+        db = lancedb.connect(db_path)
+
+        existing_tables = db.table_names()
+        if table_name not in existing_tables:
+            logger.info(f"表 {table_name} 不存在，无需清空")
+            return
+
+        # 删除并重建表
+        db.drop_table(table_name)
+        logger.info(f"已删除向量表: {table_name}")
+
+        # 重置表连接，下次访问时自动重建
+        self.knowledge.vector_db.table = None
+
+    def _clear_contents_db(self) -> None:
+        """清空内容数据库"""
+        import sqlite3
+
+        if not self.knowledge.contents_db:
+            logger.warning("内容数据库未初始化")
+            return
+
+        db_file = getattr(self.knowledge.contents_db, 'db_file', None)
+        if not db_file or not os.path.exists(db_file):
+            logger.warning(f"内容数据库文件不存在: {db_file}")
+            return
+
+        conn = sqlite3.connect(db_file)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = cursor.fetchall()
+
+            for table_info in tables:
+                table_name = table_info[0]
+                if table_name.startswith('sqlite_'):
+                    continue
+                cursor.execute(f"DELETE FROM [{table_name}]")
+                logger.info(f"已清空表: {table_name}")
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_all_documents_for_export(self) -> list:
+        """
+        获取所有文档用于导出（包括禁用的和所有字段）
+
+        Returns:
+            文档列表，每个文档包含 id, content, metadata 等完整信息
+        """
+        try:
+            from ui.knowledge.data_loader import KnowledgeDataLoader
+            loader = KnowledgeDataLoader(self)
+            return loader.load_documents()
+        except Exception as e:
+            logger.error(f"获取所有文档失败: {str(e)}")
+            return []
