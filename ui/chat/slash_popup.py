@@ -44,13 +44,17 @@ class _KnowledgeSearchWorker(QThread):
     def _search_lancedb(self) -> List[Dict[str, str]]:
         """直接从 LanceDB 读取数据并过滤"""
         import json
-        import os
         from pathlib import Path
 
-        # 定位 vector_db 路径（与 KnowledgeManager 一致）
-        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        # 定位 vector_db 路径
+        # slash_popup.py 在 ui/chat/ 下，向上 3 层是项目根目录
+        project_root = Path(__file__).resolve().parent.parent.parent
         vector_path = project_root / "data" / "vector_db"
         table_name = "customer_knowledge"
+
+        # 如果 __file__ 路径不可靠，用 cwd 作为 fallback
+        if not vector_path.exists():
+            vector_path = Path.cwd() / "data" / "vector_db"
 
         # 尝试用 lance 库读取
         try:
