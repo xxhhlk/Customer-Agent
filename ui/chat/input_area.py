@@ -5,7 +5,7 @@
 
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer, QPoint
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, QLabel, QApplication
-from PyQt6.QtGui import QFont, QKeyEvent, QTextCursor
+from PyQt6.QtGui import QFont, QKeyEvent, QTextCursor, QInputMethodEvent
 from qfluentwidgets import PrimaryPushButton, isDarkTheme
 
 from ui.chat.slash_popup import SlashKnowledgePopup
@@ -182,7 +182,7 @@ class InputArea(QWidget):
     # ========== 事件处理 ==========
 
     def eventFilter(self, obj, event):
-        """拦截键盘事件 + 全局鼠标点击（关闭浮窗）"""
+        """拦截键盘事件 + 输入法事件 + 全局鼠标点击（关闭浮窗）"""
         # 全局鼠标点击：如果点在浮窗外，关闭浮窗
         if event.type() == QEvent.Type.MouseButtonPress:
             if self._slash_active and self._slash_popup.isVisible():
@@ -192,7 +192,14 @@ class InputArea(QWidget):
                     self._cancel_slash()
             return False
 
-        if obj is self.text_edit and event.type() == QKeyEvent.Type.KeyPress:
+        # 处理输入法事件（中文输入法候选词确认后触发）
+        if obj is self.text_edit and event.type() == QEvent.Type.InputMethodEvent:
+            # IME 输入完成后，文本已插入 QTextEdit，延迟检查斜杠触发
+            result = super().eventFilter(obj, event)
+            QTimer.singleShot(0, self._check_slash_trigger)
+            return result
+
+        if obj is self.text_edit and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             modifiers = event.modifiers()
 
