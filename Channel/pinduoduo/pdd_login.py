@@ -41,7 +41,7 @@ class PDDLogin():
         """使用账号密码登录
 
         Args:
-            headless: 是否使用无头模式（自动回退时使用 True，避免弹出浏览器窗口）
+            headless: 是否使用无头模式（默认 False，弹出浏览器窗口以便用户处理验证码）
 
         """
         playwright = None
@@ -209,7 +209,7 @@ async def login_pdd(name, password, headless=False):
 
     :param name: 用户名
     :param password: 密码
-    :param headless: 是否使用无头模式（自动回退时使用 True，避免弹出浏览器窗口）
+    :param headless: 是否使用无头模式（默认 False，弹出浏览器窗口以便用户处理验证码）
     :return: dict or bool
     """
     pdd_login = PDDLogin(name=name, password=password)

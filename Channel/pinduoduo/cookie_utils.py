@@ -153,7 +153,7 @@ def perform_relogin(
     user_id: str,
     username: str,
     password: str,
-    headless_fallback: bool = True,
+    headless_fallback: bool = False,
 ) -> bool:
     """
     执行 cookie 刷新/重登，优先刷新，失败时回退到完整登录。
@@ -207,9 +207,11 @@ def perform_relogin(
 
         logger.info(f"回退到完整重新登录 (headless={headless_fallback}): {username}")
         try:
+            # 非 headless 模式给用户更多时间处理验证码/滑块
+            login_timeout = 60.0 if headless_fallback else 120.0
             login_result = run_async_in_thread(
                 pdd_login_module.login_pdd(username, password, headless_fallback),
-                timeout=60.0,
+                timeout=login_timeout,
             )
             if login_result and isinstance(login_result, dict):
                 new_cookies = login_result.get('cookies')

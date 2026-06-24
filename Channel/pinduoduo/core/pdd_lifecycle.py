@@ -449,7 +449,7 @@ class LifecycleMixin:
                             "pinduoduo", shop_id, user_id,
                             account_info.get('username', username),
                             account_info.get('password', ''),
-                            True,
+                            False,
                         )
                         if success:
                             self.logger.info(f"主动重登成功: {shop_id}-{username}")

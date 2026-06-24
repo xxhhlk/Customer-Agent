@@ -150,6 +150,25 @@ class BaseRequest:
 
         return run_async_in_thread(_run_wrapper(), timeout=60.0)
 
+    def _run_async_login_func_with_timeout(self, func: Callable[..., Any], timeout: float, *args) -> Any:
+        """
+        在线程中安全执行异步登录函数（可指定超时时间）
+
+        Args:
+            func: 异步函数
+            timeout: 超时时间（秒）
+            *args: 函数参数
+
+        Returns:
+            函数执行结果
+        """
+        from utils.async_helper import run_async_in_thread
+
+        async def _run_wrapper() -> Any:
+            return await func(*args)
+
+        return run_async_in_thread(_run_wrapper(), timeout=timeout)
+
     def _get_account_credentials(self) -> Optional[tuple]:
         """
         获取账号凭证（用户名和密码）
@@ -222,17 +241,18 @@ class BaseRequest:
             except Exception as refresh_error:
                 self.logger.warning(f"账号 {self.account_name} cookies刷新异常: {str(refresh_error)}")
 
-            # 回退到完整重新登录（headless 模式，避免弹出浏览器窗口）
+            # 回退到完整重新登录（非 headless 模式，弹出浏览器窗口以处理验证码等交互式验证）
             if not password:
                 self.logger.error(f"账号 {self.account_name} 缺少密码，无法进行完整重新登录")
                 relogin_guard.release(self.channel_name, self.shop_id, self.user_id, success=False)
                 return False
 
-            self.logger.info(f"回退到完整重新登录模式（headless，账号 {self.account_name}）...")
+            self.logger.info(f"回退到完整重新登录模式（弹出浏览器窗口，账号 {self.account_name}）...")
 
             try:
-                login_result = self._run_async_login_func(
-                    pdd_login_module.login_pdd, username, password, True
+                # 非 headless 模式给用户更多时间处理验证码/滑块
+                login_result = self._run_async_login_func_with_timeout(
+                    pdd_login_module.login_pdd, 120.0, username, password, False
                 )
 
                 if login_result and isinstance(login_result, dict):
