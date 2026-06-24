@@ -90,20 +90,9 @@ class InputArea(QWidget):
         """初始化斜杠检索浮窗"""
         self._slash_popup = SlashKnowledgePopup(self)
         self._slash_popup.item_selected.connect(self._on_slash_item_selected)
-        self._slash_popup.popup_hidden.connect(self._on_popup_hidden)
         self._slash_popup.position_requested.connect(self._update_popup_position)
         # 安装全局鼠标事件过滤器，用于点击浮窗外部时关闭浮窗
         self._install_global_click_filter()
-
-    def _on_popup_hidden(self):
-        """浮窗被关闭（如点击外部）时重置状态"""
-        # 延迟重置，避免与 confirm_selection 冲突
-        QTimer.singleShot(50, self._check_slash_state)
-
-    def _check_slash_state(self):
-        """如果浮窗不可见了，退出斜杠模式"""
-        if not self._slash_popup.isVisible():
-            self._slash_active = False
 
     # ========== 斜杠检索逻辑 ==========
 
@@ -195,7 +184,7 @@ class InputArea(QWidget):
     def eventFilter(self, obj, event):
         """拦截键盘事件 + 全局鼠标点击（关闭浮窗）"""
         # 全局鼠标点击：如果点在浮窗外，关闭浮窗
-        if obj is QApplication.instance() and event.type() == QEvent.Type.MouseButtonPress:
+        if event.type() == QEvent.Type.MouseButtonPress:
             if self._slash_active and self._slash_popup.isVisible():
                 # 检查点击是否在浮窗外
                 popup_rect = self._slash_popup.geometry()

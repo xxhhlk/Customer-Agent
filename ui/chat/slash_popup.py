@@ -194,7 +194,6 @@ class SlashKnowledgePopup(QListWidget):
     """
 
     item_selected = pyqtSignal(str)  # 选中后 emit(content)
-    popup_hidden = pyqtSignal()     # 浮窗关闭（失去焦点等）
     position_requested = pyqtSignal()  # 需要重新定位浮窗位置
 
     def __init__(self, parent=None):
@@ -215,11 +214,6 @@ class SlashKnowledgePopup(QListWidget):
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self._do_search)
         self._pending_query: str = ""
-
-    def hideEvent(self, event):
-        """浮窗关闭时通知 InputArea"""
-        super().hideEvent(event)
-        self.popup_hidden.emit()
 
     def _apply_style(self):
         dark = isDarkTheme()
