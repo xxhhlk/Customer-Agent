@@ -477,12 +477,15 @@ class LanceDbWithProgress(LanceDb):
 
     def update_metadata(self, content_id: str, metadata: Dict[str, Any]) -> None:
         """
-        重写 update_metadata 方法 - 修复向量丢失问题
+        重写 update_metadata 方法 - 修复向量丢失 + 全表扫描崩溃问题
 
-        原方法的 bug：查询时只选择 ["id", "payload"]，不包含 "vector" 字段，
-        导致更新时 vector_data 永远是 None，向量数据丢失。
+        原方法两个 bug：
+        1. Agno 原版查询不含 vector 字段 → 更新时向量丢失
+        2. 之前的修复用全表 to_pandas() 加载所有向量到内存 →
+           导入 130 条时 O(N²) 全表扫描导致 LanceDB native access violation 崩溃
 
-        修复：在查询时包含 "vector" 字段。
+        新方案：只用 LanceDB 原生 table.update() 按 where 条件就地更新 payload 列，
+        不加载任何向量数据到内存，完全避免 native 崩溃。
         """
         import json
 
@@ -493,41 +496,29 @@ class LanceDbWithProgress(LanceDb):
 
             logger.info(f"[update_metadata] 开始更新元数据，content_id: {content_id}")
 
-            # Get all documents and filter in Python (LanceDB doesn't support JSON operators)
-            # 关键修复：包含 "vector" 字段！
-            total_count = self.table.count_rows()
-            results = self.table.search().select(["id", "payload", "vector"]).limit(total_count).to_pandas()
+            # 只查询 id + payload（不含 vector），用 LIKE 过滤 content_id
+            # payload 是 JSON 字符串列，用 LIKE 匹配 content_id
+            where_clause = f"payload LIKE '%\"content_id\":\"{content_id}\"%'"
+            results = self.table.search().where(where_clause).select(["id", "payload"]).limit(10).to_list()
 
-            if results.empty:
-                logger.debug("No documents found")
-                return
-
-            # Find matching documents with the given content_id
-            matching_rows = []
-            for _, row in results.iterrows():
-                payload_str = row["payload"]
-                if isinstance(payload_str, str):
-                    payload = json.loads(payload_str)
-                    if payload.get("content_id") == content_id:
-                        matching_rows.append(row)
-
-            if not matching_rows:
+            if not results:
                 logger.debug(f"No documents found with content_id: {content_id}")
                 return
 
-            logger.info(f"[update_metadata] 找到 {len(matching_rows)} 条匹配记录")
+            logger.info(f"[update_metadata] 找到 {len(results)} 条匹配记录")
 
-            # Update each matching document
+            # 逐条用 LanceDB 原生 update 就地更新 payload（不涉及向量）
             updated_count = 0
-            for row in matching_rows:
+            for row in results:
                 row_id = row["id"]
                 payload_str = row["payload"]
                 if not isinstance(payload_str, str):
                     logger.warning(f"Payload is not a string for row {row_id}")
                     continue
+
                 current_payload = json.loads(payload_str)
 
-                # Merge existing metadata with new metadata
+                # 合并 metadata
                 if "meta_data" in current_payload:
                     current_payload["meta_data"].update(metadata)
                 else:
@@ -541,29 +532,13 @@ class LanceDbWithProgress(LanceDb):
                 else:
                     current_payload["filters"] = metadata
 
-                # Update the document
-                update_data = {"id": row_id, "payload": json.dumps(current_payload, ensure_ascii=False)}
+                new_payload_str = json.dumps(current_payload, ensure_ascii=False)
 
-                # 关键修复：正确获取 vector 数据
-                vector_data = row["vector"] if "vector" in row else None
-                text_data = row["text"] if "text" in row else None
-
-                # Create complete update record
-                if vector_data is not None:
-                    # 确保向量是列表格式
-                    if hasattr(vector_data, 'tolist'):
-                        vector_data = vector_data.tolist()
-                    update_data["vector"] = vector_data
-                    logger.info(f"[update_metadata] 保留向量数据，维度: {len(vector_data)}")
-                else:
-                    logger.warning(f"[update_metadata] 警告：记录 {row_id} 没有向量数据！")
-
-                if text_data is not None:
-                    update_data["text"] = text_data
-
-                # Delete old record and insert updated one
-                self.table.delete(f"id = '{row_id}'")
-                self.table.add([update_data])
+                # LanceDB 原生 update：只改 payload 列，不碰 vector
+                self.table.update(
+                    where=f"id = '{row_id}'",
+                    values={"payload": new_payload_str}
+                )
                 updated_count += 1
                 logger.info(f"[update_metadata] 更新记录 {row_id}，新表版本: {self.table.version}")
 
