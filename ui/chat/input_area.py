@@ -193,7 +193,7 @@ class InputArea(QWidget):
             return False
 
         # 处理输入法事件（中文输入法候选词确认后触发）
-        if obj is self.text_edit and event.type() == QEvent.Type.InputMethodEvent:
+        if obj is self.text_edit and event.type() == QEvent.Type.InputMethod:
             # IME 输入完成后，文本已插入 QTextEdit，延迟检查斜杠触发
             result = super().eventFilter(obj, event)
             QTimer.singleShot(0, self._check_slash_trigger)
