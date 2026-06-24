@@ -234,12 +234,13 @@ class EnhancedMessageConsumer:
                         # 检查移除后是否有有意义的内容
                         should_pass_to_ai = False
                         if keyword_handler:
-                            cleaned_content = keyword_handler._remove_keyword_from_message(
+                            kh: Any = keyword_handler
+                            cleaned_content = kh._remove_keyword_from_message(
                                 original_content,
                                 keyword,
                                 match_type
                             )
-                            should_pass_to_ai = keyword_handler._has_meaningful_content(cleaned_content)
+                            should_pass_to_ai = kh._has_meaningful_content(cleaned_content)
                             
                             if should_pass_to_ai:
                                 self.logger.info(f"移除关键词后仍有有意义的内容，传递给AI: '{cleaned_content}'")
@@ -347,7 +348,7 @@ class EnhancedMessageConsumer:
                 if hasattr(handler, 'match_keyword') and callable(getattr(handler, 'match_keyword', None)):
                     # 这是关键词处理器
                     if context.type.name == "TEXT" and context.content:
-                        matched = handler.match_keyword(context.content)
+                        matched = getattr(handler, 'match_keyword')(context.content)
                         if matched:
                             self.logger.info(f"关键词预处理命中: {matched.get('keyword')}")
                             return matched
@@ -398,7 +399,7 @@ class EnhancedMessageConsumer:
             sender = SendMessage(str(shop_id), str(user_id))
             result = sender.send_text(str(from_uid), reply_text)
 
-            if hasattr(result, 'get') and result.get('success'):
+            if result is not None and hasattr(result, 'get') and result.get('success'):
                 self.logger.info(f"已发送关键词回复: {reply_text}")
                 # === 持久化关键词回复（接入点C） ===
                 try:

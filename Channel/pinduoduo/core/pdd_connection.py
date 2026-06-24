@@ -1,15 +1,31 @@
 # 连接管理模块
 import asyncio
+import threading
 import websockets
 from websockets import exceptions as ws_exceptions
-from typing import Optional, Any
+from typing import Optional, Any, TYPE_CHECKING
 from utils.logger_loguru import get_logger
+
+if TYPE_CHECKING:
+    from core.connection_status import ConnectionStatusManager
+    from Channel.pinduoduo.core.pdd_config import ReconnectConfig
 
 
 class ConnectionMixin:
     """连接管理 Mixin"""
 
+    # Attributes provided by PDDChannel host class
     base_url: str = "wss://m-ws.pinduoduo.com/"
+    logger: Any
+    status_manager: "ConnectionStatusManager"
+    reconnect_config: "ReconnectConfig"
+    _stop_event: Optional[asyncio.Event]
+    _threading_stop_event: threading.Event
+
+    # Methods provided by LifecycleMixin / MessageHandlerMixin
+    async def init(self, shop_id: str, user_id: str, username: str, on_success, on_failure) -> None: ...
+    async def _setup_message_consumer(self, queue_name: str) -> None: ...
+    async def _process_websocket_message(self, message: str, shop_id: str, user_id: str, username: str, queue_name: str) -> None: ...
 
     async def _connect_with_retry(self, shop_id: str, user_id: str, username: str, on_success, on_failure):
         """带重连机制的WebSocket连接"""

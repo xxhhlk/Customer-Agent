@@ -1,9 +1,20 @@
 # 状态查询模块
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.connection_status import ConnectionStatusManager
+    from Channel.pinduoduo.core.pdd_config import ReconnectConfig, HeartbeatConfig
 
 
 class StatusMixin:
     """状态查询 Mixin"""
+
+    # Attributes provided by PDDChannel host class
+    logger: Any
+    status_manager: "ConnectionStatusManager"
+    reconnect_config: "ReconnectConfig"
+    heartbeat_config: "HeartbeatConfig"
+    _heartbeat_tasks: Dict[str, Any]
 
     def get_connection_status(self) -> List:
         """获取所有连接状态"""
@@ -13,13 +24,13 @@ class StatusMixin:
         """获取当前连接数"""
         return self.status_manager.get_connected_count()
 
-    def get_connection_info(self, shop_id: str, user_id: str) -> Optional:
+    def get_connection_info(self, shop_id: str, user_id: str) -> Optional[Any]:
         """获取指定连接的状态信息"""
         return self.status_manager.get_status(shop_id, user_id)
 
-    def configure_reconnect(self, max_attempts: int = None, initial_delay: float = None,
-                          max_delay: float = None, backoff_factor: float = None,
-                          enable_auto_reconnect: bool = None) -> None:
+    def configure_reconnect(self, max_attempts: Optional[int] = None, initial_delay: Optional[float] = None,
+                          max_delay: Optional[float] = None, backoff_factor: Optional[float] = None,
+                          enable_auto_reconnect: Optional[bool] = None) -> None:
         """配置重连参数"""
         if max_attempts is not None:
             self.reconnect_config.max_attempts = max_attempts
@@ -36,8 +47,8 @@ class StatusMixin:
                         f"initial_delay={self.reconnect_config.initial_delay}, "
                         f"enable_auto_reconnect={self.reconnect_config.enable_auto_reconnect}")
 
-    def configure_heartbeat(self, enable_heartbeat: bool = None, heartbeat_interval: float = None,
-                           heartbeat_timeout: float = None, max_heartbeat_failures: int = None) -> None:
+    def configure_heartbeat(self, enable_heartbeat: Optional[bool] = None, heartbeat_interval: Optional[float] = None,
+                           heartbeat_timeout: Optional[float] = None, max_heartbeat_failures: Optional[int] = None) -> None:
         """配置心跳参数"""
         if enable_heartbeat is not None:
             self.heartbeat_config.enable_heartbeat = enable_heartbeat

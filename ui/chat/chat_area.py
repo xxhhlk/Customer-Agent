@@ -178,6 +178,8 @@ class ChatAreaPanel(QWidget):
         """清空消息气泡"""
         while self._msg_layout.count() > 1:  # 保留底部 stretch
             item = self._msg_layout.takeAt(0)
+            if item is None:
+                continue
             w = item.widget()
             if w is not None:
                 w.setParent(None)
@@ -212,7 +214,8 @@ class ChatAreaPanel(QWidget):
     def _scroll_to_bottom(self):
         """滚动到底部"""
         vbar = self.scroll_area.verticalScrollBar()
-        vbar.setValue(vbar.maximum())
+        if vbar is not None:
+            vbar.setValue(vbar.maximum())
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:

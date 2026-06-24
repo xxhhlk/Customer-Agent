@@ -3,7 +3,7 @@
 双栏布局：左侧会话列表 + 右侧聊天区域，顶部店铺筛选
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer, QThread
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSplitter, QComboBox,
     QSizePolicy, QWidget,
@@ -18,6 +18,29 @@ from utils.logger_loguru import get_logger
 logger = get_logger("ChatUI")
 
 
+class _DataLoader(QThread):
+    """后台线程加载聊天数据"""
+    result = pyqtSignal(list, list)  # shops, conversations
+
+    def __init__(self, shop_id: str | None, parent=None):
+        super().__init__(parent)
+        self._shop_id = shop_id
+
+    def run(self):
+        try:
+            from database.db_manager import get_db_manager
+            db = get_db_manager()
+            shops = db.get_all_shops()
+        except Exception:
+            shops = []
+        try:
+            from services.message_persistence import message_persistence_service
+            convs = message_persistence_service.get_conversations(shop_id=self._shop_id, limit=100)
+        except Exception:
+            convs = []
+        self.result.emit(shops, convs)
+
+
 class ChatUI(QFrame):
     """聊天记录页面"""
 
@@ -29,13 +52,10 @@ class ChatUI(QFrame):
         self._init_ui()
         self._apply_theme()
         # 延迟加载数据，放到事件队列末尾确保窗口先渲染
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(500, lambda: self._load_data(shop_id=None))
 
     def _load_data(self, shop_id: str | None):
         """在后台线程加载数据库数据，避免阻塞 UI"""
-        from PyQt6.QtCore import QThread
-
         # 取消旧 loader（防止多个 loader 同时运行导致竞态条件）
         if self._loader is not None:
             try:
@@ -46,24 +66,7 @@ class ChatUI(QFrame):
             self._loader.wait(500)
             self._loader = None
 
-        class DataLoader(QThread):
-            result = pyqtSignal(list, list)  # shops, conversations
-
-            def run(self):
-                try:
-                    from database.db_manager import get_db_manager
-                    db = get_db_manager()
-                    shops = db.get_all_shops()
-                except Exception:
-                    shops = []
-                try:
-                    from services.message_persistence import message_persistence_service
-                    convs = message_persistence_service.get_conversations(shop_id=shop_id, limit=100)
-                except Exception:
-                    convs = []
-                self.result.emit(shops, convs)
-
-        self._loader = DataLoader(self)
+        self._loader = _DataLoader(shop_id, self)
         self._loader.result.connect(self._on_data_loaded)
         self._loader.start()
 

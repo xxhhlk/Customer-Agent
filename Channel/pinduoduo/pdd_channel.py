@@ -72,13 +72,14 @@ class PDDChannel(ConnectionMixin, MessageHandlerMixin, LifecycleMixin, StatusMix
         if status_manager is None:
             from core.di_container import container
             status_manager = container.get(ConnectionStatusManager)
+        assert status_manager is not None
         self.status_manager = status_manager
 
         self._stop_event: Optional[asyncio.Event] = None
         self._threading_stop_event = threading.Event()  # 线程安全的停止事件
         self.loop: Optional[asyncio.AbstractEventLoop] = None  # 事件循环引用（由AutoReplyThread设置）
         self.base_url = "wss://m-ws.pinduoduo.com/"
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self.ws: Optional[Any] = None
         self.businessHours = config.get("businessHours")
 
         # WebSocket优化功能

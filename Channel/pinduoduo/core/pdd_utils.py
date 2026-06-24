@@ -1,10 +1,14 @@
 # 全局便捷函数模块
-from typing import Dict, List
+from typing import Dict, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.connection_status import ConnectionStatusManager
 
 
 def get_pdd_connection_status() -> List:
     """获取所有拼多多连接状态 - 全局便捷函数"""
     from core.di_container import container
+    from core.connection_status import ConnectionStatusManager
     sm = container.get(ConnectionStatusManager)
     return sm.get_all_status()
 
@@ -12,6 +16,7 @@ def get_pdd_connection_status() -> List:
 def get_pdd_connected_count() -> int:
     """获取当前拼多多连接数 - 全局便捷函数"""
     from core.di_container import container
+    from core.connection_status import ConnectionStatusManager
     sm = container.get(ConnectionStatusManager)
     return sm.get_connected_count()
 
@@ -19,6 +24,7 @@ def get_pdd_connected_count() -> int:
 def get_pdd_connection_summary() -> Dict[str, int]:
     """获取拼多多连接状态汇总 - 全局便捷函数"""
     from core.di_container import container
+    from core.connection_status import ConnectionStatusManager
     sm = container.get(ConnectionStatusManager)
     all_status = sm.get_all_status()
     summary = {
@@ -41,6 +47,7 @@ def get_pdd_heartbeat_status_all() -> Dict[str, Dict]:
     获取所有拼多多连接的状态信息 - 全局便捷函数
     """
     from core.di_container import container
+    from core.connection_status import ConnectionStatusManager
     sm = container.get(ConnectionStatusManager)
     heartbeat_status = {}
 

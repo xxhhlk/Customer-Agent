@@ -230,7 +230,7 @@ class AutoReplyCard(CardWidget):
 
             new_badge = self.createStatusBadge()
             if hasattr(layout, 'insertWidget'):
-                layout.insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)
+                layout.insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)  # type: ignore[attr-defined]
 
     def loadLogo(self):
         """异步加载Logo"""

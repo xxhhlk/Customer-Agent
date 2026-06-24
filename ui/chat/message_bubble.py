@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy, QTextEdit,
 )
-from PyQt6.QtGui import QFont, QTextOption
+from PyQt6.QtGui import QFont, QTextOption, QColor
 from qfluentwidgets import isDarkTheme, CaptionLabel, InfoBadge
 
 
@@ -67,11 +67,11 @@ class MessageBubble(QFrame):
         # 回复来源标签（仅出站）
         reply_source = self.msg_data.get("reply_source")
         if self.direction == "outbound" and reply_source:
-            source_label = self.REPLY_SOURCE_LABELS.get(reply_source, reply_source)
+            source_label = self.REPLY_SOURCE_LABELS.get(reply_source, reply_source) or ""
             badge = InfoBadge.custom(
                 source_label,
-                self.REPLY_SOURCE_COLORS.get(reply_source, "#888888"),
-                "#ffffff",
+                QColor(self.REPLY_SOURCE_COLORS.get(reply_source, "#888888")),
+                QColor("#ffffff"),
             )
             badge.setMaximumWidth(50)
             badge.setMaximumHeight(18)

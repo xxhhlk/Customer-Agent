@@ -2,14 +2,24 @@
 import json
 import asyncio
 from websockets import exceptions as ws_exceptions
+from typing import Optional, Any, TYPE_CHECKING
 from bridge.context import Context, ContextType, ChannelType
 from Channel.pinduoduo.pdd_message import PDDChatMessage
 from database import db_manager
 from utils.logger_loguru import get_logger
 
+if TYPE_CHECKING:
+    from core.connection_status import ConnectionStatusManager
+
 
 class MessageHandlerMixin:
     """消息处理 Mixin"""
+
+    # Attributes provided by PDDChannel host class
+    channel_name: str
+    logger: Any
+    status_manager: "ConnectionStatusManager"
+    businessHours: Optional[dict]
 
     async def _setup_message_consumer(self, queue_name: str):
         """设置消息消费者和处理器链"""

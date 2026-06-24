@@ -163,6 +163,8 @@ class ProductSyncService:
             filtered_products: List[Dict[str, Any]] = []
             for p in all_products:
                 goods_id = p.get("goods_id")
+                if goods_id is None:
+                    continue
                 existing = self.knowledge_service.get_product_by_goods_id(shop_db_id, goods_id)
                 if not existing:
                     filtered_products.append(p)
@@ -185,6 +187,8 @@ class ProductSyncService:
                 break
 
             goods_id = product.get("goods_id")
+            if goods_id is None:
+                continue
             goods_name = product.get("goods_name", f"goods_{goods_id}")
             progress.current = idx + 1
             progress.current_goods_name = goods_name
@@ -236,6 +240,8 @@ class ProductSyncService:
                 return
 
             goods_id = product.get("goods_id")
+            if goods_id is None:
+                return
             goods_name = product.get("goods_name", f"goods_{goods_id}")
 
             # 更新当前处理商品名称
@@ -396,7 +402,7 @@ class ProductSyncService:
                 temperature=0.3,
                 response_format={"type": "json_object"},
             )
-            content = response.choices[0].message.content.strip()
+            content = (response.choices[0].message.content or "").strip()
             logger.debug(f"LLM输出: {content}")
 
             # 尝试解析JSON

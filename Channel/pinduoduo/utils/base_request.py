@@ -45,8 +45,8 @@ class BaseRequest:
             retry_backoff: 重试退避倍数
         """
         self.logger = get_logger(self.__class__.__name__)
-        self.shop_id = shop_id
-        self.user_id = user_id
+        self.shop_id: str = shop_id or ""
+        self.user_id: str = user_id or ""
         self.channel_name = channel_name
         
         # 重试配置

@@ -319,8 +319,10 @@ class ConversationListPanel(QWidget):
         # 移除 stretch
         while self._card_layout.count():
             item = self._card_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
+            if item is not None:
+                w = item.widget()
+                if w is not None:
+                    w.setParent(None)
 
         # 创建新卡片
         for conv in convs:

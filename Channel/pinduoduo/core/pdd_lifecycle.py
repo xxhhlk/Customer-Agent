@@ -1,16 +1,49 @@
 # 生命周期管理模块
 import asyncio
 import time
+import threading
 import websockets
 from websockets import exceptions as ws_exceptions
-from typing import Optional, Any
+from typing import Optional, Any, Dict, Set, TYPE_CHECKING
 from utils.logger_loguru import get_logger
 from Channel.pinduoduo.utils.API.get_token import GetToken
 from config import config
 
+if TYPE_CHECKING:
+    from core.connection_status import ConnectionStatusManager
+    from Channel.pinduoduo.core.pdd_config import ReconnectConfig, HeartbeatConfig
+    from utils.resource_manager import WebSocketResourceManager
+
 
 class LifecycleMixin:
     """生命周期管理 Mixin"""
+
+    # Attributes provided by PDDChannel host class
+    channel_name: str
+    logger: Any
+    status_manager: "ConnectionStatusManager"
+    reconnect_config: "ReconnectConfig"
+    heartbeat_config: "HeartbeatConfig"
+    resource_manager: "WebSocketResourceManager"
+    _stop_event: Optional[asyncio.Event]
+    _threading_stop_event: threading.Event
+    _reconnect_tasks: Dict[str, asyncio.Task]
+    _heartbeat_tasks: Dict[str, asyncio.Task]
+    _health_tasks: Dict[str, asyncio.Task]
+    processing_tasks: Set[asyncio.Task[Any]]
+    message_semaphore: asyncio.Semaphore
+    loop: Optional[asyncio.AbstractEventLoop]
+    ws: Optional[Any]
+    API_VERSION: str
+    base_url: str
+
+    # Methods provided by ConnectionMixin / MessageHandlerMixin
+    async def _connect_with_retry(self, shop_id: str, user_id: str, username: str, on_success, on_failure) -> None: ...
+    async def _connect_single_attempt(self, shop_id: str, user_id: str, username: str, on_success, on_failure) -> None: ...
+    async def _safe_close_websocket(self, ws: Any) -> None: ...
+    async def _setup_message_consumer(self, queue_name: str) -> None: ...
+    def _is_ws_closed(self, ws: Any) -> bool: ...
+    async def _process_websocket_message(self, message: str, shop_id: str, user_id: str, username: str, queue_name: str) -> None: ...
 
     async def start_account(self, shop_id: str, user_id: str, on_success, on_failure):
         """启动指定店铺下账号"""
@@ -485,10 +518,10 @@ class LifecycleMixin:
                 self.processing_tasks.add(task)
                 task.add_done_callback(self.processing_tasks.discard)
 
-        except ws_exceptions.ConnectionClosed as cc:
-            self.logger.warning(f"WebSocket连接正常关闭: {shop_id}-{username}, 代码: {cc.code}")
         except ws_exceptions.ConnectionClosedError as cce:
             self.logger.error(f"WebSocket连接异常关闭: {shop_id}-{username}, 错误: {cce}")
+        except ws_exceptions.ConnectionClosed as cc:
+            self.logger.warning(f"WebSocket连接正常关闭: {shop_id}-{username}, 代码: {cc.code}")
         except Exception as e:
             self.logger.error(f"消息循环错误: {shop_id}-{username}, 错误: {str(e)}")
 
