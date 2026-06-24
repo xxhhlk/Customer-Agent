@@ -49,8 +49,8 @@ def is_md5_hash(s: str) -> bool:
 def _find_data_paths():
     """从 config.json 自动发现 vector_db_path 和 contents_db_path"""
     config_path = project_root / "config.json"
-    default_vector_db = project_root / "temp" / "vector_db"
-    default_contents_db = project_root / "temp" / "contents.db"
+    default_vector_db = project_root / "data" / "vector_db"
+    default_contents_db = project_root / "data" / "contents.db"
 
     vector_db_path = default_vector_db
     contents_db_path = default_contents_db
