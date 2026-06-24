@@ -1,6 +1,7 @@
 from agno.vectordb.lancedb import LanceDb, SearchType
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.openai import OpenAIEmbedder
+from agno.knowledge.document import Document
 from agno.models.openai import OpenAILike
 from agno.knowledge.knowledge import Knowledge
 from typing import Optional
@@ -69,8 +70,12 @@ class KnowledgeManager:
     def __init__(self):
         import os
         import sys
+        import threading
         from pathlib import Path
-        
+
+        # 写操作锁，保护 insert/delete/update 的并发安全
+        self._write_lock = threading.Lock()
+
         print(f"[DEBUG] 开始初始化 KnowledgeManager")
         print(f"[DEBUG] 脚本位置: {__file__}")
         print(f"[DEBUG] 当前目录: {os.getcwd()}")
@@ -371,10 +376,10 @@ class KnowledgeManager:
 
     def delete_document(self, doc_id: str) -> bool:
         """
-        删除指定文档（同时删除向量和元数据）
+        删除指定文档（通过 LanceDB id 列精确删除）
 
         Args:
-            doc_id: 文档ID（content hash）
+            doc_id: 文档ID（LanceDB id 列的值）
 
         Returns:
             是否删除成功
@@ -386,24 +391,17 @@ class KnowledgeManager:
 
             logger.info(f"正在删除文档: {doc_id}")
 
-            # 1. 使用框架方法删除内容数据库记录
-            self.knowledge.remove_content_by_id(doc_id)
+            with self._write_lock:
+                # 1. 通过 LanceDB id 列精确删除（不使用 remove_content_by_id，
+                #    因为它基于 payload.content_id 匹配，可能误删同 content_id 的多条记录）
+                self._delete_vector_by_lancedb_id(doc_id)
 
-            # 2. 额外确保从向量数据库删除（防止残留）
-            try:
-                import lancedb
-                if self.knowledge.vector_db is not None:
-                    db = lancedb.connect(self.knowledge.vector_db.uri)
-                    table = db.open_table("customer_knowledge")
-                    
-                    # LanceDB 使用 id 列来删除
-                    table.delete(f"id == '{doc_id}'")
-                    logger.info(f"从向量数据库删除文档: {doc_id}")
-                else:
-                    logger.warning("向量数据库未初始化，跳过删除")
-                
-            except Exception as e:
-                logger.warning(f"从向量数据库删除失败（可能已不存在）: {e}")
+                # 2. 从 contents_db 删除（agno 的 SqliteDb）
+                try:
+                    if self.knowledge.contents_db:
+                        self.knowledge.contents_db.delete_knowledge_content(doc_id)
+                except Exception as e:
+                    logger.warning(f"从 contents_db 删除失败（可能不存在）: {e}")
 
             logger.info(f"成功删除文档: {doc_id}")
             return True
@@ -411,6 +409,45 @@ class KnowledgeManager:
         except Exception as e:
             logger.error(f"删除文档失败 {doc_id}: {str(e)}")
             return False
+
+    def _delete_vector_by_lancedb_id(self, doc_id: str) -> bool:
+        """
+        通过 LanceDB id 列精确删除一条记录（不依赖 payload.content_id 匹配）
+
+        Args:
+            doc_id: LanceDB id 列的值
+
+        Returns:
+            是否删除成功
+        """
+        try:
+            if not self.knowledge.vector_db:
+                logger.warning("向量数据库未初始化")
+                return False
+
+            table = self.knowledge.vector_db.table
+            if table is None:
+                # 重新打开表
+                import lancedb
+                db = lancedb.connect(self.knowledge.vector_db.uri)
+                table = db.open_table(self.knowledge.vector_db.table_name)
+
+            # 通过 id 列精确删除（LanceDB 原生语法）
+            id_col = getattr(self.knowledge.vector_db, '_id', 'id')
+            table.delete(f"{id_col} = '{doc_id}'")
+            logger.info(f"通过 LanceDB id 列删除文档: {doc_id}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"通过 LanceDB id 删除失败: {e}")
+            return False
+
+    @staticmethod
+    def _build_content_hash_simple(content: str) -> str:
+        """计算内容的 SHA256 hash，与 agno 框架的 _build_content_hash 格式一致"""
+        import hashlib
+        content_bytes = content.encode("utf-8")
+        return hashlib.sha256(content_bytes).hexdigest()
 
     async def add_text_content(self, title: str, content: str) -> bool:
         """
@@ -449,45 +486,72 @@ class KnowledgeManager:
             return False
 
     
-    async def update_document_content(self, doc_id: str, title: str, content: str) -> bool:
+    async def update_document_content(self, doc_id: str, title: str, content: str) -> Optional[str]:
         """
-        异步更新文档内容（删除旧的，添加新的）
+        异步更新文档内容（精确删除旧记录 + 插入新记录）
 
         Args:
-            doc_id: 文档ID
+            doc_id: 旧文档的 LanceDB id（UUID 或旧版 md5 hash）
             title: 新标题
             content: 新内容
 
         Returns:
-            是否更新成功
+            新文档的 UUID，失败返回 None
         """
+        import uuid as uuid_lib
+
         try:
             if not doc_id or not title or not content:
                 logger.warning("文档ID、标题或内容为空，无法更新")
-                return False
+                return None
 
             logger.info(f"正在更新文档: {doc_id}")
 
-            # 1. 删除旧文档
-            self.knowledge.remove_content_by_id(doc_id)
+            # 生成新 UUID
+            new_doc_id = str(uuid_lib.uuid4())
 
-            # 2. 添加新内容（直接存储原始内容，不添加格式前缀）
-            await self.knowledge.add_content_async(
-                text_content=content,
-                metadata={
-                    'title': title,
-                    'source': 'manual_edit',
-                    'filename': f"{title}.txt"
-                },
-                skip_if_exists=False
-            )
+            # 计算 content_hash（agno 框架需要此字段）
+            content_hash = self._build_content_hash_simple(content)
 
-            logger.info(f"成功更新文档: {title}")
-            return True
+            with self._write_lock:
+                # 1. 精确删除旧文档 — 通过 LanceDB id 列删除，不依赖 content_id 匹配
+                self._delete_vector_by_lancedb_id(doc_id)
+
+                # 同时从 contents_db 删除（agno 的 SqliteDb）
+                try:
+                    if self.knowledge.contents_db:
+                        self.knowledge.contents_db.delete_knowledge_content(doc_id)
+                except Exception as e:
+                    logger.warning(f"从 contents_db 删除失败（可能不存在）: {e}")
+
+                # 2. 构造 Document 并直接插入向量数据库
+                #    绕过 agno 的 add_content_async，因为我们需要用自定义 UUID 作为 LanceDB id
+                doc = Document(
+                    content=content,
+                    id=new_doc_id,
+                    name=title,
+                    meta_data={
+                        'title': title,
+                        'source': 'manual_edit',
+                        'filename': f"{title}.txt"
+                    }
+                )
+                # 设置 content_id（用于 payload 中的字段，agno 搜索时用）
+                doc.content_id = new_doc_id
+
+                # 调用 vector_db.insert 插入（会触发我们重写的 insert 方法）
+                self.knowledge.vector_db.insert(
+                    content_hash=content_hash,
+                    documents=[doc],
+                    filters=None
+                )
+
+            logger.info(f"成功更新文档: {title}, 新 ID: {new_doc_id}")
+            return new_doc_id
 
         except Exception as e:
             logger.error(f"更新文档失败 {doc_id}: {str(e)}")
-            return False
+            return None
 
     def modify_document(self, doc_id: str, file_path: str) -> bool:
         """修改指定文档的内容（通过文件）"""

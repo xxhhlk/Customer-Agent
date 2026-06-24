@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import uuid
 from enum import Enum
 from typing import Callable, Optional, List, Any, Dict, Protocol, TYPE_CHECKING, cast
 from loguru import logger
@@ -139,12 +140,6 @@ class LanceDbWithProgress(LanceDb):
                 logger.info(f"插入已取消，已完成 {processed_count}/{len(documents)} 个文档")
                 break
 
-            # 检查文档是否已存在
-            doc_exists_method = getattr(self, 'doc_exists', None)
-            if doc_exists_method and doc_exists_method(document):
-                logger.debug(f"文档已存在，跳过: {document.name}")
-                continue
-
             # 添加 filters 到元数据
             if filters:
                 meta_data = document.meta_data.copy() if document.meta_data else {}
@@ -193,28 +188,17 @@ class LanceDbWithProgress(LanceDb):
                 logger.debug(f"文档 {i} 嵌入前: embedding={doc.embedding is not None}, content={doc.content[:50] if doc.content else 'None'}")
             
             # 构建数据列表
-            from hashlib import md5
             import json
-            
+
             logger.info(f"开始处理文档，当前表版本: {self.table.version}")
-            
+
             data = []
             for document in documents:
-                # 计算文档 ID
+                # 计算文档 ID — 优先使用 document.id（由 update_document_content 预先设置的 UUID）
+                # 否则生成新 UUID（与内容解耦，避免 md5 碰撞导致误删）
                 cleaned_content = document.content.replace("\x00", "\ufffd")
-                doc_id = str(md5(cleaned_content.encode()).hexdigest())
-                
-                # 检查文档是否已存在，如果存在则删除
-                doc_exists_method = getattr(self, 'doc_exists', None)
-                if doc_exists_method and doc_exists_method(document):
-                    logger.info(f"文档已存在，删除旧记录: {document.name} (ID: {doc_id})")
-                    try:
-                        if self.table:
-                            self.table.delete(f"id == '{doc_id}'")
-                            logger.info(f"成功删除旧记录: {doc_id}, 新版本: {self.table.version}")
-                    except Exception as e:
-                        logger.warning(f"删除旧记录失败: {e}")
-                
+                doc_id = document.id if document.id else str(uuid.uuid4())
+
                 # 添加 filters 到元数据
                 if filters:
                     meta_data = document.meta_data.copy() if document.meta_data else {}
@@ -353,12 +337,6 @@ class LanceDbWithProgress(LanceDb):
             if self.cancel_token and self.cancel_token.is_cancelled:
                 logger.info(f"插入已取消，已完成 {processed_count}/{len(documents)} 个文档")
                 break
-
-            # 检查文档是否已存在
-            doc_exists_method = getattr(self, 'doc_exists', None)
-            if doc_exists_method and doc_exists_method(document):
-                logger.debug(f"文档已存在，跳过: {document.name}")
-                continue
 
             # 添加 filters 到元数据
             if filters:

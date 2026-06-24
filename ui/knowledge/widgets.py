@@ -40,7 +40,6 @@ class SaveDocumentWorker(QThread):
     def run(self):
         """在子线程中执行保存操作"""
         import asyncio
-        import hashlib
 
         try:
             if not self.knowledge_manager:
@@ -51,15 +50,13 @@ class SaveDocumentWorker(QThread):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            # 执行更新
-            success = loop.run_until_complete(
+            # 执行更新，返回新 UUID
+            new_doc_id = loop.run_until_complete(
                 self.knowledge_manager.update_document_content(self.doc_id, self.title, self.content)
             )
             loop.close()
 
-            if success:
-                # 计算新的文档ID（基于内容hash）
-                new_doc_id = hashlib.md5(self.content.encode()).hexdigest()
+            if new_doc_id:
                 self.success.emit(new_doc_id, self.title, self.content)
             else:
                 self.failed.emit("保存文档失败")
@@ -973,32 +970,57 @@ class KnowledgeDetailFlyout(FlyoutViewBase):
         self._save_worker.failed.connect(self._on_save_failed)
         self._save_worker.start()
 
-    def _on_save_success(self, doc_id: str, title: str, content: str) -> None:
+    def _on_save_success(self, new_doc_id: str, title: str, content: str) -> None:
         """保存成功回调（在主线程中执行）"""
-        # 更新本地数据（包括新的文档ID）
-        self._doc_id = doc_id
+        # 1. 更新弹窗本地数据
+        self._doc_id = new_doc_id
         self._title = title
         self._doc_content = content
         self._content_markdown = f"# {title}\n\n{content}"
 
-        # 刷新显示
+        # 2. 刷新弹窗显示
         self._title_label.setText(title)
         # 使用 <pre> 标签保留原始格式，不进行 Markdown 转换
         escaped_content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         self._text_edit.setHtml(f"<h1>{title}</h1><hr><pre style='white-space: pre-wrap; font-family: inherit;'>{escaped_content}</pre>")
 
-        # 更新向量信息
+        # 3. 更新向量信息
         self._update_vector_info()
 
-        # 退出编辑模式
+        # 4. 退出编辑模式
         self._cancel_edit()
 
-        # 刷新卡片显示
+        # 5. 正确更新卡片的 SimpleDocument 对象
         if self._card and hasattr(self._card, 'doc'):
-            self._card.doc.title = title
+            self._card.doc.id = new_doc_id               # 更新 ID（新 UUID）
             self._card.doc.content = content
+            self._card.doc.data = content
+            self._card.doc.description = content[:100] + "..." if len(content) > 100 else content
+            # 更新 metadata 中的 title（DocumentTitleExtractor 从这里提取标题）
+            if self._card.doc.metadata is None:
+                self._card.doc.metadata = {}
+            self._card.doc.metadata['title'] = title
+            self._card.doc.metadata['filename'] = f"{title}.txt"
+
+        # 6. 通知 KnowledgeUI 刷新数据（关键修复：同步 docs 和 _cached_docs）
+        knowledge_ui = None
+        if self._card and hasattr(self._card, '_knowledge_ui'):
+            knowledge_ui = self._card._knowledge_ui
+        elif self._card:
+            # 向上查找 KnowledgeUI
+            parent = self._card.parent()
+            while parent and not hasattr(parent, 'refresh_data'):
+                parent = parent.parent()
+            knowledge_ui = parent
+
+        if knowledge_ui and hasattr(knowledge_ui, 'refresh_data'):
+            # 全量刷新（最可靠，确保数据一致性）
+            knowledge_ui.refresh_data(force_reload=True)
 
         self._show_message('success', "成功", "文档已更新")
+
+        # 7. 关闭 Flyout 弹窗（保存后自动关闭）
+        self._close_flyout()
 
     def _on_save_failed(self, error: str) -> None:
         """保存失败回调（在主线程中执行）"""
