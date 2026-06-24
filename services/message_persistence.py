@@ -116,7 +116,16 @@ class MessagePersistenceService:
                 # 兜底：如果 buyer_uid 为空，用 from_uid
                 buyer_uid = from_uid
 
-            nickname = str(kwargs.nickname) if kwargs.nickname else from_user
+            nickname = str(kwargs.nickname) if kwargs.nickname else ""
+            # 对于客服消息 (outbound)，nickname 通常为空，从数据库查找该会话的买家昵称
+            if not nickname:
+                if direction == "outbound":
+                    # 客服消息：查找同一会话买家消息的昵称
+                    buyer_nick = self._get_buyer_nickname(shop_id, buyer_uid)
+                    nickname = buyer_nick or "客服"
+                else:
+                    # 买家消息：也没有昵称时用 from_uid 兜底
+                    nickname = from_uid
             content = str(context.content) if context.content else ""
             msg_type = str(kwargs.msg_type) if hasattr(kwargs, 'msg_type') and kwargs.msg_type else None
             context_type_str = str(context.type.value) if hasattr(context.type, 'value') else str(context.type)
@@ -175,6 +184,28 @@ class MessagePersistenceService:
 
         except Exception as e:
             logger.warning(f"save_inbound_message 异常: {e}")
+            return None
+
+    def _get_buyer_nickname(self, shop_id: str, buyer_uid: str) -> Optional[str]:
+        """从数据库查找该会话买家消息的昵称（最近一条买家消息）"""
+        try:
+            db_manager = get_db_manager()
+            session: Session = db_manager.Session()
+            try:
+                from sqlalchemy import text
+                sql = text("""
+                    SELECT nickname FROM chat_message_records
+                    WHERE shop_id = :shop_id AND buyer_uid = :buyer_uid
+                      AND direction = 'inbound' AND nickname IS NOT NULL AND nickname != ''
+                      AND nickname != 'user' AND nickname != 'mall_cs'
+                    ORDER BY timestamp DESC LIMIT 1
+                """)
+                row = session.execute(sql, {"shop_id": shop_id, "buyer_uid": buyer_uid}).fetchone()
+                return row.nickname if row else None
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"_get_buyer_nickname 异常: {e}")
             return None
 
     def save_outbound_message(
@@ -275,19 +306,35 @@ class MessagePersistenceService:
             from sqlalchemy import text
 
             sql = text("""
+                WITH buyer_nicks AS (
+                    SELECT shop_id, buyer_uid, nickname
+                    FROM (
+                        SELECT shop_id, buyer_uid, nickname,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY shop_id, buyer_uid ORDER BY timestamp DESC
+                               ) AS rn
+                        FROM chat_message_records
+                        WHERE direction = 'inbound'
+                          AND nickname IS NOT NULL AND nickname != ''
+                          AND nickname != 'user' AND nickname != 'mall_cs'
+                    ) sub
+                    WHERE rn = 1
+                )
                 SELECT * FROM (
                     SELECT
-                        shop_id, buyer_uid, shop_name, nickname, content,
-                        direction, timestamp,
+                        c.shop_id, c.buyer_uid, c.shop_name, c.nickname, c.content,
+                        c.direction, c.timestamp,
                         ROW_NUMBER() OVER (
-                            PARTITION BY shop_id, buyer_uid ORDER BY timestamp DESC
+                            PARTITION BY c.shop_id, c.buyer_uid ORDER BY c.timestamp DESC
                         ) AS rn,
                         COUNT(*) OVER (
-                            PARTITION BY shop_id, buyer_uid
-                        ) AS msg_count
-                    FROM chat_message_records
-                    WHERE (:shop_id IS NULL OR shop_id = :shop_id)
-                ) sub
+                            PARTITION BY c.shop_id, c.buyer_uid
+                        ) AS msg_count,
+                        bn.nickname AS buyer_nickname
+                    FROM chat_message_records c
+                    LEFT JOIN buyer_nicks bn ON bn.shop_id = c.shop_id AND bn.buyer_uid = c.buyer_uid
+                    WHERE (:shop_id IS NULL OR c.shop_id = :shop_id)
+                ) sub2
                 WHERE rn = 1
                 ORDER BY timestamp DESC
                 LIMIT :limit
@@ -309,7 +356,7 @@ class MessagePersistenceService:
                     "shop_id": row.shop_id,
                     "shop_name": row.shop_name or row.shop_id,
                     "buyer_uid": row.buyer_uid,
-                    "nickname": row.nickname or row.buyer_uid,
+                    "nickname": row.buyer_nickname or row.nickname or row.buyer_uid,
                     "last_content": row.content or "",
                     "last_time": last_time,
                     "last_direction": row.direction,

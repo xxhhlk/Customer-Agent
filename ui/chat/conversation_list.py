@@ -285,6 +285,12 @@ class ConversationListPanel(QWidget):
             # 更新预览内容
             preview = content[:28] + "..." if len(content) > 30 else content or ""
             existing_card._preview_label.setText(preview)
+            # 只在昵称有效且当前昵称不正确时更新
+            # 跳过 "mall_cs"/"user" 等角色名，它们不是真正的昵称
+            if nickname and nickname not in ("mall_cs", "user", "客服", "AI客服"):
+                current_name = existing_card._name_label.text()
+                if not current_name or current_name in ("mall_cs", "user", "?"):
+                    existing_card._name_label.setText(nickname)
             if timestamp:
                 try:
                     from datetime import datetime
