@@ -3,7 +3,7 @@ import traceback
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
-from PyQt6.QtGui import QFont, QIcon, QPixmap
+from PyQt6.QtGui import QColor, QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
@@ -228,33 +228,22 @@ class MainWindow(FluentWindow):
             # 设置标题文字颜色
             if isDarkTheme():
                 title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
-                
-                # 设置标题栏按钮样式，确保在深色模式下图标清晰可见
-                self.titleBar.setStyleSheet("""
-                    QWidget {
-                        background-color: transparent;
-                    }
-                    QPushButton {
-                        color: white;
-                        background-color: transparent;
-                        border: none;
-                        border-radius: 0px;
-                        padding: 0px;
-                        margin: 0px;
-                        min-width: 46px;
-                        min-height: 32px;
-                    }
-                    QPushButton:hover {
-                        background-color: rgba(255, 255, 255, 0.1);
-                    }
-                    QPushButton:pressed {
-                        background-color: rgba(255, 255, 255, 0.05);
-                    }
-                """)
+
+                # 直接设置按钮图标颜色，不覆盖 titleBar 的 QSS（避免破坏框架管理的样式）
+                for btn_name in ['minBtn', 'maxBtn', 'closeBtn']:
+                    btn = getattr(self.titleBar, btn_name, None)
+                    if btn is not None:
+                        btn.setNormalColor(QColor(255, 255, 255))
+                        btn.setHoverColor(QColor(255, 255, 255))
+                        btn.setPressedColor(QColor(255, 255, 255))
             else:
                 title_label.setStyleSheet("color: black; font-size: 14px; font-weight: bold;")
-                # 浅色模式使用默认样式
-                self.titleBar.setStyleSheet("")
+                for btn_name in ['minBtn', 'maxBtn', 'closeBtn']:
+                    btn = getattr(self.titleBar, btn_name, None)
+                    if btn is not None:
+                        btn.setNormalColor(QColor(0, 0, 0))
+                        btn.setHoverColor(QColor(0, 0, 0))
+                        btn.setPressedColor(QColor(0, 0, 0))
         except Exception as e:
             self.logger.warning(f"设置标题栏颜色失败: {e}")
         finally:
