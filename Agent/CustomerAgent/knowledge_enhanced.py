@@ -442,6 +442,39 @@ class LanceDbWithProgress(LanceDb):
         # 直接调用我们的 async_insert 方法
         await self.async_insert(content_hash, documents, filters)
 
+    def _build_search_results(self, results: List[Dict[str, Any]]) -> List[Document]:
+        """
+        重写 _build_search_results — 修复 Agno 不设置 Document.id 的问题
+
+        Agno 原生 _build_search_results 构造 Document 时不含 id 属性，
+        导致上层通过搜索 API 加载文档时 doc.id 为空，
+        删除/更新操作传空字符串到 LanceDB delete("id = ''") 匹配不到记录。
+
+        修复：将 LanceDB id 列的值赋给 Document.id。
+        """
+        import json as _json
+
+        search_results: List[Document] = []
+        try:
+            for item in results:
+                payload = _json.loads(item["payload"])
+                doc = Document(
+                    name=payload["name"],
+                    meta_data=payload["meta_data"],
+                    content=payload["content"],
+                    embedder=self.embedder,
+                    embedding=item["vector"],
+                    usage=payload["usage"],
+                    content_id=payload.get("content_id"),
+                )
+                # 关键修复：设置 id 为 LanceDB id 列的实际值
+                doc.id = item.get("id", "")
+                search_results.append(doc)
+        except Exception:
+            logger.exception("Error building search results")
+
+        return search_results
+
     def update_metadata(self, content_id: str, metadata: Dict[str, Any]) -> None:
         """
         重写 update_metadata 方法 - 修复向量丢失问题
