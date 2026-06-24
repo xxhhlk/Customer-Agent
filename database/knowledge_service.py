@@ -349,6 +349,80 @@ class KnowledgeService:
             # 去重
             return sorted(list(set(tags_list)))
 
+    # ========== 快捷检索 ==========
+
+    def search_customer_service_quick(
+        self,
+        shop_id: int,
+        query: str = "",
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """快速检索客服知识（用于斜杠快捷检索）
+
+        Args:
+            shop_id: 店铺原始ID（如 591119888）
+            query: 搜索关键词，为空则返回最新条目
+            limit: 返回数量上限
+
+        Returns:
+            [{"title": str, "content": str}, ...]
+        """
+        db_shop_id = self._resolve_shop_id(shop_id)
+        results: List[Dict[str, Any]] = []
+
+        with self.get_session() as session:
+            conditions = [
+                CustomerServiceKnowledge.shop_id == db_shop_id,
+                CustomerServiceKnowledge.enabled == True,  # noqa: E712
+            ]
+
+            if query and query.strip():
+                # 使用 jieba 分词 + LIKE 搜索
+                words = jieba.cut_for_search(query.strip())
+                cs_conditions = list(conditions)
+                word_added = False
+                for word in words:
+                    w = word.strip()
+                    if len(w) >= 1:
+                        cs_conditions.append(
+                            or_(
+                                CustomerServiceKnowledge.title.contains(w),
+                                CustomerServiceKnowledge.content.contains(w),
+                            )
+                        )
+                        word_added = True
+
+                if not word_added:
+                    # 分词后没有有效词，用原始 query 做 LIKE
+                    cs_conditions.append(
+                        or_(
+                            CustomerServiceKnowledge.title.contains(query.strip()),
+                            CustomerServiceKnowledge.content.contains(query.strip()),
+                        )
+                    )
+
+                stmt = (
+                    select(CustomerServiceKnowledge)
+                    .where(and_(*cs_conditions))
+                    .order_by(CustomerServiceKnowledge.created_at.desc())
+                    .limit(limit)
+                )
+            else:
+                stmt = (
+                    select(CustomerServiceKnowledge)
+                    .where(and_(*conditions))
+                    .order_by(CustomerServiceKnowledge.created_at.desc())
+                    .limit(limit)
+                )
+
+            for cs in session.scalars(stmt):
+                results.append({
+                    "title": cs.title,
+                    "content": cs.content,
+                })
+
+        return results
+
     # ========== 检索 ==========
 
     def _resolve_shop_id(self, shop_id: int) -> int:
