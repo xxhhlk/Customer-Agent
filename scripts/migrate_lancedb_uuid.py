@@ -47,14 +47,26 @@ def is_md5_hash(s: str) -> bool:
 
 
 def _find_data_paths():
-    """从 config.json 自动发现 vector_db_path 和 contents_db_path"""
+    """从 config.json 自动发现 vector_db_path 和 contents_db_path。
+
+    策略：
+    1. 收集所有候选路径（config 配置 + data/ + temp/）
+    2. 对每个候选路径，检查 customer_knowledge 表是否有数据
+    3. 选择有数据的那个；都没有数据时优先 data/
+    """
+    import lancedb as _lancedb
+
     config_path = project_root / "config.json"
-    default_vector_db = project_root / "data" / "vector_db"
-    default_contents_db = project_root / "data" / "contents.db"
+    candidates_vector = [
+        project_root / "data" / "vector_db",
+        project_root / "temp" / "vector_db",
+    ]
+    candidates_contents = [
+        project_root / "data" / "contents.db",
+        project_root / "temp" / "contents.db",
+    ]
 
-    vector_db_path = default_vector_db
-    contents_db_path = default_contents_db
-
+    # 从 config.json 读取路径，插入候选列表最前面
     if config_path.exists():
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -63,32 +75,75 @@ def _find_data_paths():
             cfg_vector = kb_config.get("vector_db_path", "")
             cfg_contents = kb_config.get("contents_db_path", "")
 
-            # 处理配置中的路径（可能是绝对路径指向旧位置，转为相对路径兜底）
             if cfg_vector:
                 p = Path(cfg_vector)
-                if p.is_absolute():
-                    # 尝试使用配置的绝对路径，如果不存在则回退到默认
-                    if p.exists():
-                        vector_db_path = p
-                    else:
-                        # 取最后两级目录名（如 temp/vector_db）拼接项目根
-                        rel = Path(*p.parts[-2:]) if len(p.parts) >= 2 else p.name
-                        vector_db_path = project_root / rel
-                else:
-                    vector_db_path = project_root / p
+                if not p.is_absolute():
+                    p = project_root / p
+                candidates_vector.insert(0, p)
 
             if cfg_contents:
                 p = Path(cfg_contents)
-                if p.is_absolute():
-                    if p.exists():
-                        contents_db_path = p
-                    else:
-                        rel = Path(*p.parts[-2:]) if len(p.parts) >= 2 else p.name
-                        contents_db_path = project_root / rel
-                else:
-                    contents_db_path = project_root / p
+                if not p.is_absolute():
+                    p = project_root / p
+                candidates_contents.insert(0, p)
         except (json.JSONDecodeError, KeyError):
             pass
+
+    # 去重
+    seen = set()
+    unique_vector = []
+    for c in candidates_vector:
+        key = str(c.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique_vector.append(c)
+    candidates_vector = unique_vector
+
+    seen = set()
+    unique_contents = []
+    for c in candidates_contents:
+        key = str(c.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique_contents.append(c)
+    candidates_contents = unique_contents
+
+    # 选择有数据的 vector_db 路径
+    vector_db_path = candidates_vector[0]  # 默认取第一个
+    for cand in candidates_vector:
+        if not cand.exists():
+            continue
+        try:
+            db = _lancedb.connect(str(cand))
+            resp = db.list_tables()
+            table_names = resp.tables if hasattr(resp, "tables") else resp
+            if "customer_knowledge" in table_names:
+                table = db.open_table("customer_knowledge")
+                if table.count_rows() > 0:
+                    vector_db_path = cand
+                    print(f"[INFO] 在 {cand} 中找到 {table.count_rows()} 条向量数据")
+                    break
+        except Exception:
+            continue
+
+    # 选择有数据的 contents.db 路径
+    contents_db_path = candidates_contents[0]
+    for cand in candidates_contents:
+        if not cand.exists() or not cand.is_file():
+            continue
+        try:
+            import sqlite3 as _sqlite3
+            conn = _sqlite3.connect(str(cand))
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM agno_knowledge")
+            count = cursor.fetchone()[0]
+            conn.close()
+            if count > 0:
+                contents_db_path = cand
+                print(f"[INFO] 在 {cand} 中找到 {count} 条元数据")
+                break
+        except Exception:
+            continue
 
     return vector_db_path, contents_db_path
 
