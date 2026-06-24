@@ -211,6 +211,26 @@ class SlashKnowledgePopup(QListWidget):
         self._debounce_timer.timeout.connect(self._do_search)
         self._pending_query: str = ""
 
+    def keyPressEvent(self, event):
+        """处理键盘事件（Popup 窗口会抢焦点，eventFilter 收不到）"""
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.hide()
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.confirm_selection()
+            return
+        if key == Qt.Key.Key_Up:
+            self.select_prev()
+            return
+        if key == Qt.Key.Key_Down:
+            self.select_next()
+            return
+        if key == Qt.Key.Key_Tab:
+            self.confirm_selection()
+            return
+        super().keyPressEvent(event)
+
     def hideEvent(self, event):
         """浮窗关闭时通知 InputArea"""
         super().hideEvent(event)
