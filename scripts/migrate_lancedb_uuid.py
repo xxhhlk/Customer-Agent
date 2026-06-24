@@ -47,26 +47,28 @@ def is_md5_hash(s: str) -> bool:
 
 
 def _find_data_paths():
-    """从 config.json 自动发现 vector_db_path 和 contents_db_path。
+    """自动发现 vector_db_path 和 contents_db_path。
+
+    核心原则：vector_db 和 contents.db 必须在同一个父目录下配对使用，
+    不能各自独立选择，否则会导致路径不一致。
 
     策略：
-    1. 收集所有候选路径（config 配置 + data/ + temp/）
-    2. 对每个候选路径，检查 customer_knowledge 表是否有数据
-    3. 选择有数据的那个；都没有数据时优先 data/
+    1. 收集所有候选父目录（data/、temp/、config 配置路径的父目录）
+    2. 对每个候选目录，检查 vector_db/customer_knowledge 表是否有数据
+    3. 选择第一个 vector_db 有数据的目录；都没有数据时优先 data/
     """
     import lancedb as _lancedb
+    import sqlite3 as _sqlite3
 
     config_path = project_root / "config.json"
-    candidates_vector = [
-        project_root / "data" / "vector_db",
-        project_root / "temp" / "vector_db",
-    ]
-    candidates_contents = [
-        project_root / "data" / "contents.db",
-        project_root / "temp" / "contents.db",
+
+    # 候选父目录列表（优先级从高到低）
+    candidate_dirs = [
+        project_root / "data",
+        project_root / "temp",
     ]
 
-    # 从 config.json 读取路径，插入候选列表最前面
+    # 从 config.json 读取路径，提取其父目录加入候选
     if config_path.exists():
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -75,75 +77,67 @@ def _find_data_paths():
             cfg_vector = kb_config.get("vector_db_path", "")
             cfg_contents = kb_config.get("contents_db_path", "")
 
-            if cfg_vector:
-                p = Path(cfg_vector)
+            for cfg_path in [cfg_vector, cfg_contents]:
+                if not cfg_path:
+                    continue
+                p = Path(cfg_path)
                 if not p.is_absolute():
                     p = project_root / p
-                candidates_vector.insert(0, p)
-
-            if cfg_contents:
-                p = Path(cfg_contents)
-                if not p.is_absolute():
-                    p = project_root / p
-                candidates_contents.insert(0, p)
+                # vector_db_path 的父目录就是数据目录
+                # contents_db_path 的父目录就是数据目录
+                parent_dir = p.parent if p.name == "contents.db" else p.parent
+                # vector_db_path 本身可能是目录（如 .../vector_db），取其父目录
+                if p.name == "vector_db" or p.name.endswith("vector_db"):
+                    parent_dir = p.parent
+                if parent_dir not in candidate_dirs:
+                    candidate_dirs.insert(0, parent_dir)
         except (json.JSONDecodeError, KeyError):
             pass
 
     # 去重
     seen = set()
-    unique_vector = []
-    for c in candidates_vector:
-        key = str(c.resolve())
+    unique_dirs = []
+    for d in candidate_dirs:
+        key = str(d.resolve())
         if key not in seen:
             seen.add(key)
-            unique_vector.append(c)
-    candidates_vector = unique_vector
+            unique_dirs.append(d)
 
-    seen = set()
-    unique_contents = []
-    for c in candidates_contents:
-        key = str(c.resolve())
-        if key not in seen:
-            seen.add(key)
-            unique_contents.append(c)
-    candidates_contents = unique_contents
-
-    # 选择有数据的 vector_db 路径
-    vector_db_path = candidates_vector[0]  # 默认取第一个
-    for cand in candidates_vector:
-        if not cand.exists():
+    # 逐个检查候选目录，找到 vector_db 有数据的那个
+    selected_dir = unique_dirs[0]  # 默认 data/
+    for cand_dir in unique_dirs:
+        vector_db = cand_dir / "vector_db"
+        if not vector_db.exists():
             continue
         try:
-            db = _lancedb.connect(str(cand))
+            db = _lancedb.connect(str(vector_db))
             resp = db.list_tables()
             table_names = resp.tables if hasattr(resp, "tables") else resp
             if "customer_knowledge" in table_names:
                 table = db.open_table("customer_knowledge")
-                if table.count_rows() > 0:
-                    vector_db_path = cand
-                    print(f"[INFO] 在 {cand} 中找到 {table.count_rows()} 条向量数据")
+                count = table.count_rows()
+                if count > 0:
+                    selected_dir = cand_dir
+                    print(f"[INFO] 在 {vector_db} 中找到 {count} 条向量数据")
                     break
         except Exception:
             continue
 
-    # 选择有数据的 contents.db 路径
-    contents_db_path = candidates_contents[0]
-    for cand in candidates_contents:
-        if not cand.exists() or not cand.is_file():
-            continue
+    vector_db_path = selected_dir / "vector_db"
+    contents_db_path = selected_dir / "contents.db"
+
+    # 检查 contents.db 是否有数据（仅用于日志）
+    if contents_db_path.exists() and contents_db_path.is_file():
         try:
-            import sqlite3 as _sqlite3
-            conn = _sqlite3.connect(str(cand))
+            conn = _sqlite3.connect(str(contents_db_path))
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM agno_knowledge")
             count = cursor.fetchone()[0]
             conn.close()
             if count > 0:
-                contents_db_path = cand
-                print(f"[INFO] 在 {cand} 中找到 {count} 条元数据")
-                break
+                print(f"[INFO] 在 {contents_db_path} 中找到 {count} 条元数据")
         except Exception:
-            continue
+            pass
 
     return vector_db_path, contents_db_path
 
