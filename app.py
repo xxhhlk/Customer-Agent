@@ -22,9 +22,20 @@ import sys
 import ctypes
 import asyncio
 import os
+import faulthandler
+import traceback
 from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QSharedMemory
 from PyQt6.QtWidgets import QApplication, QMessageBox
+
+# 启用 faulthandler：捕获 C++ 级 segfault 的 Python 堆栈
+faulthandler.enable()
+# 额外：将 faulthandler 输出写入文件（方便事后排查崩溃）
+_fault_log_path = Path("./temp") / "crash_trace.log"
+_fault_log_path.parent.mkdir(parents=True, exist_ok=True)
+_fault_file = open(_fault_log_path, "a", encoding="utf-8")
+faulthandler.enable(_fault_file)
+faulthandler.dump_traceback_later(timeout=30, repeat=True, file=_fault_file)
 
 # ============================================================================
 # 全局单例预初始化（确保正确的初始化顺序）
@@ -71,6 +82,22 @@ def main():
     # 创建应用
     app = QApplication(sys.argv)
     app.setApplicationName("Agent-Customer")
+
+    # 全局异常钩子：捕获未处理的 Python 异常，写入日志并打印到 stderr
+    def _global_excepthook(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logger = _get_logger("CrashHook")
+        logger.error(f"未捕获的异常: {exc_type.__name__}: {exc_value}")
+        logger.error("".join(traceback.format_tb(exc_tb)))
+        # 也写入 faulthandler 文件
+        print(f"\n=== Unhandled Exception {time.strftime('%Y-%m-%d %H:%M:%S')} ===", file=_fault_file)
+        traceback.print_exception(exc_type, exc_value, exc_tb, file=_fault_file)
+        _fault_file.flush()
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _global_excepthook
     
     # 多开校验 - 使用 QSharedMemory 确保单实例运行
     shared_memory_key = "AgentCustomerApp_InstanceChecker"
