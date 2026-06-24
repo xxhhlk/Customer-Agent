@@ -401,76 +401,19 @@ class LanceDbWithProgress(LanceDb):
 
     def update_metadata(self, content_id: str, metadata: Dict[str, Any]) -> None:
         """
-        重写 update_metadata 方法 - 修复向量丢失 + 全表扫描崩溃问题
+        重写 update_metadata 方法 — 跳过向量操作
 
-        原方法两个 bug：
-        1. Agno 原版查询不含 vector 字段 → 更新时向量丢失
-        2. 之前的修复用全表 to_pandas() 加载所有向量到内存 →
-           导入 130 条时 O(N²) 全表扫描导致 LanceDB native access violation 崩溃
+        Agno 在每次 insert 后调用 _aupdate_content → update_metadata 来同步
+        content 状态到向量库。但我们的 insert 方法已经在 payload 中写入了完整
+        元数据（包括 content_id、meta_data、filters 等），无需再更新。
 
-        新方案：只用 LanceDB 原生 table.update() 按 where 条件就地更新 payload 列，
-        不加载任何向量数据到内存，完全避免 native 崩溃。
+        更重要的是，LanceDB 的 to_list() 即使 select 不包含 vector 列，仍会
+        返回 vector 字段（文档明确说明），每次调用都会把向量加载到内存。
+        导入 130 条就是 130 次向量加载，累积导致 native access violation 崩溃。
+
+        因此直接跳过，元数据在 insert 时已写入 payload，无需二次更新。
         """
-        import json
-
-        try:
-            if self.table is None:
-                logger.error("Table not initialized")
-                return
-
-            logger.info(f"[update_metadata] 开始更新元数据，content_id: {content_id}")
-
-            # 只查询 id + payload（不含 vector），用 LIKE 过滤 content_id
-            # payload 是 JSON 字符串列，用 LIKE 匹配 content_id
-            where_clause = f"payload LIKE '%\"content_id\":\"{content_id}\"%'"
-            results = self.table.search().where(where_clause).select(["id", "payload"]).limit(10).to_list()
-
-            if not results:
-                logger.debug(f"No documents found with content_id: {content_id}")
-                return
-
-            logger.info(f"[update_metadata] 找到 {len(results)} 条匹配记录")
-
-            # 逐条用 LanceDB 原生 update 就地更新 payload（不涉及向量）
-            updated_count = 0
-            for row in results:
-                row_id = row["id"]
-                payload_str = row["payload"]
-                if not isinstance(payload_str, str):
-                    logger.warning(f"Payload is not a string for row {row_id}")
-                    continue
-
-                current_payload = json.loads(payload_str)
-
-                # 合并 metadata
-                if "meta_data" in current_payload:
-                    current_payload["meta_data"].update(metadata)
-                else:
-                    current_payload["meta_data"] = metadata
-
-                if "filters" in current_payload:
-                    if isinstance(current_payload["filters"], dict):
-                        current_payload["filters"].update(metadata)
-                    else:
-                        current_payload["filters"] = metadata
-                else:
-                    current_payload["filters"] = metadata
-
-                new_payload_str = json.dumps(current_payload, ensure_ascii=False)
-
-                # LanceDB 原生 update：只改 payload 列，不碰 vector
-                self.table.update(
-                    where=f"id = '{row_id}'",
-                    values={"payload": new_payload_str}
-                )
-                updated_count += 1
-                logger.info(f"[update_metadata] 更新记录 {row_id}，新表版本: {self.table.version}")
-
-            logger.info(f"[update_metadata] 成功更新 {updated_count} 条记录的元数据")
-
-        except Exception as e:
-            logger.error(f"Error updating metadata for content_id '{content_id}': {e}")
-            raise
+        return  # no-op: metadata already written during insert
 
 
 # ==============================================================================
