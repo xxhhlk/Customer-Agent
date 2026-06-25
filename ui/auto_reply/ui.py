@@ -1,6 +1,6 @@
 # 自动回复主界面模块
 import time
-from PyQt6.QtCore import Qt, QTimer, QEvent, QThread
+from PyQt6.QtCore import Qt, QTimer, QEvent, QThread, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QWidget, QMessageBox, QVBoxLayout, QHBoxLayout
 from PyQt6.QtGui import QFont
 from qfluentwidgets import (SubtitleLabel, CaptionLabel, PushButton, PrimaryPushButton,
