@@ -30,11 +30,12 @@ class ConnectionMixin:
     async def _connect_with_retry(self, shop_id: str, user_id: str, username: str, on_success, on_failure):
         """带重连机制的WebSocket连接"""
         logger = get_logger("PDDChannel")
+        logger.info(f"_connect_with_retry 开始: {shop_id}-{username}, max_attempts={self.reconnect_config.max_attempts}")
 
         for attempt in range(self.reconnect_config.max_attempts):
             # 检查是否收到停止信号（同时检查asyncio.Event和threading.Event）
             if (self._stop_event and self._stop_event.is_set()) or self._threading_stop_event.is_set():
-                logger.info(f"收到停止信号，取消重连: {shop_id}-{username}")
+                logger.info(f"收到停止信号，取消重连: {shop_id}-{username} (stop_event={self._stop_event.is_set() if self._stop_event else 'None'}, threading_stop={self._threading_stop_event.is_set()})")
                 self.status_manager.update_status(shop_id, user_id, username, ConnectionState.DISCONNECTED)
                 return
 
@@ -43,7 +44,9 @@ class ConnectionMixin:
                     self.status_manager.update_status(shop_id, user_id, username, ConnectionState.RECONNECTING)
                     logger.info(f"尝试重连 ({attempt + 1}/{self.reconnect_config.max_attempts}): {shop_id}-{username}")
 
+                logger.info(f"_connect_with_retry: 调用 _connect_single_attempt (attempt {attempt}): {shop_id}-{username}")
                 await self._connect_single_attempt(shop_id, user_id, username, on_success, on_failure)
+                logger.info(f"_connect_with_retry: _connect_single_attempt 正常返回: {shop_id}-{username}")
                 return  # 连接成功，退出重试循环
 
             except Exception as e:

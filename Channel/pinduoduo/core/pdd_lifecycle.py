@@ -47,6 +47,7 @@ class LifecycleMixin:
 
     async def start_account(self, shop_id: str, user_id: str, on_success, on_failure):
         """启动指定店铺下账号"""
+        self.logger.info(f"start_account 开始: {shop_id}-{user_id}")
         account_info = db_manager.get_account(self.channel_name, shop_id, user_id)
         if not account_info:
             error_msg = f"账号 {user_id} 在数据库中不存在"
@@ -57,6 +58,7 @@ class LifecycleMixin:
         username = account_info.get("username", user_id)
         connection_key = f"{shop_id}_{user_id}"
 
+        self.logger.info(f"start_account: account_info 获取成功, username={username}, connection_key={connection_key}")
         self.status_manager.update_status(shop_id, user_id, username, ConnectionState.CONNECTING)
 
         if connection_key in self._reconnect_tasks:
@@ -64,6 +66,7 @@ class LifecycleMixin:
             del self._reconnect_tasks[connection_key]
 
         if self.reconnect_config.enable_auto_reconnect:
+            self.logger.info(f"start_account: 调用 _connect_with_retry, _threading_stop_event={self._threading_stop_event.is_set()}, _stop_event={self._stop_event}")
             task = self._connect_with_retry(shop_id, user_id, username, on_success, on_failure)
         else:
             task = self._connect_single_attempt(shop_id, user_id, username, on_success, on_failure)
@@ -75,6 +78,7 @@ class LifecycleMixin:
         # 等待任务完成
         try:
             await connect_task
+            self.logger.info(f"start_account: _connect_with_retry 正常返回: {shop_id}-{username}")
         except asyncio.CancelledError:
             self.logger.debug(f"连接任务被取消: {shop_id}-{username}")
         except Exception as e:
@@ -83,6 +87,7 @@ class LifecycleMixin:
             # 清理任务引用
             if connection_key in self._reconnect_tasks:
                 del self._reconnect_tasks[connection_key]
+            self.logger.info(f"start_account 结束: {shop_id}-{username}")
 
     async def stop_account(self, shop_id: str, user_id: str):
         """停止指定店铺下账号"""
@@ -168,9 +173,11 @@ class LifecycleMixin:
         try:
             # 使用实例级停止事件，避免全局停止信号影响新连接
             self._stop_event = asyncio.Event()
+            self.logger.info(f"init 开始: {shop_id}-{username}")
 
             token = GetToken(shop_id, user_id)
             access_token = token.get_token()
+            self.logger.info(f"init: get_token 返回: {shop_id}-{username}, token={'None' if not access_token else 'OK(len=' + str(len(access_token)) + ')'}")
 
             if not access_token:
                 raise RuntimeError(
@@ -178,7 +185,9 @@ class LifecycleMixin:
                 )
 
             queue_name = f"pdd_{shop_id}"
+            self.logger.info(f"init: 设置消息消费者: {shop_id}-{username}")
             await self._setup_message_consumer(queue_name)
+            self.logger.info(f"init: 消息消费者设置完成: {shop_id}-{username}")
 
             params = {
                 "access_token": access_token,
@@ -191,6 +200,7 @@ class LifecycleMixin:
 
             self.logger.debug(f"正在连接到拼多多WebSocket: {shop_id}-{username}")
 
+            self.logger.info(f"init: 开始 WebSocket 连接: {shop_id}-{username}")
             async with websockets.connect(
                 full_url,
                 ping_interval=60,
@@ -212,6 +222,7 @@ class LifecycleMixin:
                     self.logger.error(f"WebSocket连接异常: {shop_id}-{username}")
 
                 self.status_manager.update_status(shop_id, user_id, username, ConnectionState.CONNECTED)
+                self.logger.info(f"WebSocket 连接成功，状态已更新: {shop_id}-{username}")
                 self.logger.debug(f"暂时跳过在线状态设置: {shop_id}-{username}")
 
                 on_success()
