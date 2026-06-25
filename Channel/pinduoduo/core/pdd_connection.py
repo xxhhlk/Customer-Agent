@@ -22,10 +22,9 @@ class ConnectionMixin:
     _stop_event: Optional[asyncio.Event]
     _threading_stop_event: threading.Event
 
-    # Methods provided by LifecycleMixin / MessageHandlerMixin
-    async def init(self, shop_id: str, user_id: str, username: str, on_success, on_failure) -> None: ...
-    async def _setup_message_consumer(self, queue_name: str) -> None: ...
-    async def _process_websocket_message(self, message: str, shop_id: str, user_id: str, username: str, queue_name: str) -> None: ...
+    # NOTE: init / _setup_message_consumer / _process_websocket_message
+    # 实现在 LifecycleMixin / MessageHandlerMixin 中，不在此声明 stub，
+    # 否则 MRO 会优先匹配 ConnectionMixin 的 stub 而非真正的实现。
 
     async def _connect_with_retry(self, shop_id: str, user_id: str, username: str, on_success, on_failure):
         """带重连机制的WebSocket连接"""
