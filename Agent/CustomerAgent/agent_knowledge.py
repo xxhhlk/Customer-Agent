@@ -7,6 +7,8 @@ from agno.knowledge.knowledge import Knowledge
 from typing import Optional
 import logging
 import os
+import uuid as uuid_lib
+import hashlib
 
 # 导入自定义的火山引擎嵌入模型
 from Agent.CustomerAgent.volcengine_embedder import VolcengineEmbedder
@@ -224,6 +226,9 @@ class KnowledgeManager:
         """
         导入 CSV 文件，正确处理带引号的多行字段
 
+        采用攒批写入策略：每 BATCH_SIZE 条数据攒一批，
+        一次性 embed + 一次性 table.add，避免 130 次独立 native 写入导致崩溃。
+
         Args:
             file_path: CSV 文件路径
 
@@ -267,7 +272,10 @@ class KnowledgeManager:
 
                 logger.info(f"CSV 列映射: 标题='{title_col}', 内容='{content_col}'")
 
-                # 逐行读取并添加到知识库
+                # 攒批读取所有行
+                BATCH_SIZE = 20  # 每批 20 条，平衡内存与写入次数
+                batch: list[tuple[str, str, int]] = []  # (title, content, row_num)
+
                 for row_num, row in enumerate(reader, start=2):  # 从第2行开始（第1行是表头）
                     try:
                         title = row.get(title_col, '').strip()
@@ -277,14 +285,24 @@ class KnowledgeManager:
                             logger.warning(f"第 {row_num} 行: 标题或内容为空，跳过")
                             continue
 
-                        # 添加到知识库
-                        await self._add_single_content(title, content)
-                        imported_count += 1
-                        logger.debug(f"第 {row_num} 行导入成功: {title}")
+                        batch.append((title, content, row_num))
+
+                        # 攒满一批就写入
+                        if len(batch) >= BATCH_SIZE:
+                            count = await self._add_batch_content(batch)
+                            imported_count += count
+                            logger.info(f"已导入 {imported_count} 条 (当前批次完成)")
+                            batch.clear()
 
                     except Exception as row_err:
-                        logger.warning(f"第 {row_num} 行导入失败: {row_err}")
+                        logger.warning(f"第 {row_num} 行预处理失败: {row_err}")
                         continue
+
+                # 写入剩余不足一批的数据
+                if batch:
+                    count = await self._add_batch_content(batch)
+                    imported_count += count
+                    logger.info(f"最后一批导入完成，总计 {imported_count} 条")
 
             logger.info(f"CSV 文件导入完成: {file_path}, 成功导入 {imported_count} 条")
 
@@ -298,21 +316,142 @@ class KnowledgeManager:
 
         return imported_count
 
-    async def _add_single_content(self, title: str, content: str) -> None:
+    async def _add_batch_content(self, batch: list[tuple[str, str, int]]) -> int:
         """
-        添加单条内容到知识库
+        批量添加内容到知识库
+
+        将一批 (title, content) 一次性 embed + 一次性 table.add，
+        替代原来逐条调用 add_content_async 的方式。
 
         Args:
-            title: 标题
-            content: 内容
+            batch: [(title, content, row_num), ...] 列表
+
+        Returns:
+            成功写入的条数
         """
-        # 直接使用 add_content_async 方法，传入 text_content 参数
-        await self.knowledge.add_content_async(
-            name=title,
-            text_content=content,
-            metadata={"source": "csv_import"},
-            skip_if_exists=False
-        )
+        if not batch:
+            return 0
+
+        batch_size = len(batch)
+        logger.info(f"开始批量写入 {batch_size} 条数据")
+
+        try:
+            vector_db = self.knowledge.vector_db
+            if vector_db is None:
+                logger.error("向量数据库未初始化，无法批量写入")
+                return 0
+
+            # 1. 构造 Document 列表
+            documents: list[Document] = []
+            for title, content, _row_num in batch:
+                doc = Document(
+                    content=content,
+                    id=str(uuid_lib.uuid4()),
+                    name=title,
+                    meta_data={
+                        'title': title,
+                        'source': 'csv_import',
+                        'filename': f"{title}.txt"
+                    }
+                )
+                doc.content_id = doc.id
+                documents.append(doc)
+
+            # 2. 批量嵌入 — 调用 embedder 的批量接口
+            #    火山引擎 API 内部仍是逐个请求，但收集到一起后一次 table.add
+            embedder = vector_db.embedder
+            if embedder and hasattr(embedder, 'async_get_embeddings_batch_and_usage'):
+                doc_contents = [doc.content for doc in documents]
+                embeddings, usages = await embedder.async_get_embeddings_batch_and_usage(doc_contents)
+                for j, doc in enumerate(documents):
+                    if j < len(embeddings) and embeddings[j]:
+                        doc.embedding = embeddings[j]
+                        doc.usage = usages[j] if j < len(usages) else None
+                    else:
+                        logger.warning(f"批量嵌入第 {j} 条失败，跳过")
+                        doc.embedding = []
+            else:
+                # 降级：逐个嵌入
+                for doc in documents:
+                    if not doc.embedding:
+                        await doc.async_embed(embedder=embedder)
+
+            # 3. 过滤掉嵌入失败的文档
+            valid_docs = [doc for doc in documents if doc.embedding]
+            if not valid_docs:
+                logger.error("本批所有文档嵌入均失败，跳过写入")
+                return 0
+
+            # 4. 加写锁，一次性写入 LanceDB
+            with self._write_lock:
+                # 构造 LanceDB 数据行
+                import json
+                data = []
+                # 所有文档共用同一个 content_hash（agno 的 upsert 逻辑不依赖此字段做去重，
+                # 因为我们传了 skip_if_exists=False）
+                content_hash = self._build_content_hash_simple(batch[0][1])
+
+                for doc in valid_docs:
+                    cleaned_content = doc.content.replace("\x00", "\ufffd")
+                    payload = {
+                        "name": doc.name,
+                        "meta_data": doc.meta_data,
+                        "content": cleaned_content,
+                        "usage": doc.usage,
+                        "content_id": doc.content_id,
+                        "content_hash": content_hash,
+                    }
+                    vector = vector_db._prepare_vector(doc.embedding)
+                    if not isinstance(vector, list):
+                        vector = list(vector)
+                    data.append({
+                        "vector": vector,
+                        "id": doc.id,
+                        "payload": json.dumps(payload, ensure_ascii=False),
+                    })
+
+                # 一次 table.add 写入整批数据
+                table = vector_db.table
+                if table is None:
+                    import lancedb
+                    db = lancedb.connect(vector_db.uri)
+                    table = db.open_table(vector_db.table_name)
+
+                result = table.add(data)
+                logger.info(f"批量写入完成: {len(data)} 条, LanceDB 版本: {result.version}")
+
+            # 5. 写入 contents_db（agno 的 SqliteDb）
+            #    逐条 upsert，SQLite 层面没有 native crash 风险
+            if self.knowledge.contents_db:
+                from agno.db.schemas.knowledge import KnowledgeRow
+                from agno.knowledge.content import ContentStatus
+                import time
+                for doc in valid_docs:
+                    try:
+                        content_row = KnowledgeRow(
+                            id=doc.content_id,
+                            name=doc.name,
+                            description="",
+                            metadata=doc.meta_data,
+                            type="csv",
+                            size=len(doc.content.encode("utf-8")) if doc.content else 0,
+                            linked_to=self.knowledge.name or "",
+                            access_count=0,
+                            status=ContentStatus.COMPLETED.value,
+                            status_message="",
+                            created_at=int(time.time()),
+                            updated_at=int(time.time()),
+                        )
+                        self.knowledge.contents_db.upsert_knowledge_content(knowledge_row=content_row)
+                    except Exception as db_err:
+                        logger.warning(f"contents_db 写入失败 ({doc.name}): {db_err}")
+
+            logger.info(f"批量写入成功: {len(valid_docs)}/{batch_size} 条")
+            return len(valid_docs)
+
+        except Exception as e:
+            logger.error(f"批量写入失败: {e}", exc_info=True)
+            return 0
 
     def search_knowledge(self, query: str, limit: Optional[int] = None) -> list:
         """

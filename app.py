@@ -24,6 +24,7 @@ import asyncio
 import os
 import faulthandler
 import traceback
+import threading
 from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QSharedMemory
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -34,8 +35,28 @@ faulthandler.enable()
 _fault_log_path = Path("./temp") / "crash_trace.log"
 _fault_log_path.parent.mkdir(parents=True, exist_ok=True)
 _fault_file = open(_fault_log_path, "a", encoding="utf-8")
+
+# 写入启动时间戳，方便定位每次运行
+import time as _time
+_fault_file.write(f"\n{'='*60}\n=== App started at {_time.strftime('%Y-%m-%d %H:%M:%S')} ===\n{'='*60}\n")
+_fault_file.flush()
+
 faulthandler.enable(_fault_file)
 faulthandler.dump_traceback_later(timeout=30, repeat=True, file=_fault_file)
+
+# 周期性写入时间戳到 fault file，方便定位崩溃发生的时间点
+def _periodic_fault_timestamp():
+    """每 30 秒在 crash_trace.log 中写入时间戳，与 faulthandler dump 交替出现"""
+    while True:
+        try:
+            _fault_file.write(f"\n--- Timestamp: {_time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            _fault_file.flush()
+        except Exception:
+            pass  # 文件已关闭等情况，静默退出
+        _time.sleep(30)
+
+_ts_thread = threading.Thread(target=_periodic_fault_timestamp, daemon=True)
+_ts_thread.start()
 
 # ============================================================================
 # 全局单例预初始化（确保正确的初始化顺序）
