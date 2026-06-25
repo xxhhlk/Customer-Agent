@@ -156,11 +156,14 @@ class PDDLogin():
             # 等待页面加载，检查是否需要重新登录
             try:
                 # 如果页面跳转到登录页面，说明登录状态已失效
-                await page.wait_for_url("**/login**", timeout=5000)
+                # timeout 10000ms: 拼多多页面加载较慢，5秒经常不够
+                await page.wait_for_url("**/login**", timeout=10000)
                 self.logger.warning("登录状态已失效，需要重新登录")
                 return False
-            except asyncio.TimeoutError:
-                # 没有跳转到登录页面，说明登录状态有效
+            except Exception:
+                # Playwright 超时抛的是 playwright._impl._errors.TimeoutError，
+                # 不是 asyncio.TimeoutError，用宽泛 except 捕获：
+                # 没跳转到登录页 → cookie 有效
                 pass
 
             # 获取最新的cookies

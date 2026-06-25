@@ -710,9 +710,12 @@ class AutoReplyUI(QFrame):
 
 
 class CookiePrecheckThread(QThread):
-    """冷启动时预检 cookie 有效性，过期则尝试重登"""
+    """冷启动时并行预检 cookie 有效性，过期则尝试重登"""
 
     precheck_complete = pyqtSignal()
+
+    # 并行 worker 数：同时启动多个 Chromium 会消耗大量内存，限制为 2
+    _MAX_WORKERS = 2
 
     def __init__(self, accounts: list, parent=None):
         super().__init__(parent)
@@ -720,62 +723,84 @@ class CookiePrecheckThread(QThread):
         self.logger = get_logger("CookiePrecheckThread")
         self.setObjectName("CookiePrecheckThread")
 
-    def run(self):
-        """在后台线程中预检所有账号的 cookie"""
-        try:
-            from Channel.pinduoduo.cookie_utils import check_cookies_valid, perform_relogin
-            from Channel.pinduoduo.cookie_cache import cookie_cache
-            from database.db_manager import db_manager
-            import json
+    def _precheck_single(self, account_data: dict):
+        """预检单个账号的 cookie（供线程池调用）"""
+        from Channel.pinduoduo.cookie_utils import check_cookies_valid, perform_relogin
+        from Channel.pinduoduo.cookie_cache import cookie_cache
+        from database.db_manager import db_manager
+        import json
 
-            for account_data in self.accounts:
-                shop_id = account_data.get("shop_id")
-                user_id = account_data.get("user_id")
-                username = account_data.get("username", "unknown")
+        shop_id = account_data.get("shop_id")
+        user_id = account_data.get("user_id")
+        username = account_data.get("username", "unknown")
 
-                if not shop_id or not user_id:
-                    continue
+        if not shop_id or not user_id:
+            return
 
-                # 从缓存或 DB 获取 cookie
-                cookies = cookie_cache.get("pinduoduo", shop_id, user_id)
-                if not cookies:
-                    account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
-                    if account_info:
-                        cookies_data = account_info.get('cookies')
-                        if isinstance(cookies_data, str):
-                            try:
-                                cookies = json.loads(cookies_data)
-                            except json.JSONDecodeError:
-                                cookies = None
-                        elif isinstance(cookies_data, dict):
-                            cookies = cookies_data
+        # 从缓存或 DB 获取 cookie
+        cookies = cookie_cache.get("pinduoduo", shop_id, user_id)
+        if not cookies:
+            account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+            if account_info:
+                cookies_data = account_info.get('cookies')
+                if isinstance(cookies_data, str):
+                    try:
+                        cookies = json.loads(cookies_data)
+                    except json.JSONDecodeError:
+                        cookies = None
+                elif isinstance(cookies_data, dict):
+                    cookies = cookies_data
 
-                if not cookies:
-                    self.logger.warning(f"冷启动预检: 账号 {username} 无 cookie，跳过预检")
-                    continue
+        if not cookies:
+            self.logger.warning(f"冷启动预检: 账号 {username} 无 cookie，跳过预检")
+            return
 
-                # 验证 cookie 有效性
-                is_valid = check_cookies_valid(
-                    "pinduoduo", shop_id, user_id, cookies, timeout=15.0
+        # 验证 cookie 有效性
+        is_valid = check_cookies_valid(
+            "pinduoduo", shop_id, user_id, cookies, timeout=15.0
+        )
+
+        if not is_valid:
+            self.logger.warning(f"冷启动预检: 账号 {username} cookie 已过期，尝试重登...")
+            account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+            if account_info:
+                success = perform_relogin(
+                    "pinduoduo", shop_id, user_id,
+                    username,
+                    account_info.get('password', ''),
+                    False,
                 )
-
-                if not is_valid:
-                    self.logger.warning(f"冷启动预检: 账号 {username} cookie 已过期，尝试重登...")
-                    account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
-                    if account_info:
-                        success = perform_relogin(
-                            "pinduoduo", shop_id, user_id,
-                            username,
-                            account_info.get('password', ''),
-                            False,
-                        )
-                        if success:
-                            self.logger.info(f"冷启动预检: 账号 {username} 重登成功")
-                        else:
-                            self.logger.error(f"冷启动预检: 账号 {username} 重登失败，仍将尝试启动")
+                if success:
+                    self.logger.info(f"冷启动预检: 账号 {username} 重登成功")
                 else:
-                    self.logger.debug(f"冷启动预检: 账号 {username} cookie 有效")
+                    self.logger.error(f"冷启动预检: 账号 {username} 重登失败，仍将尝试启动")
+        else:
+            self.logger.debug(f"冷启动预检: 账号 {username} cookie 有效")
 
+    def run(self):
+        """在后台线程中并行预检所有账号的 cookie"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        try:
+            if len(self.accounts) <= 1:
+                # 单账号无需线程池
+                for acc in self.accounts:
+                    self._precheck_single(acc)
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=min(self._MAX_WORKERS, len(self.accounts)),
+                    thread_name_prefix="CookiePrecheck"
+                ) as executor:
+                    futures = {executor.submit(self._precheck_single, acc): acc
+                               for acc in self.accounts}
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            acc = futures[future]
+                            self.logger.error(
+                                f"冷启动预检: 账号 {acc.get('username', 'unknown')} 预检异常: {e}"
+                            )
         except Exception as e:
             self.logger.error(f"冷启动 cookie 预检失败: {e}")
         finally:
