@@ -172,6 +172,11 @@ class LifecycleMixin:
             token = GetToken(shop_id, user_id)
             access_token = token.get_token()
 
+            if not access_token:
+                raise RuntimeError(
+                    f"获取access_token失败，cookie可能已过期: {shop_id}-{username}"
+                )
+
             queue_name = f"pdd_{shop_id}"
             await self._setup_message_consumer(queue_name)
 

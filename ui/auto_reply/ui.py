@@ -21,6 +21,7 @@ class AutoReplyUI(QFrame):
         self.logger = get_logger()  # 初始化logger（必须在其他操作之前）
         self.accounts_data: list = []  # 存储账号数据
         self._loaded_once = False
+        self._is_cold_starting = False  # 冷启动标志，控制失败时不弹窗
         self.setupUI()
         QTimer.singleShot(300, self._maybeLoadOnShow)
 
@@ -369,16 +370,29 @@ class AutoReplyUI(QFrame):
         self._loadAccountsAsync()
 
     def _autoStartAllReply(self):
-        """启动时自动开始所有符合条件的账号的自动回复"""
+        """启动时自动开始所有符合条件的账号的自动回复（含 cookie 预检）"""
+        eligible_accounts = [
+            acc_data for acc_data in self.accounts_data
+            if acc_data.get("status") == 1 and not auto_reply_manager.is_running(acc_data)
+        ]
+
+        if not eligible_accounts:
+            self.logger.info("启动时自动回复：没有符合条件的账号")
+            return
+
+        # 启动 cookie 预检线程，完成后回调 _start_all_after_precheck
+        self._is_cold_starting = True
+        self._precheck_thread = CookiePrecheckThread(eligible_accounts, self)
+        self._precheck_thread.precheck_complete.connect(self._start_all_after_precheck)
+        self._precheck_thread.start()
+
+    def _start_all_after_precheck(self):
+        """cookie 预检完成后，启动所有符合条件的账号"""
         try:
             eligible_accounts = [
                 acc_data for acc_data in self.accounts_data
                 if acc_data.get("status") == 1 and not auto_reply_manager.is_running(acc_data)
             ]
-
-            if not eligible_accounts:
-                self.logger.info("启动时自动回复：没有符合条件的账号")
-                return
 
             started_count = 0
             for account_data in eligible_accounts:
@@ -394,6 +408,9 @@ class AutoReplyUI(QFrame):
 
         except Exception as e:
             self.logger.error(f"启动时自动回复失败: {str(e)}")
+        finally:
+            # 冷启动结束，恢复弹窗行为
+            QTimer.singleShot(30000, self._reset_cold_start_flag)
 
     def onStartAllAutoReply(self):
         """开始所有符合条件的账号的自动回复"""
@@ -665,11 +682,20 @@ class AutoReplyUI(QFrame):
                 account_card.auto_reply_btn.setEnabled(True)
 
             self.logger.error(f"账号 '{account_data['username']}' 自动回复连接失败: {error}")
-            QMessageBox.warning(self, "连接失败", f"账号 '{account_data['username']}' 自动回复连接失败：{error}")
+
+            # 冷启动期间不弹窗，仅日志记录
+            if not self._is_cold_starting:
+                QMessageBox.warning(self, "连接失败", f"账号 '{account_data['username']}' 自动回复连接失败：{error}")
+
             self.updateStats()
 
         except Exception as e:
             self.logger.error(f"处理自动回复失败回调失败: {str(e)}")
+
+    def _reset_cold_start_flag(self):
+        """冷启动结束后恢复弹窗行为"""
+        self._is_cold_starting = False
+        self.logger.debug("冷启动期结束，恢复弹窗提示")
 
     def updateCardStatus(self, account_data: dict, new_status: int):
         """更新卡片状态"""
@@ -683,4 +709,77 @@ class AutoReplyUI(QFrame):
                 break
 
 
-__all__ = ['AutoReplyUI']
+class CookiePrecheckThread(QThread):
+    """冷启动时预检 cookie 有效性，过期则尝试重登"""
+
+    precheck_complete = pyqtSignal()
+
+    def __init__(self, accounts: list, parent=None):
+        super().__init__(parent)
+        self.accounts = accounts
+        self.logger = get_logger("CookiePrecheckThread")
+        self.setObjectName("CookiePrecheckThread")
+
+    def run(self):
+        """在后台线程中预检所有账号的 cookie"""
+        try:
+            from Channel.pinduoduo.cookie_utils import check_cookies_valid, perform_relogin
+            from Channel.pinduoduo.cookie_cache import cookie_cache
+            from database.db_manager import db_manager
+            import json
+
+            for account_data in self.accounts:
+                shop_id = account_data.get("shop_id")
+                user_id = account_data.get("user_id")
+                username = account_data.get("username", "unknown")
+
+                if not shop_id or not user_id:
+                    continue
+
+                # 从缓存或 DB 获取 cookie
+                cookies = cookie_cache.get("pinduoduo", shop_id, user_id)
+                if not cookies:
+                    account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+                    if account_info:
+                        cookies_data = account_info.get('cookies')
+                        if isinstance(cookies_data, str):
+                            try:
+                                cookies = json.loads(cookies_data)
+                            except json.JSONDecodeError:
+                                cookies = None
+                        elif isinstance(cookies_data, dict):
+                            cookies = cookies_data
+
+                if not cookies:
+                    self.logger.warning(f"冷启动预检: 账号 {username} 无 cookie，跳过预检")
+                    continue
+
+                # 验证 cookie 有效性
+                is_valid = check_cookies_valid(
+                    "pinduoduo", shop_id, user_id, cookies, timeout=15.0
+                )
+
+                if not is_valid:
+                    self.logger.warning(f"冷启动预检: 账号 {username} cookie 已过期，尝试重登...")
+                    account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+                    if account_info:
+                        success = perform_relogin(
+                            "pinduoduo", shop_id, user_id,
+                            username,
+                            account_info.get('password', ''),
+                            False,
+                        )
+                        if success:
+                            self.logger.info(f"冷启动预检: 账号 {username} 重登成功")
+                        else:
+                            self.logger.error(f"冷启动预检: 账号 {username} 重登失败，仍将尝试启动")
+                else:
+                    self.logger.debug(f"冷启动预检: 账号 {username} cookie 有效")
+
+        except Exception as e:
+            self.logger.error(f"冷启动 cookie 预检失败: {e}")
+        finally:
+            self.precheck_complete.emit()
+
+
+__all__ = ['AutoReplyUI', 'CookiePrecheckThread']

@@ -57,6 +57,10 @@ class AutoReplyThread(QThread):
     connection_success = pyqtSignal()  # 连接成功信号
     connection_failed = pyqtSignal(str)  # 连接失败信号
 
+    # 失败后自动重启配置
+    _MAX_RESTART = 3       # 最大重启次数
+    _RESTART_DELAY = 60   # 重启间隔（秒）
+
     def __init__(self, account_data: dict):
         super().__init__()
         self.account_data = account_data
@@ -64,78 +68,107 @@ class AutoReplyThread(QThread):
         self.logger = get_logger("AutoReplyThread")
         self.loop = None
         self._stop_requested = False
+        self._restart_count = 0
         # 设置线程对象名，便于调试
         self.setObjectName(f"AutoReplyThread-{account_data.get('username', 'unknown')}")
 
     def run(self):
-        """启动后端 PDDChannel 引擎"""
+        """启动后端 PDDChannel 引擎，失败后自动重启"""
         from Channel.pinduoduo.pdd_channel import PDDChannel
 
-        try:
-            # 为当前线程创建并设置新的事件循环
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-
-            # 创建 PDDChannel 实例
-            self.channel = PDDChannel()
-            # 将事件循环引用传递给PDDChannel，使其能线程安全地操作事件循环
-            self.channel.loop = self.loop
-
-            # 定义成功和失败的回调函数
-            def on_success():
-                self.connection_success.emit()
-
-            def on_failure(error_msg):
-                self.connection_failed.emit(error_msg)
-
-            # 启动引擎，并传递回调
-            task = self.loop.create_task(
-                self.channel.start_account(
-                    shop_id=self.account_data['shop_id'],
-                    user_id=self.account_data['user_id'],
-                    on_success=on_success,
-                    on_failure=on_failure
-                )
-            )
-
-            # 运行事件循环，直到任务完成或被停止
+        while not self._stop_requested:
             try:
-                self.loop.run_until_complete(task)
-            except asyncio.CancelledError:
-                self.logger.debug("主任务被取消")
-            except RuntimeError:
-                # loop.stop() 被调用时会触发此异常
-                self.logger.debug("事件循环被外部停止")
-            except Exception as e:
-                self.logger.error(f"主任务执行出错: {e}")
+                # 为当前线程创建并设置新的事件循环
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
 
-        except Exception as e:
-            self.logger.error(f"自动回复线程启动失败: {e}")
-            self.connection_failed.emit(str(e))
-        finally:
-            # 确保事件循环正确关闭
-            if self.loop and not self.loop.is_closed():
+                # 创建 PDDChannel 实例
+                self.channel = PDDChannel()
+                # 将事件循环引用传递给PDDChannel，使其能线程安全地操作事件循环
+                self.channel.loop = self.loop
+
+                # 定义成功和失败的回调函数
+                def on_success():
+                    self.connection_success.emit()
+
+                def on_failure(error_msg):
+                    self.connection_failed.emit(error_msg)
+
+                # 启动引擎，并传递回调
+                task = self.loop.create_task(
+                    self.channel.start_account(
+                        shop_id=self.account_data['shop_id'],
+                        user_id=self.account_data['user_id'],
+                        on_success=on_success,
+                        on_failure=on_failure
+                    )
+                )
+
+                # 运行事件循环，直到任务完成或被停止
                 try:
-                    # 取消所有未完成的任务
-                    pending = asyncio.all_tasks(self.loop)
-                    for task in pending:
-                        if not task.done():
-                            task.cancel()
-
-                    # 运行事件循环让取消的任务完成清理
-                    if pending:
-                        try:
-                            self.loop.run_until_complete(
-                                asyncio.gather(*pending, return_exceptions=True)
-                            )
-                        except Exception:
-                            pass
-
-                    # 关闭事件循环
-                    self.loop.close()
-                    self.logger.debug("事件循环已关闭")
+                    self.loop.run_until_complete(task)
+                except asyncio.CancelledError:
+                    self.logger.debug("主任务被取消")
+                except RuntimeError:
+                    # loop.stop() 被调用时会触发此异常
+                    self.logger.debug("事件循环被外部停止")
                 except Exception as e:
-                    self.logger.error(f"关闭事件循环失败: {e}")
+                    self.logger.error(f"主任务执行出错: {e}")
+
+            except Exception as e:
+                self.logger.error(f"自动回复线程启动失败: {e}")
+                self.connection_failed.emit(str(e))
+            finally:
+                # 确保事件循环正确关闭
+                if self.loop and not self.loop.is_closed():
+                    try:
+                        # 取消所有未完成的任务
+                        pending = asyncio.all_tasks(self.loop)
+                        for task in pending:
+                            if not task.done():
+                                task.cancel()
+
+                        # 运行事件循环让取消的任务完成清理
+                        if pending:
+                            try:
+                                self.loop.run_until_complete(
+                                    asyncio.gather(*pending, return_exceptions=True)
+                                )
+                            except Exception:
+                                pass
+
+                        # 关闭事件循环
+                        self.loop.close()
+                        self.logger.debug("事件循环已关闭")
+                    except Exception as e:
+                        self.logger.error(f"关闭事件循环失败: {e}")
+
+                self.channel = None
+                self.loop = None
+
+            # 检查是否需要重启
+            if self._stop_requested:
+                break
+
+            if self._restart_count < self._MAX_RESTART:
+                self._restart_count += 1
+                self.logger.info(
+                    f"连接结束，{self._RESTART_DELAY}秒后自动重启 "
+                    f"(第{self._restart_count}/{self._MAX_RESTART}次): "
+                    f"{self.account_data.get('username', 'unknown')}"
+                )
+                # 可中断的延迟等待
+                import time as _time
+                for _ in range(self._RESTART_DELAY):
+                    if self._stop_requested:
+                        break
+                    _time.sleep(1)
+            else:
+                self.logger.error(
+                    f"已达到最大重启次数 ({self._MAX_RESTART})，停止重试: "
+                    f"{self.account_data.get('username', 'unknown')}"
+                )
+                break
 
     def stop(self):
         """停止后端引擎 - 线程安全版本"""

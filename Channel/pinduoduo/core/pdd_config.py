@@ -5,9 +5,9 @@ from dataclasses import dataclass
 @dataclass
 class ReconnectConfig:
     """重连配置"""
-    max_attempts: int = 5          # 最大重试次数
+    max_attempts: int = 10         # 最大重试次数（从 5 增大到 10）
     initial_delay: float = 2.0     # 初始延迟(秒)
-    max_delay: float = 60.0        # 最大延迟(秒)
+    max_delay: float = 300.0       # 最大延迟(秒)，从 60 增大到 300（5分钟）
     backoff_factor: float = 2.0    # 退避因子
     enable_auto_reconnect: bool = True  # 是否启用自动重连
 
