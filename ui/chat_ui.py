@@ -18,13 +18,9 @@ from utils.logger_loguru import get_logger
 logger = get_logger("ChatUI")
 
 
-class _DataLoader(QThread):
-    """后台线程加载聊天数据"""
-    result = pyqtSignal(list, list)  # shops, conversations
-
-    def __init__(self, shop_id: str | None, parent=None):
-        super().__init__(parent)
-        self._shop_id = shop_id
+class _ShopLoader(QThread):
+    """后台线程加载店铺列表"""
+    result = pyqtSignal(list)  # shops
 
     def run(self):
         try:
@@ -33,12 +29,25 @@ class _DataLoader(QThread):
             shops = db.get_all_shops()
         except Exception:
             shops = []
+        self.result.emit(shops)
+
+
+class _ConversationLoader(QThread):
+    """后台线程加载会话列表"""
+    result = pyqtSignal(list)  # conversations
+
+    def __init__(self, shop_id: str | None = None, limit: int = 100, parent=None):
+        super().__init__(parent)
+        self._shop_id = shop_id
+        self._limit = limit
+
+    def run(self):
         try:
             from services.message_persistence import message_persistence_service
-            convs = message_persistence_service.get_conversations(shop_id=self._shop_id, limit=100)
+            convs = message_persistence_service.get_conversations(shop_id=self._shop_id, limit=self._limit)
         except Exception:
             convs = []
-        self.result.emit(shops, convs)
+        self.result.emit(convs)
 
 
 class ChatUI(QFrame):
@@ -48,31 +57,38 @@ class ChatUI(QFrame):
         super().__init__(parent)
         self.setObjectName("ChatUI")
         self._shops: list[dict] = []
-        self._loader = None  # DataLoader 实例引用，用于取消旧任务
+        self._shop_loader = None   # _ShopLoader 引用
+        self._conv_loader = None   # _ConversationLoader 引用
+        self._shops_loaded = False  # 店铺列表是否已加载过
         self._init_ui()
         self._apply_theme()
         # 延迟加载数据，放到事件队列末尾确保窗口先渲染
-        QTimer.singleShot(500, lambda: self._load_data(shop_id=None))
+        QTimer.singleShot(500, self._initial_load)
 
-    def _load_data(self, shop_id: str | None):
-        """在后台线程加载数据库数据，避免阻塞 UI"""
-        # 取消旧 loader（防止多个 loader 同时运行导致竞态条件）
-        if self._loader is not None:
+    def _initial_load(self):
+        """首次加载：同时加载店铺列表和会话列表"""
+        self._load_shops()
+        self._load_conversations(None)
+
+    def _load_shops(self):
+        """后台加载店铺列表（仅在首次或需要刷新时调用）"""
+        if self._shop_loader is not None:
             try:
-                self._loader.result.disconnect(self._on_data_loaded)
+                self._shop_loader.result.disconnect(self._on_shops_loaded)
             except (TypeError, RuntimeError):
                 pass
-            self._loader.quit()
-            self._loader.wait(500)
-            self._loader = None
+            self._shop_loader.quit()
+            self._shop_loader.wait(500)
+            self._shop_loader = None
 
-        self._loader = _DataLoader(shop_id, self)
-        self._loader.result.connect(self._on_data_loaded)
-        self._loader.start()
+        self._shop_loader = _ShopLoader(self)
+        self._shop_loader.result.connect(self._on_shops_loaded)
+        self._shop_loader.start()
 
-    def _on_data_loaded(self, shops: list[dict], convs: list[dict]):
-        """后台线程加载完成后，在主线程更新 UI"""
+    def _on_shops_loaded(self, shops: list[dict]):
+        """店铺列表加载完成"""
         self._shops = shops
+        self._shops_loaded = True
 
         self.shop_combo.blockSignals(True)
         self.shop_combo.clear()
@@ -87,15 +103,36 @@ class ChatUI(QFrame):
         else:
             self.shop_filter_container.show()
 
+    def _load_conversations(self, shop_id: str | None):
+        """后台加载会话列表"""
+        if self._conv_loader is not None:
+            try:
+                self._conv_loader.result.disconnect(self._on_conversations_loaded)
+            except (TypeError, RuntimeError):
+                pass
+            self._conv_loader.quit()
+            self._conv_loader.wait(500)
+            self._conv_loader = None
+
+        self._conv_loader = _ConversationLoader(shop_id=shop_id, limit=100, parent=self)
+        self._conv_loader.result.connect(self._on_conversations_loaded)
+        self._conv_loader.start()
+
+    def _on_conversations_loaded(self, convs: list[dict]):
+        """会话列表加载完成"""
+        # 同步 _current_shop_filter（修复新消息过滤不一致）
+        current_filter = self.shop_combo.currentData() if self._shops_loaded else None
+        self.conversation_list._current_shop_filter = current_filter
         self.conversation_list._all_data = convs
         self.conversation_list._rebuild_cards(convs)
 
     def _on_shop_changed(self, index: int):
-        """店铺筛选切换 — 后台加载"""
+        """店铺筛选切换 — 只重新加载会话，不重建店铺列表"""
         shop_id = self.shop_combo.currentData()
+        # 同步 filter 状态
+        self.conversation_list._current_shop_filter = shop_id
         self.conversation_list._rebuild_cards([])  # 先清空
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(50, lambda: self._load_data(shop_id=shop_id))
+        self._load_conversations(shop_id)
 
     def _apply_theme(self):
         dark = isDarkTheme()
