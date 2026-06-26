@@ -6,8 +6,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy, QTextEdit,
 )
-from PyQt6.QtGui import QFont, QTextOption, QColor
-from qfluentwidgets import isDarkTheme, CaptionLabel, InfoBadge
+from PyQt6.QtGui import QFont, QTextOption
+from qfluentwidgets import isDarkTheme, CaptionLabel
 
 
 class MessageBubble(QFrame):
@@ -20,7 +20,7 @@ class MessageBubble(QFrame):
     INBOUND_TEXT_DARK = "#e0e0e0"
 
     OUTBOUND_BG_LIGHT = "#cce5ff"
-    OUTBOUND_BG_DARK = "#1a5a8a"
+    OUTBOUND_BG_DARK = "#2d7db8"  # 提亮深色模式我方气泡，增强与 #1e1e1e 背景的对比
     OUTBOUND_TEXT_LIGHT = "#333333"
     OUTBOUND_TEXT_DARK = "#ffffff"
 
@@ -31,12 +31,20 @@ class MessageBubble(QFrame):
         "fallback": "兜底",
         "manual": "手动",
     }
+    # 深色模式下使用更亮的标签颜色，避免与深色气泡背景融为一体
     REPLY_SOURCE_COLORS = {
         "ai": "#28a745",
         "keyword": "#6f42c1",
         "staff": "#007bff",
         "fallback": "#dc3545",
         "manual": "#fd7e14",
+    }
+    REPLY_SOURCE_COLORS_DARK = {
+        "ai": "#3dd16a",       # 亮绿
+        "keyword": "#a061d4",   # 亮紫
+        "staff": "#3d9bff",     # 亮蓝
+        "fallback": "#f56565",  # 亮红
+        "manual": "#ffa040",    # 亮橙
     }
 
     def __init__(self, msg_data: dict, parent=None):
@@ -65,21 +73,25 @@ class MessageBubble(QFrame):
         bubble_layout.setSpacing(3)
 
         # 回复来源标签（仅出站）
+        self._source_badge = None
+        self._reply_source_key = None
         reply_source = self.msg_data.get("reply_source")
         if self.direction == "outbound" and reply_source:
             source_label = self.REPLY_SOURCE_LABELS.get(reply_source, reply_source) or ""
-            badge = InfoBadge.custom(
-                source_label,
-                QColor(self.REPLY_SOURCE_COLORS.get(reply_source, "#888888")),
-                QColor("#ffffff"),
-            )
-            badge.setMaximumWidth(50)
-            badge.setMaximumHeight(18)
+            # 使用自定义 QLabel 而非 InfoBadge，避免 FluentStyleSheet 主题切换时覆盖颜色
+            badge = QLabel(source_label)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setFixedHeight(18)
+            badge.setMaximumWidth(60)
+            badge_font = QFont("Microsoft YaHei", 8)
+            badge.setFont(badge_font)
             badge_layout = QHBoxLayout()
             badge_layout.setContentsMargins(0, 0, 0, 0)
             badge_layout.addStretch()
             badge_layout.addWidget(badge)
             bubble_layout.addLayout(badge_layout)
+            self._source_badge = badge
+            self._reply_source_key = reply_source
 
         # 消息内容 - 根据 context_type 分发渲染
         content = self.msg_data.get("content") or ""
@@ -173,34 +185,40 @@ class MessageBubble(QFrame):
 
         # 一次性设置气泡背景 + 文字颜色，避免两次 setStyleSheet 的竞态
         context_type = self.msg_data.get("context_type", "text") or "text"
-        if context_type == "text":
-            # 合并到一条 stylesheet，用 #ID 选择器同时控制背景和文字
-            self._bubble.setStyleSheet(f"""
-                #BubbleContainer {{
-                    background-color: {bg};
-                    border-radius: 10px;
-                }}
-                #ContentLabel {{
-                    color: {fg};
-                    background-color: transparent;
-                }}
-            """)
-            # 确保内容 label 继承样式（清除可能存在的旧内联样式）
-            self._content_label.setStyleSheet("")
-        elif hasattr(self._content_widget, "apply_theme"):
+        if context_type in ("image", "video"):
+            # 图片/视频消息：只设置气泡背景，内容由各自的 widget 自己渲染
             self._bubble.setStyleSheet(f"""
                 #BubbleContainer {{
                     background-color: {bg};
                     border-radius: 10px;
                 }}
             """)
-            self._content_widget.apply_theme()
+            if hasattr(self._content_widget, "apply_theme"):
+                self._content_widget.apply_theme()
         else:
+            # 文本类消息（text / mall_cs / emotion / goods_card 等）：
+            # 气泡背景设在 bubble 上，文字颜色直接设在 content_label 自身上，
+            # 不再依赖父级 #ContentLabel CSS 选择器级联，避免 setStyleSheet("")
+            # 清空时触发样式重算竞态导致文字随机变深色
             self._bubble.setStyleSheet(f"""
                 #BubbleContainer {{
                     background-color: {bg};
                     border-radius: 10px;
                 }}
+            """)
+            self._content_label.setStyleSheet(
+                f"color: {fg}; background-color: transparent;"
+            )
+
+        # 更新来源标签的颜色以匹配当前主题
+        if self._source_badge is not None and self._reply_source_key:
+            color_map = self.REPLY_SOURCE_COLORS_DARK if dark else self.REPLY_SOURCE_COLORS
+            badge_bg = color_map.get(self._reply_source_key, "#888888")
+            self._source_badge.setStyleSheet(f"""
+                background-color: {badge_bg};
+                color: white;
+                border-radius: 9px;
+                padding: 1px 6px;
             """)
 
     def changeEvent(self, event):
