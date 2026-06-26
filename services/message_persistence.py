@@ -116,6 +116,10 @@ class MessagePersistenceService:
                 # 兜底：如果 buyer_uid 为空，用 from_uid
                 buyer_uid = from_uid
 
+            shop_id = str(kwargs.shop_id) if kwargs.shop_id else ""
+            user_id = str(kwargs.user_id) if kwargs.user_id else ""
+            shop_name = str(kwargs.shop_name) if kwargs.shop_name else ""
+
             nickname = str(kwargs.nickname) if kwargs.nickname else ""
             # 对于客服消息 (outbound)，nickname 通常为空，从数据库查找该会话的买家昵称
             if not nickname:
@@ -129,9 +133,6 @@ class MessagePersistenceService:
             content = str(context.content) if context.content else ""
             msg_type = str(kwargs.msg_type) if hasattr(kwargs, 'msg_type') and kwargs.msg_type else None
             context_type_str = str(context.type.value) if hasattr(context.type, 'value') else str(context.type)
-            shop_id = str(kwargs.shop_id) if kwargs.shop_id else ""
-            user_id = str(kwargs.user_id) if kwargs.user_id else ""
-            shop_name = str(kwargs.shop_name) if kwargs.shop_name else ""
 
             # 解析时间戳
             ts_str = str(kwargs.timestamp) if kwargs.timestamp else None
@@ -173,7 +174,10 @@ class MessagePersistenceService:
                 session.commit()
 
                 msg_dict = self._record_to_dict(record)
-                logger.debug(f"持久化入站消息: buyer={buyer_uid}, dir={direction}, source={reply_source}")
+                if direction == "outbound" and reply_source == "staff":
+                    logger.info(f"持久化客服消息(网页端回复): buyer={buyer_uid}, shop={shop_id}, content={content[:50]}")
+                else:
+                    logger.debug(f"持久化入站消息: buyer={buyer_uid}, dir={direction}, source={reply_source}")
                 return msg_dict
             except Exception as e:
                 session.rollback()
