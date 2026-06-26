@@ -12,7 +12,7 @@ import json
 from typing import Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal, QRect
-from PyQt6.QtGui import QPixmap, QPainter, QColor, QPainterPath, QFont, QPen
+from PyQt6.QtGui import QPixmap, QPainter, QColor, QPainterPath, QFont
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QLabel, QSizePolicy
 from qfluentwidgets import isDarkTheme
 
@@ -54,6 +54,9 @@ class VideoPreviewWidget(QFrame):
 
     def _init_ui(self):
         self.setFrameShape(QFrame.Shape.NoFrame)
+        # 拦截子 widget 的鼠标事件：不让 QLabel 处理链接点击
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -63,12 +66,14 @@ class VideoPreviewWidget(QFrame):
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_label.setFixedSize(self.LOADING_W, self.LOADING_H)
         self._image_label.setText("加载中...")
+        # 阻止 QLabel 处理链接点击（防止弹出浏览器）
+        self._image_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         layout.addWidget(self._image_label)
 
-        # 降级链接 (默认隐藏)
+        # 降级链接 (默认隐藏) — 不使用 HTML <a> 标签，纯文本+样式模拟链接
         self._fallback_label = QLabel(self)
         self._fallback_label.setWordWrap(True)
-        self._fallback_label.setOpenExternalLinks(True)
+        self._fallback_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self._fallback_label.setMaximumWidth(self.MAX_THUMB_WIDTH)
         self._fallback_label.hide()
         layout.addWidget(self._fallback_label)
@@ -193,13 +198,21 @@ class VideoPreviewWidget(QFrame):
         if url and url != self._cover_url:
             return
 
-        # 隐藏封面 label，显示降级链接
+        # 隐藏封面 label，显示降级文本（纯文本+蓝色下划线样式模拟链接，不弹出浏览器）
         self._image_label.hide()
-        self._fallback_label.setText(
-            f'<a href="{self._url}" style="color: #007bff;">查看视频</a>'
-        )
+        self._fallback_label.setText("▶ 查看视频")
+        self._fallback_label.setToolTip(self._url)
+        self._apply_fallback_style()
         self._fallback_label.show()
         self.setFixedSize(120, 40)
+
+    def _apply_fallback_style(self):
+        """设置降级链接样式（蓝色下划线）"""
+        dark = isDarkTheme()
+        link_color = "#5b9bd5" if dark else "#007bff"
+        self._fallback_label.setStyleSheet(
+            f"color: {link_color}; text-decoration: underline; font-size: 10px;"
+        )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -213,3 +226,6 @@ class VideoPreviewWidget(QFrame):
         self._image_label.setStyleSheet(f"color: {loading_color};")
         font = QFont("Microsoft YaHei", 9)
         self._image_label.setFont(font)
+        # 如果降级链接触发过，也更新其样式
+        if self._fallback_label.isVisible():
+            self._apply_fallback_style()

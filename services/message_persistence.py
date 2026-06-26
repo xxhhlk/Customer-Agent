@@ -244,15 +244,14 @@ class MessagePersistenceService:
 
             raw_data = context.kwargs.raw_data if hasattr(context, 'kwargs') and context.kwargs else None
             if not raw_data or not isinstance(raw_data, dict):
-                logger.debug(f"_extract_media_meta: raw_data缺失或非dict, type={type(raw_data).__name__}")
+                logger.info(f"[MEDIA_META] raw_data缺失或非dict, type={type(raw_data).__name__}, context_type={context_type_str}")
                 return None
 
             # raw_data 是完整的 WebSocket 消息 JSON，message 数据在 "message" 键下
             msg_data = raw_data.get("message", raw_data)
             info = msg_data.get("info")
             if not info or not isinstance(info, dict):
-                # 尝试更深层级
-                logger.debug(f"_extract_media_meta: info缺失, raw_keys={list(raw_data.keys())[:5]}")
+                logger.info(f"[MEDIA_META] info缺失, raw_keys={list(raw_data.keys())[:8]}, msg_keys={list(msg_data.keys())[:8] if isinstance(msg_data, dict) else 'not_dict'}, context_type={context_type_str}")
                 return None
 
             meta: Dict[str, Any] = {}
