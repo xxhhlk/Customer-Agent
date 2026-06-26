@@ -69,7 +69,7 @@ htmlcov/
 *.swp
 *.swo
 *~
-
+nul
 # Sublime Text
 *.sublime-project
 *.sublime-workspace
@@ -97,6 +97,9 @@ Desktop.ini
 # ====================
 # 用户数据
 user_data/
+data/
+database/
+temp/
 
 # 临时文件
 temp/
