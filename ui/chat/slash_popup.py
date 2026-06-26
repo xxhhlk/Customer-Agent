@@ -251,7 +251,10 @@ class SlashKnowledgePopup(QListWidget):
         """
         self._pending_query = query
         if not query.strip():
-            # 无关键词时隐藏浮窗
+            # 无关键词时停止防抖定时器 + 隐藏浮窗
+            # 必须停止定时器，否则之前已启动的定时器会在 200ms 后
+            # 用空的 _pending_query 触发搜索 → 返回全部条目 → 孤儿浮窗
+            self._debounce_timer.stop()
             self.hide()
             return
         self._debounce_timer.start(200)
@@ -274,6 +277,10 @@ class SlashKnowledgePopup(QListWidget):
 
     def _on_results(self, results: list):
         """搜索完成，更新浮窗"""
+        # 如果查询已被清空或浮窗已不可见，丢弃过期的异步结果
+        if not self._pending_query.strip():
+            self.hide()
+            return
         self.clear()
         if not results:
             self.hide()
@@ -349,6 +356,16 @@ class SlashKnowledgePopup(QListWidget):
         self.item_selected.emit(content)
         self.hide()
         return True
+
+    def cancel(self):
+        """取消搜索：停止防抖定时器、清空 pending query、隐藏浮窗
+
+        用于 InputArea 退出斜杠模式时清理状态，防止异步搜索
+        在模式退出后仍弹出孤儿浮窗。
+        """
+        self._debounce_timer.stop()
+        self._pending_query = ""
+        self.hide()
 
     def refresh_theme(self):
         """主题变化时刷新样式"""

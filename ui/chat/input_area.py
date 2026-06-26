@@ -120,6 +120,11 @@ class InputArea(QWidget):
             if '\n' in query:
                 self._cancel_slash()
                 return
+            # 如果光标跑到斜杠前面（长按 backspace 快速删除时），
+            # 退出检索模式
+            if pos <= self._slash_start_pos:
+                self._cancel_slash()
+                return
 
             # 触发搜索（空 query 时 popup 内部会 hide）
             self._slash_popup.search(query)
@@ -177,6 +182,7 @@ class InputArea(QWidget):
     def _cancel_slash(self):
         """取消斜杠检索模式"""
         self._slash_active = False
+        self._slash_popup.cancel()
         self._slash_popup.hide()
 
     # ========== 事件处理 ==========
@@ -224,6 +230,17 @@ class InputArea(QWidget):
                 elif key == Qt.Key.Key_Tab:
                     # Tab 也可以确认选择
                     if self._slash_popup.confirm_selection():
+                        return True
+
+            # 兜底：浮窗可见但 _slash_active 已被取消（异步搜索竞态）
+            # ESC 和 Enter 都应关闭孤儿浮窗
+            if self._slash_popup.isVisible() and not self._slash_active:
+                if key == Qt.Key.Key_Escape:
+                    self._slash_popup.hide()
+                    return True
+                elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+                    if not (modifiers & Qt.KeyboardModifier.ShiftModifier):
+                        self._slash_popup.hide()
                         return True
 
             # 常规按键：Enter 发送 / Shift+Enter 换行
