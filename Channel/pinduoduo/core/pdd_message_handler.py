@@ -72,6 +72,10 @@ class MessageHandlerMixin:
             from_uid_log = message_data.get("message", {}).get("from_uid", "unknown")
             self.logger.debug(f"收到消息: type={msg_type}, from_uid={from_uid_log}, shop_id={shop_id}")
 
+            # 临时调试: 记录图片/视频消息的完整原始JSON
+            if msg_type in (1, 14):
+                self.logger.info(f"[MEDIA_DEBUG] type={msg_type}, raw_json={message[:2000]}")
+
             try:
                 pdd_message = PDDChatMessage(message_data)
             except Exception as pdd_error:
