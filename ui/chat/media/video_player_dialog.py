@@ -2,7 +2,7 @@
 视频播放器对话框
 
 - 先下载视频到本地 temp/media_cache/ 再播放
-- 使用 qfluentwidgets VideoWidget + StandardMediaPlayBar
+- 使用 StandardMediaPlayBar（固定底栏）+ QVideoWidget（画面渲染）
 - 支持另存为
 - ESC 关闭
 - 下载进度提示
@@ -15,6 +15,8 @@ from typing import Optional
 import requests
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer
 from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -25,7 +27,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
 )
 from qfluentwidgets import isDarkTheme
-from qfluentwidgets.multimedia import VideoWidget
+from qfluentwidgets.multimedia import StandardMediaPlayBar
 
 from utils.runtime_path import ensure_temp_dir
 
@@ -84,7 +86,7 @@ class VideoDownloadWorker(QThread):
 
 
 class VideoPlayerDialog(QDialog):
-    """视频播放器对话框 — 下载到本地后播放"""
+    """视频播放器对话框 — 下载到本地后播放，固定底栏控制"""
 
     def __init__(self, url: str, parent=None):
         super().__init__(parent)
@@ -103,7 +105,7 @@ class VideoPlayerDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 状态/进度区域
+        # 状态/进度区域（下载时显示，播放时隐藏）
         self._status_layout = QVBoxLayout()
         self._status_layout.setContentsMargins(12, 8, 12, 8)
         self._status_layout.setSpacing(4)
@@ -117,14 +119,21 @@ class VideoPlayerDialog(QDialog):
         self._progress_bar.setValue(0)
         self._status_layout.addWidget(self._progress_bar)
 
-        layout.addLayout(self._status_layout)
+        self._status_container = QVBoxLayout()
+        self._status_container.addLayout(self._status_layout)
+        layout.addLayout(self._status_container)
 
-        # 视频播放区域（下载完成后才显示）
-        self._video_widget = VideoWidget(self)
+        # 视频画面区域（下载完成后才显示）
+        self._video_widget = QVideoWidget(self)
         self._video_widget.hide()
-        layout.addWidget(self._video_widget)
+        layout.addWidget(self._video_widget, 1)  # stretch=1，占满剩余空间
 
-        # 底部工具栏
+        # 固定底栏：播放控制条
+        self._play_bar = StandardMediaPlayBar(self)
+        self._play_bar.hide()
+        layout.addWidget(self._play_bar, 0)  # stretch=0，固定高度
+
+        # 底部工具栏（URL + 另存为 + 关闭）
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(8, 4, 8, 6)
         toolbar.setSpacing(6)
@@ -176,33 +185,35 @@ class VideoPlayerDialog(QDialog):
 
     def _on_download_complete(self, local_path: str):
         """下载完成，切换到播放界面"""
-        self._status_label.setText("视频已就绪")
-        self._status_layout.parentWidget().layout().removeItem(self._status_layout)
-        # 隐藏进度区域
         self._status_label.hide()
         self._progress_bar.hide()
 
-        # 显示视频播放器
+        # 显示视频画面和播放控制条
         self._video_widget.show()
+        self._play_bar.show()
         self._play_local(local_path)
 
     def _play_local(self, local_path: str):
         """播放本地视频文件"""
         url = QUrl.fromLocalFile(local_path)
-        self._video_widget.setVideo(url)
-        self._video_widget.play()
+        # 使用 play_bar 内置的 MediaPlayer，绑定视频输出到 QVideoWidget
+        self._play_bar.player.setVideoOutput(self._video_widget)
+        self._play_bar.player.setSource(url)
+        self._play_bar.play()
 
     def _play_url(self, url: str):
         """直接用网络 URL 播放"""
         self._video_widget.show()
+        self._play_bar.show()
         qurl = QUrl(url)
-        self._video_widget.setVideo(qurl)
-        self._video_widget.play()
+        self._play_bar.player.setVideoOutput(self._video_widget)
+        self._play_bar.player.setSource(qurl)
+        self._play_bar.play()
 
     def _save_as(self):
         """另存视频到用户指定路径"""
         if not self._local_path or not os.path.exists(self._local_path):
-            # 下载中或下载失败，尝试从 URL 下载
+            # 下载中或下载失败
             if self._local_path is None:
                 self._status_label.setText("视频尚未下载完成，请稍候...")
             return
@@ -227,8 +238,7 @@ class VideoPlayerDialog(QDialog):
     def closeEvent(self, event):
         """关闭时停止播放和清理 worker"""
         try:
-            if self._video_widget:
-                self._video_widget.stop()
+            self._play_bar.stop()
         except Exception:
             pass
         if self._download_worker and self._download_worker.isRunning():
