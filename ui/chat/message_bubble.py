@@ -100,7 +100,9 @@ class MessageBubble(QFrame):
             self._content_label = self._content_widget  # 兼容别名
         else:
             content_label = QLabel(content)
+            content_label.setObjectName("ContentLabel")
             content_label.setWordWrap(True)
+            content_label.setTextFormat(Qt.TextFormat.PlainText)  # 防止HTML内联样式覆盖颜色
             content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             content_label.setMaximumWidth(420)
             content_font = QFont("Microsoft YaHei", 10)
@@ -169,18 +171,37 @@ class MessageBubble(QFrame):
             bg = self.OUTBOUND_BG_DARK if dark else self.OUTBOUND_BG_LIGHT
             fg = self.OUTBOUND_TEXT_DARK if dark else self.OUTBOUND_TEXT_LIGHT
 
-        self._bubble.setStyleSheet(f"""
-            #BubbleContainer {{
-                background-color: {bg};
-                border-radius: 10px;
-            }}
-        """)
-        # 仅对文本 QLabel 设置颜色 (图片 widget 有自己的主题方法)
+        # 一次性设置气泡背景 + 文字颜色，避免两次 setStyleSheet 的竞态
         context_type = self.msg_data.get("context_type", "text") or "text"
         if context_type == "text":
-            self._content_label.setStyleSheet(f"color: {fg};")
+            # 合并到一条 stylesheet，用 #ID 选择器同时控制背景和文字
+            self._bubble.setStyleSheet(f"""
+                #BubbleContainer {{
+                    background-color: {bg};
+                    border-radius: 10px;
+                }}
+                #ContentLabel {{
+                    color: {fg};
+                    background-color: transparent;
+                }}
+            """)
+            # 确保内容 label 继承样式（清除可能存在的旧内联样式）
+            self._content_label.setStyleSheet("")
         elif hasattr(self._content_widget, "apply_theme"):
+            self._bubble.setStyleSheet(f"""
+                #BubbleContainer {{
+                    background-color: {bg};
+                    border-radius: 10px;
+                }}
+            """)
             self._content_widget.apply_theme()
+        else:
+            self._bubble.setStyleSheet(f"""
+                #BubbleContainer {{
+                    background-color: {bg};
+                    border-radius: 10px;
+                }}
+            """)
 
     def changeEvent(self, event):
         """监听主题切换"""
