@@ -188,6 +188,15 @@ class MessagePersistenceService:
 
             reply_source = "staff" if direction == "outbound" else None
 
+            # 当 context_type 为 mall_cs 时，检查 raw_data 中的实际消息类型
+            # 人工客服在其他客户端发送的图片/视频消息也会被标记为 mall_cs，
+            # 需要还原为 image/video 以便 UI 正确渲染内联预览
+            if context_type_str == "mall_cs":
+                detected_type = self._detect_media_type_from_raw(context)
+                if detected_type:
+                    context_type_str = detected_type
+                    logger.info(f"[MEDIA_META] mall_cs 消息检测到媒体类型: {detected_type}")
+
             # 从 raw_data 提取媒体元数据（如视频封面 URL）
             media_meta = self._extract_media_meta(context, context_type_str)
 
@@ -234,6 +243,32 @@ class MessagePersistenceService:
 
         except Exception as e:
             logger.warning(f"save_inbound_message 异常: {e}")
+            return None
+
+    def _detect_media_type_from_raw(self, context) -> Optional[str]:
+        """从 raw_data 中检测实际消息类型（图片/视频）
+
+        当 context_type 被标记为 mall_cs 时，人工客服可能发送了图片或视频，
+        需要从 raw_data.message.type 中检测实际类型。
+        """
+        try:
+            raw_data = context.kwargs.raw_data if hasattr(context, 'kwargs') and context.kwargs else None
+            if not raw_data or not isinstance(raw_data, dict):
+                return None
+
+            msg_data = raw_data.get("message", raw_data)
+            if not isinstance(msg_data, dict):
+                return None
+
+            msg_type = msg_data.get("type")
+            # PDDMsgType: IMAGE=1, VIDEO=14
+            if msg_type == 1:
+                return "image"
+            elif msg_type == 14:
+                return "video"
+            return None
+        except Exception as e:
+            logger.debug(f"_detect_media_type_from_raw 异常: {e}")
             return None
 
     def _extract_media_meta(self, context, context_type_str: str) -> Optional[str]:
