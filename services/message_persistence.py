@@ -5,6 +5,7 @@
 
 from typing import Optional, Dict, Any, List, Set
 from datetime import datetime
+import json
 import uuid
 
 from bridge.context import ContextType
@@ -148,6 +149,9 @@ class MessagePersistenceService:
 
             reply_source = "staff" if direction == "outbound" else None
 
+            # 从 raw_data 提取媒体元数据（如视频封面 URL）
+            media_meta = self._extract_media_meta(context, context_type_str)
+
             db_manager = get_db_manager()
             session: Session = db_manager.Session()
             try:
@@ -169,6 +173,7 @@ class MessagePersistenceService:
                     reply_source=reply_source,
                     timestamp=timestamp,
                     created_at=datetime.now(),
+                    media_meta=media_meta,
                 )
                 session.add(record)
                 session.commit()
@@ -188,6 +193,61 @@ class MessagePersistenceService:
 
         except Exception as e:
             logger.warning(f"save_inbound_message 异常: {e}")
+            return None
+
+    def _extract_media_meta(self, context, context_type_str: str) -> Optional[str]:
+        """从 context.kwargs.raw_data 提取媒体元数据
+
+        对于视频消息，提取 info.preview.url（封面帧 URL）和 info.duration（时长）。
+        对于图片消息，提取 info.width/height/image_size。
+        返回 JSON 字符串，如 '{"cover_url": "...", "duration": 10}'
+        """
+        try:
+            if context_type_str not in ("video", "image"):
+                return None
+
+            raw_data = context.kwargs.raw_data if hasattr(context, 'kwargs') and context.kwargs else None
+            if not raw_data or not isinstance(raw_data, dict):
+                return None
+
+            # raw_data 是完整的 WebSocket 消息 JSON，message 数据在 "message" 键下
+            msg_data = raw_data.get("message", raw_data)
+            info = msg_data.get("info")
+            if not info or not isinstance(info, dict):
+                return None
+
+            meta: Dict[str, Any] = {}
+
+            if context_type_str == "video":
+                # 视频封面帧
+                preview = info.get("preview")
+                if preview and isinstance(preview, dict):
+                    cover_url = preview.get("url")
+                    if cover_url:
+                        meta["cover_url"] = cover_url
+                    preview_size = preview.get("size")
+                    if preview_size:
+                        meta["cover_size"] = preview_size
+                # 视频时长
+                duration = info.get("duration")
+                if duration is not None:
+                    meta["duration"] = duration
+            elif context_type_str == "image":
+                # 图片尺寸
+                w = info.get("width")
+                h = info.get("height")
+                if w and h:
+                    meta["width"] = w
+                    meta["height"] = h
+                img_size = info.get("image_size")
+                if img_size is not None:
+                    meta["file_size"] = img_size
+
+            if meta:
+                return json.dumps(meta, ensure_ascii=False)
+            return None
+        except Exception as e:
+            logger.debug(f"提取媒体元数据失败: {e}")
             return None
 
     def _get_buyer_nickname(self, shop_id: str, buyer_uid: str) -> Optional[str]:
@@ -443,6 +503,7 @@ class MessagePersistenceService:
             "context_type": record.context_type,
             "direction": record.direction,
             "reply_source": record.reply_source,
+            "media_meta": record.media_meta,
             "timestamp": record.timestamp.isoformat() if record.timestamp else "",
             "created_at": record.created_at.isoformat() if record.created_at else "",
         }

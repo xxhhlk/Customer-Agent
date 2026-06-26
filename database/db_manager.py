@@ -65,6 +65,9 @@ class DatabaseManager:
         # 再次创建所有表（确保 keywords 表存在）
         Base.metadata.create_all(self.engine)
 
+        # 自动迁移：为 chat_message_records 表添加 media_meta 列（如果不存在）
+        self._auto_migrate_media_meta()
+
         self._initialized = True
         self.logger = get_logger()
         # 初始化数据库
@@ -94,6 +97,19 @@ class DatabaseManager:
                 print(f"[DatabaseManager] 设置 PRAGMA busy_timeout 失败: {e}")
             finally:
                 cursor.close()
+
+    def _auto_migrate_media_meta(self):
+        """自动迁移：为 chat_message_records 表添加 media_meta 列（如果不存在）"""
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text("PRAGMA table_info(chat_message_records)"))
+                columns = [row[1] for row in result.fetchall()]
+                if 'media_meta' not in columns:
+                    conn.execute(text("ALTER TABLE chat_message_records ADD COLUMN media_meta TEXT"))
+                    conn.commit()
+                    print("[DatabaseManager] 已添加 media_meta 列到 chat_message_records 表")
+        except Exception as e:
+            print(f"[DatabaseManager] media_meta 迁移检查异常: {e}")
 
     def init_db(self):
         """初始化渠道信息"""

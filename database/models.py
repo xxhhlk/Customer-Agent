@@ -124,6 +124,7 @@ class ChatMessageRecord(Base):
     direction: Mapped[str] = mapped_column(String(20), nullable=False, default='inbound',
                                             comment='inbound=买家发来, outbound=客服发出')
     reply_source: Mapped[Optional[str]] = mapped_column(String(50), comment='回复来源: ai/keyword/staff/fallback/manual')
+    media_meta: Mapped[Optional[str]] = mapped_column(Text, comment='媒体元数据JSON，如视频封面URL、时长等')
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, comment='消息时间')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 

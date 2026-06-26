@@ -91,6 +91,13 @@ class MessageBubble(QFrame):
             self._content_widget = ImagePreviewWidget(content, self._bubble)
             self._content_widget.clicked.connect(self._on_image_clicked)
             self._content_label = self._content_widget  # 兼容别名
+        elif context_type == "video":
+            from ui.chat.media.video_preview_widget import VideoPreviewWidget
+
+            media_meta = self.msg_data.get("media_meta")
+            self._content_widget = VideoPreviewWidget(content, media_meta, self._bubble)
+            self._content_widget.clicked.connect(self._on_video_clicked)
+            self._content_label = self._content_widget  # 兼容别名
         else:
             content_label = QLabel(content)
             content_label.setWordWrap(True)
@@ -144,6 +151,13 @@ class MessageBubble(QFrame):
 
         self._full_viewer = FullImageViewer(url, self.window())
         self._full_viewer.show()
+
+    def _on_video_clicked(self, url: str):
+        """点击视频 → 打开视频播放器"""
+        from ui.chat.media.video_player_dialog import VideoPlayerDialog
+
+        self._video_player = VideoPlayerDialog(url, self.window())
+        self._video_player.show()
 
     def _apply_theme(self):
         """应用主题颜色"""
