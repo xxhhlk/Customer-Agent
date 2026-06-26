@@ -670,6 +670,7 @@ class EnhancedMessageConsumer:
             self.staff_reply_manager.wait_for_staff_reply(from_uid, staff_reply_event_id, timeout=staff_wait_seconds)
         )
 
+        _logged_wait_for_ai = False  # 避免日志刷屏：只在首次进入"等待AI完成"分支时打印一次
         try:
             while True:
                 done, pending = await asyncio.wait(
@@ -724,7 +725,9 @@ class EnhancedMessageConsumer:
                         return
                     else:
                         # 超出取消窗口 → 新消息放回队列，继续等AI
-                        self.logger.debug(f"AI processing {elapsed:.1f}s, wait for completion")
+                        if not _logged_wait_for_ai:
+                            self.logger.info(f"AI processing {elapsed:.1f}s (>{self.CANCEL_WINDOW}s), wait for completion")
+                            _logged_wait_for_ai = True
                         await self._user_queues[user_key].put(new_msg)
                         queue_task = asyncio.create_task(self._user_queues[user_key].get())
 
