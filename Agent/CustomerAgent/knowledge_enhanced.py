@@ -380,7 +380,7 @@ class LanceDbWithProgress(LanceDb):
 
         search_results: List[Document] = []
         try:
-            for item in results:
+            for _, item in results.iterrows():
                 payload = _json.loads(item["payload"])
                 doc = Document(
                     name=payload["name"],
@@ -392,7 +392,7 @@ class LanceDbWithProgress(LanceDb):
                     content_id=payload.get("content_id"),
                 )
                 # 关键修复：设置 id 为 LanceDB id 列的实际值
-                doc.id = item.get("id", "")
+                doc.id = item.get("id", "") if isinstance(item.get("id", ""), str) else str(item.get("id", ""))
                 search_results.append(doc)
         except Exception:
             logger.exception("Error building search results")
