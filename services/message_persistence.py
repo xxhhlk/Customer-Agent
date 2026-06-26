@@ -1,16 +1,25 @@
 """
 消息持久化服务
 将实时消息存入 SQLite 数据库，通过 pyqtSignal 线程安全地通知 UI 更新。
+
+**线程安全设计**：
+notify_new_message 会被 AutoReplyThread 的 asyncio 协程调用（非主 Qt 线程），
+直接 emit pyqtSignal 在特定时序下会导致 C 层 access violation。
+
+解决方案：notify_new_message 只将消息写入线程安全的 deque 缓冲区，
+由主线程的 QTimer 定期轮询并批量 emit 信号。
 """
 
 from typing import Optional, Dict, Any, List, Set
 from datetime import datetime
 import json
 import uuid
+import threading
+from collections import deque
 
 from bridge.context import ContextType
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
@@ -43,8 +52,38 @@ class MessagePersistenceService:
             return
         self._signals = MessagePersistenceSignals()
         self._seen_msg_ids: set = set()
+        # 跨线程消息通知缓冲区
+        self._notify_buffer: deque = deque(maxlen=200)
+        self._notify_lock = threading.Lock()
+        self._notify_timer: Optional[QTimer] = None
+        self._start_notify_timer()
         self._initialized = True
         logger.info("MessagePersistenceService 初始化完成")
+
+    def _start_notify_timer(self):
+        """启动主线程定时器，定期从缓冲区取消息并 emit 信号"""
+        try:
+            self._notify_timer = QTimer(self._signals)
+            self._notify_timer.setInterval(50)  # 50ms 轮询
+            self._notify_timer.timeout.connect(self._flush_notify_buffer)
+            self._notify_timer.start()
+        except Exception as e:
+            logger.warning(f"启动消息通知定时器失败，将退化为直接 emit: {e}")
+            self._notify_timer = None
+
+    def _flush_notify_buffer(self):
+        """从缓冲区批量取消息并在主线程 emit"""
+        if not self._notify_buffer:
+            return
+        batch = []
+        with self._notify_lock:
+            while self._notify_buffer and len(batch) < 20:
+                batch.append(self._notify_buffer.popleft())
+        for msg_dict in batch:
+            try:
+                self._signals.new_message.emit(msg_dict)
+            except Exception:
+                pass  # emit 失败时静默丢弃
 
     @property
     def signals(self) -> MessagePersistenceSignals:
@@ -477,9 +516,19 @@ class MessagePersistenceService:
     # ==================== 工具方法 ====================
 
     def notify_new_message(self, msg_dict: Dict[str, Any]):
-        """通过信号通知 UI 有新消息（线程安全）"""
+        """通过信号通知 UI 有新消息（线程安全）
+
+        从任意线程调用都是安全的：消息先写入线程安全缓冲区，
+        由主线程 QTimer 定期批量 emit 信号。
+        """
         try:
-            self._signals.new_message.emit(msg_dict)
+            if self._notify_timer is not None:
+                # 使用缓冲区模式（推荐）
+                with self._notify_lock:
+                    self._notify_buffer.append(msg_dict)
+            else:
+                # 定时器不可用时退化为直接 emit
+                self._signals.new_message.emit(msg_dict)
         except Exception as e:
             logger.warning(f"通知新消息失败: {e}")
 

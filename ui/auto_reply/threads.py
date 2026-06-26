@@ -88,11 +88,16 @@ class AutoReplyThread(QThread):
                 self.channel.loop = self.loop
 
                 # 定义成功和失败的回调函数
+                # 注意：这些回调在 asyncio 事件循环中被调用（非主 Qt 线程），
+                # 不能直接 emit pyqtSignal，需要通过 QTimer.singleShot
+                # 将 emit 操作 marshal 回主线程
                 def on_success():
-                    self.connection_success.emit()
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, self.connection_success.emit)
 
                 def on_failure(error_msg):
-                    self.connection_failed.emit(error_msg)
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda: self.connection_failed.emit(error_msg))
 
                 # 启动引擎，并传递回调
                 task = self.loop.create_task(

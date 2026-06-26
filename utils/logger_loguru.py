@@ -178,28 +178,80 @@ def get_business_logger(module_name: str) -> BusinessLogger:
 
 # UI集成部分
 class UILogHandler(QObject):  # type: ignore[misc]
-    """UI日志处理器，兼容现有LogHandler接口"""
+    """UI日志处理器，兼容现有LogHandler接口
+
+    **线程安全设计**：
+    loguru 的 sink 会被任意线程调用（包括 AutoReplyThread 的 asyncio 事件循环），
+    直接从非主线程 emit pyqtSignal 在高频场景下会导致 C 层 access violation。
+
+    解决方案：sink 只将日志写入线程安全的 deque 缓冲区，
+    由主线程的 QTimer 定期轮询并批量 emit 信号。
+    """
 
     log_received = pyqtSignal(str, str, object)  # level, message, record
+
+    # 缓冲区最大长度，超出后丢弃最旧的日志
+    _MAX_BUFFER = 500
+    # 轮询间隔（毫秒）
+    _POLL_INTERVAL_MS = 50
+    # 每次轮询最多处理的日志条数，避免主线程卡顿
+    _BATCH_SIZE = 30
 
     def __init__(self):
         super().__init__()
         self.handler_id = None
+        import threading
+        from collections import deque
+        self._buffer: deque = deque(maxlen=self._MAX_BUFFER)
+        self._buffer_lock = threading.Lock()
+        self._timer: Optional["QTimer"] = None
         self._install_loguru_patch()
+        self._install_timer()
 
     def _install_loguru_patch(self):
         """安装loguru拦截器"""
-        # 创建一个自定义的处理器来拦截日志
         def ui_sink(message):
             # 解析loguru消息以提取信息
             record = message.record
             level = record["level"].name
             msg = record["message"]
-            # 发送信号
-            self.log_received.emit(level, msg, record)
+            # 写入线程安全缓冲区，不直接 emit
+            try:
+                with self._buffer_lock:
+                    self._buffer.append((level, msg, record))
+            except Exception:
+                pass  # 缓冲区操作失败时静默丢弃
 
         # 安装UI处理器
         self.handler_id = logger.add(ui_sink, level="DEBUG", catch=True)
+
+    def _install_timer(self):
+        """安装主线程定时器，定期从缓冲区取日志并 emit"""
+        try:
+            from PyQt6.QtCore import QTimer
+            self._timer = QTimer(self)
+            self._timer.setInterval(self._POLL_INTERVAL_MS)
+            self._timer.timeout.connect(self._flush_buffer)
+            self._timer.start()
+        except Exception:
+            # QTimer 初始化失败（如非 GUI 线程构造），退化为直接 emit
+            self._timer = None
+
+    def _flush_buffer(self):
+        """从缓冲区批量取日志并在主线程 emit"""
+        if not self._buffer:
+            return
+        batch = []
+        with self._buffer_lock:
+            count = 0
+            while self._buffer and count < self._BATCH_SIZE:
+                batch.append(self._buffer.popleft())
+                count += 1
+        for level, msg, record in batch:
+            try:
+                self.log_received.emit(level, msg, record)
+            except Exception:
+                pass  # emit 失败时静默丢弃，防止级联崩溃
 
     def emit(self, record):
         """为了兼容性保留"""
@@ -211,6 +263,9 @@ class UILogHandler(QObject):  # type: ignore[misc]
 
     def uninstall(self):
         """卸载处理器"""
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
         if self.handler_id:
             logger.remove(self.handler_id)
             self.handler_id = None
