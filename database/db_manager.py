@@ -111,6 +111,25 @@ class DatabaseManager:
         except Exception as e:
             print(f"[DatabaseManager] media_meta 迁移检查异常: {e}")
 
+        # 修正历史 mall_cs 图片/视频消息的 context_type
+        try:
+            with self.engine.connect() as conn:
+                # 图片：content 以图片扩展名结尾
+                for ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'):
+                    conn.execute(text(
+                        "UPDATE chat_message_records SET context_type='image' "
+                        "WHERE context_type='mall_cs' AND LOWER(content) LIKE :ext"
+                    ), {"ext": f"%{ext}"})
+                # 视频
+                for ext in ('.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp', '.m4v'):
+                    conn.execute(text(
+                        "UPDATE chat_message_records SET context_type='video' "
+                        "WHERE context_type='mall_cs' AND LOWER(content) LIKE :ext"
+                    ), {"ext": f"%{ext}"})
+                conn.commit()
+        except Exception as e:
+            print(f"[DatabaseManager] 修正 mall_cs 媒体类型异常: {e}")
+
     def init_db(self):
         """初始化渠道信息"""
         channel_name = "pinduoduo"

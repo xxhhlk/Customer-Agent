@@ -97,6 +97,14 @@ class MessageBubble(QFrame):
         content = self.msg_data.get("content") or ""
         context_type = self.msg_data.get("context_type", "text") or "text"
 
+        # 对历史 mall_cs 消息，通过 content URL 后缀推断实际媒体类型
+        # （旧消息 raw_data 未持久化，无法从 DB 修正，在 UI 层兼容）
+        if context_type not in ("image", "video"):
+            detected = self._detect_media_type_from_content(content)
+            if detected:
+                context_type = detected
+                self.msg_data["context_type"] = context_type  # 同步给 _apply_theme
+
         if context_type == "image":
             from ui.chat.media.image_preview_widget import ImagePreviewWidget
 
@@ -159,8 +167,24 @@ class MessageBubble(QFrame):
 
         self._apply_theme()
 
+    # -- 历史消息媒体类型推断 --
+    # PDD 图片消息 content 是 URL，以 .jpg/.jpeg/.png/.gif/.webp 结尾
+    # PDD 视频消息 content 是 URL，以 .mp4/.mov/.avi/.mkv 结尾
+    _IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
+    _VIDEO_EXTS = ('.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp', '.m4v')
+
+    def _detect_media_type_from_content(self, content: str) -> str | None:
+        """通过 content URL 后缀推断媒体类型，仅对 http(s) URL 有效"""
+        if not content or not content.startswith(('http://', 'https://')):
+            return None
+        url_lower = content.split('?')[0].split('#')[0].lower()
+        if url_lower.endswith(self._VIDEO_EXTS):
+            return "video"
+        if url_lower.endswith(self._IMAGE_EXTS):
+            return "image"
+        return None
+
     def _on_image_clicked(self, url: str):
-        """点击图片 → 打开全屏查看器"""
         from ui.chat.media.full_image_viewer import FullImageViewer
 
         self._full_viewer = FullImageViewer(url, self.window())
