@@ -5,13 +5,16 @@
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy, QTextEdit,
+    QApplication, QMenu,
 )
-from PyQt6.QtGui import QFont, QTextOption
+from PyQt6.QtGui import QFont, QTextOption, QAction
 from qfluentwidgets import isDarkTheme, CaptionLabel
 
 
 class MessageBubble(QFrame):
     """消息气泡 - 左对齐（买家）或右对齐（客服）"""
+
+    forward_requested = pyqtSignal(dict)  # 转发消息请求，携带 msg_data
 
     # 颜色常量
     INBOUND_BG_LIGHT = "#e8e8e8"
@@ -167,6 +170,48 @@ class MessageBubble(QFrame):
 
         self._apply_theme()
 
+        # 右键菜单
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+
+    def _show_context_menu(self, pos):
+        """显示右键菜单 — 复制消息 / 转发消息"""
+        menu = QMenu(self)
+
+        content = self.msg_data.get("content", "")
+        context_type = self.msg_data.get("context_type", "text") or "text"
+
+        if content:
+            copy_action = QAction("复制消息", self)
+            copy_action.triggered.connect(self._copy_content)
+            menu.addAction(copy_action)
+
+        # 图片/视频消息：额外提供「复制链接」
+        if context_type in ("image", "video") and content.startswith(("http://", "https://")):
+            copy_url_action = QAction("复制链接", self)
+            copy_url_action.triggered.connect(self._copy_content)
+            menu.addAction(copy_url_action)
+
+        menu.addSeparator()
+
+        forward_action = QAction("转发消息", self)
+        forward_action.triggered.connect(self._on_forward)
+        menu.addAction(forward_action)
+
+        menu.exec(self.mapToGlobal(pos))
+
+    def _copy_content(self):
+        """复制消息内容到剪贴板"""
+        content = self.msg_data.get("content", "")
+        if content:
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(content)
+
+    def _on_forward(self):
+        """触发转发请求"""
+        self.forward_requested.emit(self.msg_data)
+
     # -- 历史消息媒体类型推断 --
     # PDD 图片消息 content 是 URL，以 .jpg/.jpeg/.png/.gif/.webp 结尾
     # PDD 视频消息 content 是 URL，以 .mp4/.mov/.avi/.mkv 结尾
@@ -218,7 +263,7 @@ class MessageBubble(QFrame):
                 }}
             """)
             if hasattr(self._content_widget, "apply_theme"):
-                self._content_widget.apply_theme()
+                self._content_widget.apply_theme()  # type: ignore[union-attr]
         else:
             # 文本类消息（text / mall_cs / emotion / goods_card 等）：
             # 气泡背景设在 bubble 上，文字颜色直接设在 content_label 自身上，

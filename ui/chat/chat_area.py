@@ -11,6 +11,7 @@ from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel, isDarkThem
 
 from ui.chat.message_bubble import MessageBubble
 from ui.chat.input_area import InputArea
+from ui.chat.forward_dialog import ForwardDialog
 
 
 class _MessageLoader(QThread):
@@ -37,6 +38,7 @@ class ChatAreaPanel(QWidget):
     """聊天区域 - 头部 + 消息列表 + 输入框"""
 
     send_manual_reply = pyqtSignal(str, str, str, str)  # shop_id, user_id, text, buyer_uid
+    forward_message = pyqtSignal(dict, str)  # msg_data, target_buyer_uid
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -149,6 +151,7 @@ class ChatAreaPanel(QWidget):
             # 渲染气泡
             for msg in messages:
                 bubble = MessageBubble(msg)
+                self._connect_bubble_signal(bubble)
                 self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
 
             self.input_area.set_enabled(True)
@@ -171,6 +174,7 @@ class ChatAreaPanel(QWidget):
             return
 
         bubble = MessageBubble(msg_data)
+        self._connect_bubble_signal(bubble)
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
         QTimer.singleShot(50, self._scroll_to_bottom)
 
@@ -210,6 +214,21 @@ class ChatAreaPanel(QWidget):
             text,
             self._current_buyer_uid,
         )
+
+    def _connect_bubble_signal(self, bubble: MessageBubble):
+        """连接 bubble 的转发信号"""
+        bubble.forward_requested.connect(self._on_forward_requested)
+
+    def _on_forward_requested(self, msg_data: dict):
+        """右键点击「转发消息」→ 弹出目标选择弹窗"""
+        shop_id = self._current_shop_id or msg_data.get("shop_id", "")
+        exclude_uid = self._current_buyer_uid or msg_data.get("buyer_uid", "")
+
+        dlg = ForwardDialog(shop_id, exclude_uid, self)
+        dlg.selected.connect(
+            lambda target_uid, _nickname: self.forward_message.emit(msg_data, target_uid)
+        )
+        dlg.exec()
 
     def _scroll_to_bottom(self):
         """滚动到底部"""

@@ -182,6 +182,7 @@ class ChatUI(QFrame):
         # 右侧：聊天区域
         self.chat_area = ChatAreaPanel()
         self.chat_area.send_manual_reply.connect(self._send_manual_reply)
+        self.chat_area.forward_message.connect(self._on_forward_message)
         splitter.addWidget(self.chat_area)
 
         # 初始比例 1:3
@@ -270,6 +271,80 @@ class ChatUI(QFrame):
                 logger.warning(f"发送手动回复失败: {result}")
         except Exception as e:
             logger.error(f"发送手动回复异常: {e}")
+
+    def _on_forward_message(self, msg_data: dict, target_buyer_uid: str):
+        """转发消息到目标会话"""
+        shop_id = msg_data.get("shop_id", "")
+        user_id = msg_data.get("user_id", "")
+        content = msg_data.get("content", "")
+        context_type = msg_data.get("context_type", "text") or "text"
+
+        if not shop_id or not user_id or not content:
+            logger.warning("转发消息缺少必要参数")
+            return
+
+        class _ForwardWorker(QThread):
+            done = pyqtSignal(bool, str)  # success, error_msg
+
+            def __init__(self, sid, uid, target_uid, cnt, ctx_type):
+                super().__init__()
+                self._sid = sid
+                self._uid = uid
+                self._target_uid = target_uid
+                self._cnt = cnt
+                self._ctx_type = ctx_type
+
+            def run(self):
+                try:
+                    from Channel.pinduoduo.utils.API.send_message import SendMessage
+                    sender = SendMessage(str(self._sid), str(self._uid))
+
+                    if self._ctx_type == "image":
+                        result = sender.send_image(str(self._target_uid), self._cnt)
+                    elif self._ctx_type == "video":
+                        # 视频消息转发时发送视频URL作为文本
+                        result = sender.send_text(str(self._target_uid), self._cnt)
+                    elif self._ctx_type == "goods_card":
+                        # 商品卡片尝试提取 goods_id
+                        try:
+                            import json
+                            meta = json.loads(self._cnt) if self._cnt.startswith("{") else {}
+                            goods_id = meta.get("goods_id", self._cnt)
+                            result = sender.send_mallGoodsCard(str(self._target_uid), str(goods_id))
+                        except Exception:
+                            result = sender.send_text(str(self._target_uid), self._cnt)
+                    else:
+                        result = sender.send_text(str(self._target_uid), self._cnt)
+
+                    if isinstance(result, dict) and result.get("success"):
+                        # 持久化
+                        try:
+                            from services.message_persistence import message_persistence_service
+                            msg_dict = message_persistence_service.save_outbound_message(
+                                shop_id=self._sid,
+                                user_id=self._uid,
+                                buyer_uid=self._target_uid,
+                                reply_content=self._cnt,
+                                reply_source="manual",
+                            )
+                            if msg_dict:
+                                message_persistence_service.notify_new_message(msg_dict)
+                        except Exception:
+                            pass
+                        self.done.emit(True, "")
+                    else:
+                        self.done.emit(False, str(result))
+                except Exception as e:
+                    self.done.emit(False, str(e))
+
+        worker = _ForwardWorker(shop_id, user_id, target_buyer_uid, content, context_type)
+        worker.done.connect(
+            lambda success, err: logger.info(f"转发消息: success={success}, err={err}")
+            if not success else None
+        )
+        worker.start()
+        # 保持引用防止 GC
+        self._forward_worker = worker
 
     def cleanup(self):
         """清理资源"""
