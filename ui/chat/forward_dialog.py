@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QFrame,
 )
 from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QMargins
 from qfluentwidgets import LineEdit, PrimaryPushButton, PushButton, BodyLabel, isDarkTheme
 
 
@@ -153,7 +154,7 @@ class ForwardDialog(QDialog):
                 item = QListWidgetItem(display)
                 item.setData(Qt.ItemDataRole.UserRole, uid)
                 item.setData(Qt.ItemDataRole.UserRole + 1, nickname)
-                item.setSizeHint(item.sizeHint().grownBy(0, 4, 0, 4))
+                item.setSizeHint(item.sizeHint().grownBy(QMargins(0, 4, 0, 4)))
                 self.list_widget.addItem(item)
 
         self.list_widget.blockSignals(False)
