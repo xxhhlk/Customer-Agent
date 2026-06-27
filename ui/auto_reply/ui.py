@@ -804,7 +804,7 @@ class CookiePrecheckThread(QThread):
         except Exception as e:
             self.logger.error(f"冷启动 cookie 预检失败: {e}")
         finally:
-            QTimer.singleShot(0, self.precheck_complete.emit)
+            self.precheck_complete.emit()
 
 
 __all__ = ['AutoReplyUI', 'CookiePrecheckThread']
