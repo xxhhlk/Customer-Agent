@@ -23,8 +23,10 @@ class _TargetLoader(QThread):
     def run(self):
         try:
             from services.message_persistence import message_persistence_service
+            # 空字符串会让 SQL WHERE c.shop_id = "" 匹配不到任何记录，转为 None
+            sid = self._shop_id if self._shop_id else None
             convs = message_persistence_service.get_conversations(
-                shop_id=self._shop_id, limit=200
+                shop_id=sid, limit=200
             )
             result = []
             for c in convs:
@@ -56,6 +58,7 @@ class ForwardDialog(QDialog):
         self._exclude_uid = exclude_uid
         self._loader: _TargetLoader | None = None
         self._all_items: list[tuple[str, str, str, int]] = []  # [(uid, nick, shop, count), ...]
+        self._data_loaded = False
 
         self._init_ui()
         self._apply_theme()
@@ -129,6 +132,7 @@ class ForwardDialog(QDialog):
     def _on_targets_loaded(self, items: list):
         """会话列表加载完成"""
         self._all_items = items
+        self._data_loaded = True
         self._rebuild_list(items)
 
     def _rebuild_list(self, items: list):
@@ -155,7 +159,9 @@ class ForwardDialog(QDialog):
         self.list_widget.blockSignals(False)
 
     def _on_search(self, text: str):
-        """搜索过滤"""
+        """搜索过滤（仅在数据加载完成后生效）"""
+        if not self._data_loaded:
+            return
         keyword = text.strip().lower()
         if not keyword:
             self._rebuild_list(self._all_items)
