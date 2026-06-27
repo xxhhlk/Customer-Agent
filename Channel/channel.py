@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional
+import asyncio
 from database import db_manager
 from utils.logger_loguru import get_logger
 
@@ -23,12 +24,12 @@ class Channel:
         :return: 是否添加成功
         """
         # 检查数据库中是否已经添加过店铺
-        shop_info = db_manager.get_shop(self.channel_name, shop_id)
+        shop_info = await asyncio.to_thread(db_manager.get_shop, self.channel_name, shop_id)
         if shop_info:
             self.logger.error(f"店铺 {shop_name} 已经添加过")
             return False
         # 添加店铺
-        add_info=db_manager.add_shop(self.channel_name, shop_id, shop_name,description)
+        add_info = await asyncio.to_thread(db_manager.add_shop, self.channel_name, shop_id, shop_name, description)
         if not add_info:
             self.logger.error(f"店铺 {shop_name} 添加失败")
             return False
@@ -44,12 +45,12 @@ class Channel:
         :return: 是否删除成功
         """
         # 检查数据库中是否存在店铺
-        shop_info = db_manager.get_shop(self.channel_name, shop_id,shop_name)
+        shop_info = await asyncio.to_thread(db_manager.get_shop, self.channel_name, shop_id, shop_name)
         if not shop_info:
             self.logger.error(f"店铺 {shop_name} 不存在")
             return False
         # 删除店铺
-        delete_info=db_manager.delete_shop(self.channel_name, shop_id,shop_name)
+        delete_info = await asyncio.to_thread(db_manager.delete_shop, self.channel_name, shop_id, shop_name)
         if not delete_info:
             self.logger.error(f"店铺 {shop_name} 删除失败")
             return False

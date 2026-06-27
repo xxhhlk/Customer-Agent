@@ -388,13 +388,26 @@ class ConnectionPool(BaseService, HealthCheckable):  # type: ignore[misc]
     def dispose(self):
         """释放连接池资源"""
         try:
-            # 停止清理任务
+            # 停止清理任务（Task 绑定在创建它的事件循环上，不能跨循环 await）
             if self._cleanup_task and not self._cleanup_task.done():
                 self._cleanup_task.cancel()
+                # 尝试在原事件循环上等待取消完成
                 try:
-                    asyncio.run(self._cleanup_task)  # type: ignore[arg-type]
-                except asyncio.CancelledError:
-                    pass
+                    loop = self._cleanup_task.get_loop()
+                    if loop and not loop.is_closed() and loop.is_running():
+                        # 事件循环仍在运行，用 call_soon_threadsafe 调度取消
+                        # 不能阻塞等待，直接 cancel 即可
+                        pass
+                    elif loop and not loop.is_closed():
+                        # 事件循环未运行，可以短暂运行等待取消
+                        loop.run_until_complete(
+                            asyncio.wait_for(self._cleanup_task, timeout=2.0)
+                        )
+                except (asyncio.CancelledError, asyncio.TimeoutError,
+                        RuntimeError, Exception) as e:
+                    self.logger.debug(f"等待清理任务取消时出错: {e}")
+                finally:
+                    self._cleanup_task = None
 
             # 关闭所有连接
             with self._lock:

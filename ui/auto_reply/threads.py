@@ -1,6 +1,6 @@
 # 后台线程模块
 import asyncio
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QPainter, QPainterPath
 from PyQt6.QtCore import Qt
 import requests
@@ -45,10 +45,11 @@ class LogoLoaderThread(QThread):
             painter.drawPixmap(0, 0, scaled_pixmap)
             painter.end()
 
-            self.logo_loaded.emit(circular_pixmap)
+            # QTimer.singleShot 确保 emit 在主线程执行
+            QTimer.singleShot(0, lambda: self.logo_loaded.emit(circular_pixmap))
         except Exception as e:
             get_logger().error(f"Failed to load logo from {self.url}: {e}")
-            self.logo_loaded.emit(QPixmap())  # 失败时发射空pixmap
+            QTimer.singleShot(0, lambda: self.logo_loaded.emit(QPixmap()))  # 失败时发射空pixmap
 
 
 class AutoReplyThread(QThread):
@@ -92,11 +93,9 @@ class AutoReplyThread(QThread):
                 # 不能直接 emit pyqtSignal，需要通过 QTimer.singleShot
                 # 将 emit 操作 marshal 回主线程
                 def on_success():
-                    from PyQt6.QtCore import QTimer
                     QTimer.singleShot(0, self.connection_success.emit)
 
                 def on_failure(error_msg):
-                    from PyQt6.QtCore import QTimer
                     QTimer.singleShot(0, lambda: self.connection_failed.emit(error_msg))
 
                 # 启动引擎，并传递回调
@@ -122,7 +121,7 @@ class AutoReplyThread(QThread):
 
             except Exception as e:
                 self.logger.error(f"自动回复线程启动失败: {e}")
-                self.connection_failed.emit(str(e))
+                QTimer.singleShot(0, lambda: self.connection_failed.emit(str(e)))
             finally:
                 # 确保事件循环正确关闭
                 if self.loop and not self.loop.is_closed():
@@ -244,7 +243,7 @@ class SetStatusThread(QThread):
 
             if not api_success:
                 # API调用失败
-                self.status_set_failed.emit(self.account_data, "平台状态设置失败")
+                QTimer.singleShot(0, lambda: self.status_set_failed.emit(self.account_data, "平台状态设置失败"))
                 return
 
             # 2. 更新数据库状态
@@ -257,17 +256,17 @@ class SetStatusThread(QThread):
 
             if db_success:
                 # 发射成功信号
-                self.status_set_success.emit(self.account_data, self.target_status)
+                QTimer.singleShot(0, lambda: self.status_set_success.emit(self.account_data, self.target_status))
             else:
                 # 发射失败信号
-                self.status_set_failed.emit(self.account_data, "数据库状态更新失败")
+                QTimer.singleShot(0, lambda: self.status_set_failed.emit(self.account_data, "数据库状态更新失败"))
 
         except KeyError:
             # 如果缺少 'user_id' 等关键信息
-            self.status_set_failed.emit(self.account_data, "账号数据不完整，无法设置状态")
+            QTimer.singleShot(0, lambda: self.status_set_failed.emit(self.account_data, "账号数据不完整，无法设置状态"))
         except Exception as e:
             # 其他异常
-            self.status_set_failed.emit(self.account_data, str(e))
+            QTimer.singleShot(0, lambda: self.status_set_failed.emit(self.account_data, str(e)))
 
 
 __all__ = ['LogoLoaderThread', 'AutoReplyThread', 'SetStatusThread']

@@ -79,7 +79,7 @@ class MessageHandlerMixin:
                 return
 
             try:
-                context = self._convert_to_context(pdd_message, shop_id, user_id, username)
+                context = await self._convert_to_context(pdd_message, shop_id, user_id, username)
                 if not context:
                     self.logger.debug(f"消息转换失败，跳过处理: {shop_id}-{username}")
                     return
@@ -190,10 +190,10 @@ class MessageHandlerMixin:
         except Exception as e:
             self.logger.error(f"立即处理消息失败: {e}")
 
-    def _convert_to_context(self, pdd_message: PDDChatMessage, shop_id: str, user_id: str, username: str) -> Context:
+    async def _convert_to_context(self, pdd_message: PDDChatMessage, shop_id: str, user_id: str, username: str) -> Context:
         """将拼多多消息转换为Context格式"""
-        shop_info = db_manager.get_shop(self.channel_name, shop_id)
-        shop_name = shop_info.get("shop_name", "")
+        shop_info = await asyncio.to_thread(db_manager.get_shop, self.channel_name, shop_id)
+        shop_name = shop_info.get("shop_name", "") if shop_info else ""
 
         context_type = pdd_message.user_msg_type
 

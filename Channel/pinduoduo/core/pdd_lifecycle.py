@@ -48,7 +48,7 @@ class LifecycleMixin:
     async def start_account(self, shop_id: str, user_id: str, on_success, on_failure):
         """启动指定店铺下账号"""
         self.logger.info(f"start_account 开始: {shop_id}-{user_id}")
-        account_info = db_manager.get_account(self.channel_name, shop_id, user_id)
+        account_info = await asyncio.to_thread(db_manager.get_account, self.channel_name, shop_id, user_id)
         if not account_info:
             error_msg = f"账号 {user_id} 在数据库中不存在"
             self.logger.error(error_msg)
@@ -92,7 +92,7 @@ class LifecycleMixin:
     async def stop_account(self, shop_id: str, user_id: str):
         """停止指定店铺下账号"""
         try:
-            account_info = db_manager.get_account(self.channel_name, shop_id, user_id)
+            account_info = await asyncio.to_thread(db_manager.get_account, self.channel_name, shop_id, user_id)
             if not account_info:
                 self.logger.warning(f"账号 {user_id} 不存在，无法停止")
                 return
@@ -464,7 +464,7 @@ class LifecycleMixin:
                 # 从共享缓存或 DB 加载当前 cookie
                 cookies = cookie_cache.get("pinduoduo", shop_id, user_id)
                 if not cookies:
-                    account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+                    account_info = await asyncio.to_thread(db_manager.get_account, "pinduoduo", shop_id, user_id)
                     if account_info:
                         cookies_data = account_info.get('cookies')
                         if isinstance(cookies_data, str):
@@ -491,7 +491,7 @@ class LifecycleMixin:
                     self.logger.warning(
                         f"Cookie 健康检查失败: {shop_id}-{username}，触发主动重登"
                     )
-                    account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+                    account_info = await asyncio.to_thread(db_manager.get_account, "pinduoduo", shop_id, user_id)
                     if account_info:
                         success = await asyncio.to_thread(
                             perform_relogin,
