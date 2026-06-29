@@ -1,7 +1,7 @@
 import sys
 import traceback
 from typing import Optional, TYPE_CHECKING
-from PyQt6.QtCore import Qt, QTimer, QEvent, QMetaObject, Q_ARG, Slot, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QEvent, QMetaObject, Q_ARG, pyqtSlot, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 from PyQt6.QtGui import QColor, QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
@@ -39,7 +39,7 @@ class SafeSystemThemeListener(SystemThemeListener):
         # 通过信号将变更投递到主线程事件队列
         self._theme_changed_in_main.emit(t)
 
-    @Slot(str)
+    @pyqtSlot(str)
     def _do_theme_change_in_main(self, theme_lower: str):
         """在主线程中安全地执行主题切换"""
         try:
