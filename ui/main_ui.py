@@ -1,7 +1,7 @@
 import sys
 import traceback
 from typing import Optional, TYPE_CHECKING
-from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtCore import Qt, QTimer, QEvent, QMetaObject, Q_ARG, Slot, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 from PyQt6.QtGui import QColor, QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
@@ -10,6 +10,51 @@ from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
 from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, SystemThemeListener, qconfig
 from utils.logger_loguru import get_logger
 import time
+
+
+class SafeSystemThemeListener(SystemThemeListener):
+    """线程安全的系统主题监听器
+
+    qfluentwidgets 原版 SystemThemeListener 在后台线程中直接修改 qconfig.theme
+    并 emit themeChanged 信号，导致主线程 navigation_widget.paintEvent 中
+    isDarkTheme() / SVG 路径读取发生数据竞争，引发 access violation 崩溃。
+
+    本子类重写 _onThemeChanged，将所有主题状态变更操作通过
+    QMetaObject.invokeMethod (QueuedConnection) 转发到主线程执行，
+    确保 qconfig.theme 的读写始终在主线程中发生。
+    """
+
+    # 新信号：通知主线程执行主题切换
+    _theme_changed_in_main = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 将信号连接到主线程槽（parent 通常在主线程，AutoConnection 会选择 QueuedConnection）
+        self._theme_changed_in_main.connect(self._do_theme_change_in_main, Qt.ConnectionType.QueuedConnection)
+
+    def _onThemeChanged(self, theme: str):
+        """后台线程回调 — 不直接修改 qconfig，仅转发到主线程"""
+        # 仅做轻量级的字符串处理，不触碰任何 Qt 全局状态
+        t = theme.lower() if isinstance(theme, str) else "light"
+        # 通过信号将变更投递到主线程事件队列
+        self._theme_changed_in_main.emit(t)
+
+    @Slot(str)
+    def _do_theme_change_in_main(self, theme_lower: str):
+        """在主线程中安全地执行主题切换"""
+        try:
+            theme = Theme.DARK if theme_lower == "dark" else Theme.LIGHT
+
+            # 如果不是 AUTO 模式，或主题没变化，则跳过
+            if qconfig.themeMode.value != Theme.AUTO or theme == qconfig.theme:
+                return
+
+            # 现在在主线程中安全地修改主题状态
+            qconfig.theme = Theme.AUTO  # setter 内部会调用 darkdetect.theme() 获取实际值
+            qconfig._cfg.themeChanged.emit(Theme.AUTO)
+            self.systemThemeChanged.emit()
+        except Exception:
+            pass
 
 if TYPE_CHECKING:
     from ui.auto_reply import AutoReplyUI
@@ -43,8 +88,8 @@ class MainWindow(FluentWindow):
         # 自动跟随系统主题（深色/浅色）
         setTheme(Theme.AUTO)
         
-        # 监听系统主题切换事件
-        self.theme_listener = SystemThemeListener(self)
+        # 监听系统主题切换事件（使用线程安全版本）
+        self.theme_listener = SafeSystemThemeListener(self)
         self.theme_listener.systemThemeChanged.connect(self._on_theme_changed)
         self.theme_listener.setObjectName("SystemThemeListener")
         self.theme_listener.start()
@@ -259,10 +304,21 @@ class MainWindow(FluentWindow):
     def _do_theme_change(self):
         """实际执行主题切换更新"""
         self._theme_change_pending = False
-        self._update_title_bar_color()
-        
-        # 强制更新标题栏按钮
+
+        # 冻结导航栏重绘，防止 paintEvent 在主题状态过渡期间读取不一致的 isDarkTheme()
+        # 导致 QSvgRenderer 拿到无效 SVG 数据 → access violation
+        nav = self.navigationInterface
+        nav_frozen = False
         try:
+            nav_frozen = True
+            nav.setUpdatesEnabled(False)
+        except Exception:
+            nav_frozen = False
+
+        try:
+            self._update_title_bar_color()
+
+            # 强制更新标题栏按钮
             self.titleBar.update()
             for btn_name in ['minBtn', 'maxBtn', 'closeBtn']:
                 btn = getattr(self.titleBar, btn_name, None)
@@ -270,6 +326,18 @@ class MainWindow(FluentWindow):
                     btn.update()
         except Exception as e:
             self.logger.warning(f"更新标题栏按钮失败: {e}")
+        finally:
+            if nav_frozen:
+                # 延迟恢复导航栏重绘，确保所有主题相关的样式变更已处理完毕
+                QTimer.singleShot(50, lambda: self._restore_nav_updates(nav))
+
+    def _restore_nav_updates(self, nav):
+        """恢复导航栏重绘"""
+        try:
+            nav.setUpdatesEnabled(True)
+            nav.update()
+        except Exception:
+            pass
 
 
     def showQRCode(self):

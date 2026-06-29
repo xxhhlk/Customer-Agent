@@ -502,8 +502,8 @@ class AutoReplyUI(QFrame):
 
             self.status_thread = SetStatusThread(account_data, 1)
 
-            self.status_thread.status_set_success.connect(self.onStatusSetSuccess)
-            self.status_thread.status_set_failed.connect(self.onStatusSetFailed)
+            self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)
+            self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)
 
             self.status_thread.start()
 
@@ -520,8 +520,8 @@ class AutoReplyUI(QFrame):
 
             self.status_thread = SetStatusThread(account_data, 3)
 
-            self.status_thread.status_set_success.connect(self.onStatusSetSuccess)
-            self.status_thread.status_set_failed.connect(self.onStatusSetFailed)
+            self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)
+            self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)
 
             self.status_thread.start()
 
@@ -649,10 +649,12 @@ class AutoReplyUI(QFrame):
                 thread = auto_reply_manager.running_accounts[account_key]
 
                 thread.connection_success.connect(
-                    lambda: self._on_auto_reply_success(account_data)
+                    lambda: self._on_auto_reply_success(account_data),
+                    Qt.ConnectionType.QueuedConnection
                 )
                 thread.connection_failed.connect(
-                    lambda error: self._on_auto_reply_failed(account_data, error)
+                    lambda error: self._on_auto_reply_failed(account_data, error),
+                    Qt.ConnectionType.QueuedConnection
                 )
 
         except Exception as e:

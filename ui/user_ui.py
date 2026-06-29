@@ -242,7 +242,7 @@ class AccountCard(CardWidget):
             def _start():
                 assert self.shop_logo is not None
                 self.logo_loader_thread = LogoLoaderThread(str(self.shop_logo))
-                self.logo_loader_thread.logo_loaded.connect(self.setLogo)
+                self.logo_loader_thread.logo_loaded.connect(self.setLogo, Qt.ConnectionType.QueuedConnection)
                 self.logo_loader_thread.start()
             QTimer.singleShot(200, _start)
         else:

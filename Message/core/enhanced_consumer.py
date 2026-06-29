@@ -828,6 +828,12 @@ class EnhancedMessageConsumer:
         self._user_queues.clear()
         self._user_tasks.clear()
 
+        # 清空 handlers，避免重连后 create_consumer 返回新实例时
+        # 调用方再次 add_handler 导致 handlers 列表累积
+        # （保险措施：create_consumer 已改为删除旧实例创建新实例，
+        # 但旧实例若被其他地方持有引用，清空 handlers 可防止误用）
+        self.handlers.clear()
+
         self.logger.info(f"Enhanced Consumer {self.queue_name} stopped")
 
     def _extract_user_id(self, context: Context) -> str:
@@ -908,10 +914,15 @@ class EnhancedMessageConsumerManager:
         self.logger = get_logger("EnhancedConsumerManager")
 
     def create_consumer(self, queue_name: str, max_concurrent: int = 10) -> EnhancedMessageConsumer:
-        """创建消费者"""
+        """创建消费者
+
+        如果同名消费者已存在，先移除旧实例（包括其已注册的 handlers），
+        再创建全新实例。调用方随后会重新 add_handler，避免重连后
+        handlers 列表累积导致同一条消息被多个处理器链处理多遍。
+        """
         if queue_name in self._consumers:
-            self.logger.warning(f"Consumer {queue_name} already exists")
-            return self._consumers[queue_name]
+            self.logger.info(f"Consumer {queue_name} already exists, removing old instance to avoid handler duplication")
+            del self._consumers[queue_name]
 
         consumer = EnhancedMessageConsumer(queue_name, max_concurrent)
         self._consumers[queue_name] = consumer

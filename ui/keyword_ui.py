@@ -22,8 +22,18 @@ class KeywordTestDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.keyword_handler = KeywordDetectionHandler()
+        # 延迟创建 handler，避免在构造函数中同步查库
+        self.keyword_handler = None
         self.setupUI()
+        # 延迟加载关键词数据，避免阻塞主线程
+        QTimer.singleShot(100, self._init_keyword_handler)
+
+    def _init_keyword_handler(self):
+        """延迟初始化关键词处理器（后台加载后更新UI提示）"""
+        try:
+            self.keyword_handler = KeywordDetectionHandler()
+        except Exception as e:
+            self.result_text.setText(f"关键词处理器初始化失败: {e}")
 
     def setupUI(self):
         """设置对话框UI"""
@@ -106,6 +116,11 @@ class KeywordTestDialog(QDialog):
 
         if not test_message:
             self.result_text.setText("请输入测试消息")
+            return
+
+        # 如果关键词处理器尚未初始化完成，提示等待
+        if self.keyword_handler is None:
+            self.result_text.setText("关键词数据正在加载中，请稍后重试...")
             return
 
         # 使用关键词处理器进行匹配
