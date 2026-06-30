@@ -139,7 +139,7 @@ class FullImageViewer(QDialog):
     def _fit_to_window(self):
         if not self._pixmap or self._pixmap.isNull():
             return
-        self._view.fitInView(self._pixmap.rect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._view.fitInView(QRectF(self._pixmap.rect()), Qt.AspectRatioMode.KeepAspectRatio)
         self._zoom = 1.0
 
     def _actual_size(self):
