@@ -2,9 +2,9 @@
 异步图片加载器 - QThread + requests + 磁盘缓存
 
 策略:
-- 内存缓存 (LRU, 上限100条 QPixmap)
-- 磁盘缓存 (temp/media_cache/, 文件名用 URL 的 MD5)
-- 未命中 → requests.get 下载 → Pillow 缩放 → 存缓存 → 回调
+- 缩略图/原图独立内存缓存 (LRU, 上限各100条)
+- 缩略图/原图独立磁盘缓存 (thumb_ / full_ 前缀)
+- 未命中 → requests.get 下载 → Pillow 缩放(可选) → 存缓存 → 回调
 """
 
 import hashlib
@@ -25,26 +25,42 @@ from utils.runtime_path import ensure_temp_dir
 
 # 磁盘缓存目录
 _CACHE_DIR = ensure_temp_dir("media_cache")
-_MEMORY_CACHE: OrderedDict = OrderedDict()
+# 缩略图内存缓存 (LRU)
+_THUMB_MEMORY_CACHE: OrderedDict = OrderedDict()
+# 原图内存缓存 (LRU)
+_FULL_MEMORY_CACHE: OrderedDict = OrderedDict()
 _MEMORY_CACHE_MAX = 100
 
 
-def _url_to_cache_path(url: str) -> str:
+def _url_to_cache_path(url: str, prefix: str = "") -> str:
     """URL → 磁盘缓存文件路径"""
     url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
-    return str(_CACHE_DIR / f"{url_hash}.png")
+    return str(_CACHE_DIR / f"{prefix}{url_hash}.png")
 
 
 class ImageLoadWorker(QThread):
-    """后台下载+缩放图片，通过信号回传 QPixmap"""
+    """后台下载+缩放图片，通过信号回传 QPixmap
+
+    thumb=True: 缩略图缓存 (thumb_ 前缀)
+    thumb=False: 原图缓存 (full_ 前缀)
+    """
 
     finished_ok = pyqtSignal(str, QPixmap)  # url, pixmap (成功)
     finished_err = pyqtSignal(str)  # url (失败)
 
-    def __init__(self, url: str, target_size: tuple, parent=None):
+    def __init__(self, url: str, target_size: tuple, thumb: bool = True, parent=None):
         super().__init__(parent)
         self._url = url
         self._target_size = target_size  # (max_w, max_h)
+        self._thumb = thumb
+
+    @property
+    def _memory_cache(self) -> OrderedDict:
+        return _THUMB_MEMORY_CACHE if self._thumb else _FULL_MEMORY_CACHE
+
+    @property
+    def _cache_prefix(self) -> str:
+        return "thumb_" if self._thumb else "full_"
 
     def run(self):
         try:
@@ -58,13 +74,15 @@ class ImageLoadWorker(QThread):
 
     def _load_pixmap(self) -> Optional[QPixmap]:
         """加载图片: 内存缓存 → 磁盘缓存 → 网络下载"""
+        mem_cache = self._memory_cache
+
         # 1. 内存缓存
-        if self._url in _MEMORY_CACHE:
-            _MEMORY_CACHE.move_to_end(self._url)
-            return _MEMORY_CACHE[self._url]
+        if self._url in mem_cache:
+            mem_cache.move_to_end(self._url)
+            return mem_cache[self._url]
 
         # 2. 磁盘缓存
-        cache_path = _url_to_cache_path(self._url)
+        cache_path = _url_to_cache_path(self._url, self._cache_prefix)
         if os.path.exists(cache_path):
             pixmap = QPixmap(cache_path)
             if not pixmap.isNull():
@@ -76,9 +94,10 @@ class ImageLoadWorker(QThread):
         resp.raise_for_status()
         img_data = resp.content
 
-        # 用 Pillow 打开 → 缩放 → 存磁盘缓存
+        # 用 Pillow 打开 → 缩放(仅缩略图) → 存磁盘缓存
         pil_img = Image.open(io.BytesIO(img_data))
-        pil_img = self._scale_pil(pil_img, self._target_size)
+        if self._thumb:
+            pil_img = self._scale_pil(pil_img, self._target_size)
 
         # 存磁盘缓存 (PNG 格式)
         buf = io.BytesIO()
@@ -110,17 +129,17 @@ class ImageLoadWorker(QThread):
         new_h = int(h * ratio)
         return img.resize((new_w, new_h), Image.LANCZOS)
 
-    @staticmethod
-    def _store_memory(url: str, pixmap: QPixmap):
+    def _store_memory(self, url: str, pixmap: QPixmap):
         """存入内存缓存 (LRU)"""
-        _MEMORY_CACHE[url] = pixmap
-        _MEMORY_CACHE.move_to_end(url)
-        while len(_MEMORY_CACHE) > _MEMORY_CACHE_MAX:
-            _MEMORY_CACHE.popitem(last=False)
+        mem_cache = self._memory_cache
+        mem_cache[url] = pixmap
+        mem_cache.move_to_end(url)
+        while len(mem_cache) > _MEMORY_CACHE_MAX:
+            mem_cache.popitem(last=False)
 
 
 class ImageLoaderManager:
-    """单例管理器: 内存缓存 + 管理活跃 worker"""
+    """单例管理器: 独立缩略图/原图内存缓存 + 管理活跃 worker"""
 
     _instance: Optional["ImageLoaderManager"] = None
 
@@ -140,16 +159,16 @@ class ImageLoaderManager:
         """
         异步获取图片缩略图。
 
-        先查内存缓存，命中则直接回调；否则启动 ImageLoadWorker。
+        先查缩略图内存缓存，命中则直接回调；否则启动 ImageLoadWorker。
         """
-        # 内存缓存命中
-        if url in _MEMORY_CACHE:
-            _MEMORY_CACHE.move_to_end(url)
-            callback(url, _MEMORY_CACHE[url])
+        # 缩略图内存缓存命中
+        if url in _THUMB_MEMORY_CACHE:
+            _THUMB_MEMORY_CACHE.move_to_end(url)
+            callback(url, _THUMB_MEMORY_CACHE[url])
             return
 
-        # 启动 worker
-        worker = ImageLoadWorker(url, target_size)
+        # 启动 worker (thumb=True)
+        worker = ImageLoadWorker(url, target_size, thumb=True)
 
         def _on_finished_ok(u: str, p: QPixmap):
             callback(u, p)
@@ -177,8 +196,9 @@ class ImageLoaderManager:
             pass
 
     def clear_cache(self) -> None:
-        """清空内存缓存 (磁盘缓存保留)"""
-        _MEMORY_CACHE.clear()
+        """清空所有内存缓存 (磁盘缓存保留)"""
+        _THUMB_MEMORY_CACHE.clear()
+        _FULL_MEMORY_CACHE.clear()
 
     def get_full_image(
         self,
@@ -188,16 +208,18 @@ class ImageLoaderManager:
     ) -> None:
         """
         异步获取原图 (不缩放)。
-        先查磁盘缓存，命中则直接加载；否则下载原图。
+
+        先查原图内存缓存，命中则直接回调；否则启动 ImageLoadWorker。
+        注意：原图和缩略图使用独立缓存，互不污染。
         """
-        # 内存缓存命中
-        if url in _MEMORY_CACHE:
-            _MEMORY_CACHE.move_to_end(url)
-            callback(url, _MEMORY_CACHE[url])
+        # 原图内存缓存命中
+        if url in _FULL_MEMORY_CACHE:
+            _FULL_MEMORY_CACHE.move_to_end(url)
+            callback(url, _FULL_MEMORY_CACHE[url])
             return
 
-        # 启动 worker (用大 target_size 确保不缩放)
-        worker = ImageLoadWorker(url, (9999, 9999))
+        # 启动 worker (thumb=False, 不缩放)
+        worker = ImageLoadWorker(url, (9999, 9999), thumb=False)
 
         def _on_finished_ok(u: str, p: QPixmap):
             callback(u, p)
