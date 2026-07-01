@@ -4,6 +4,7 @@ AI回复处理器
 """
 
 from typing import Dict, Any, Optional
+import asyncio
 from bridge.context import Context, ContextType
 from .base import BaseHandler
 from .preprocessor import MessagePreprocessor
@@ -56,7 +57,24 @@ class AIReplyHandler(BaseHandler):
                 self.logger.warning("AI回复生成失败，使用备用回复")
                 return await self._handle_fallback(context, metadata)
 
-            # 3. 发送回复
+            # 3. 发送前检查：任务是否已被取消（人工客服已介入）
+            from_uid = metadata.get('from_uid')
+            current_task = asyncio.current_task()
+            if current_task and current_task.cancelled():
+                self.logger.info(f"AI回复生成完毕但任务已取消（人工已介入），跳过发送: {from_uid}")
+                return True  # 返回 True 避免兜底重发
+
+            # 二次检查：人工是否在 AI 生成期间回复（冷却期内说明人工刚回复过）
+            if from_uid:
+                try:
+                    from Message.handlers.staff_reply_event import staff_reply_event_manager
+                    if staff_reply_event_manager.is_in_cooldown(str(from_uid)):
+                        self.logger.info(f"AI回复生成完毕但人工已回复，丢弃AI回复: {from_uid}")
+                        return True
+                except Exception as e:
+                    logger.warning(f"检查人工冷却期失败: {e}")
+
+            # 4. 发送回复
             success = await self._send_reply(context, reply, metadata, reply_source='ai')
             if success:
                 await self.log_message(context, "AI回复发送成功", f"回复: {reply}...")
@@ -109,9 +127,11 @@ class AIReplyHandler(BaseHandler):
                 return False
 
             # 尝试发送消息
+            # 使用 asyncio.to_thread 包装同步 requests 调用，避免阻塞事件循环
+            # （事件循环需保持响应，以便 staff_reply_task 的 event.set() 通知能及时投递）
             from Channel.pinduoduo.utils.API.send_message import SendMessage
             sender = SendMessage(str(shop_id), str(user_id))
-            result = sender.send_text(str(from_uid), reply)
+            result = await asyncio.to_thread(sender.send_text, str(from_uid), reply)
             if isinstance(result, dict) and result.get("success"):
                 # === 持久化回复消息（接入点B） ===
                 try:

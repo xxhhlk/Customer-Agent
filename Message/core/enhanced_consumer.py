@@ -630,6 +630,15 @@ class EnhancedMessageConsumer:
                     )
 
                     if ai_task in done:
+                        # 【新增】pass_to_ai 场景：AI 完成时同样检查人工是否已介入
+                        if from_uid != "unknown" and self.staff_reply_manager.is_in_cooldown(from_uid):
+                            self.logger.info(f"pass_to_ai AI完成但人工已介入，丢弃结果: {from_uid}")
+                            staff_reply_task.cancel()
+                            try:
+                                await staff_reply_task
+                            except asyncio.CancelledError:
+                                pass
+                            break
                         staff_reply_task.cancel()
                         try:
                             await staff_reply_task
@@ -680,10 +689,34 @@ class EnhancedMessageConsumer:
 
                 if ai_task in done:
                     # AI完成
+                    # 【新增】AI 完成时先检查人工是否已介入（冷却期内说明人工刚回复过）
+                    if from_uid and self.staff_reply_manager.is_in_cooldown(from_uid):
+                        self.logger.info(f"AI完成时人工已介入，丢弃AI结果和队列消息: {from_uid}")
+                        queue_task.cancel()
+                        try:
+                            await queue_task
+                        except asyncio.CancelledError:
+                            pass
+                        staff_reply_task.cancel()
+                        try:
+                            await staff_reply_task
+                        except asyncio.CancelledError:
+                            pass
+                        break
+
                     if queue_task in done and not queue_task.cancelled():
                         try:
                             pending_msg = queue_task.result()
                             if pending_msg is not None:
+                                # 【新增】放回前再次检查冷却期
+                                if from_uid and self.staff_reply_manager.is_in_cooldown(from_uid):
+                                    self.logger.info(f"人工已介入，丢弃待处理队列消息: {from_uid}")
+                                    staff_reply_task.cancel()
+                                    try:
+                                        await staff_reply_task
+                                    except asyncio.CancelledError:
+                                        pass
+                                    break
                                 await self._user_queues[user_key].put(pending_msg)
                                 self.logger.info(f"AI完成时queue_task已取到消息，已放回用户队列")
                         except Exception as e:
