@@ -91,6 +91,14 @@ class StaffReplyEventManager:
         """
         通知人工客服已回复，会通知该买家的所有等待事件
 
+        关键：此方法可能从任意线程（PDD 消息处理线程 / 主线程）调用，
+        但 asyncio.Event 绑定在创建它的 AutoReplyThread 的事件循环上。
+        直接 `event.set()` 会触发 `loop.call_soon` 操作那个 event 所属的 loop，
+        若该 loop 已停止/关闭/被 GC，会触发 access violation（C 级 trap）。
+
+        修复：通过 `loop.call_soon_threadsafe(event.set)` 跨线程安全地通知
+        event 所属的 loop，先校验 loop 仍然存活。
+
         Args:
             from_uid: 买家ID
 
@@ -98,36 +106,68 @@ class StaffReplyEventManager:
             bool: 是否成功通知（如果没有人在等待，返回False）
         """
         notified_count = 0
+        dead_event_ids = []  # 收集绑定 loop 已死的待清理事件
+
         with self._lock:
             # 记录人工客服回复时间（用于冷却期判断）
             self._staff_reply_times[from_uid] = time.time()
-            
+
             if from_uid not in self._waiting_events:
                 logger.debug(f"买家 {from_uid} 没有在等待客服回复")
                 return False
 
+            # 对事件列表做快照，避免迭代过程中 stop_waiting 修改列表（虽然已加锁，双保险）
             event_list = self._waiting_events[from_uid]
-            logger.debug(f"买家 {from_uid} 有 {len(event_list)} 个等待事件")
-            
-            for event_info in event_list:
+            snapshot = list(event_list)
+            logger.debug(f"买家 {from_uid} 有 {len(snapshot)} 个等待事件")
+
+            for event_info in snapshot:
                 event = event_info.get("event")
                 event_id = event_info.get("event_id")
-                logger.debug(f"检查事件 {event_id}: event={event}, is_set={event.is_set() if event else None}")
+                binding_loop = event_info.get("loop")
 
-                if event is None:
+                if event is None or binding_loop is None:
                     # 事件对象还未创建，说明等待还没开始
                     logger.debug(f"买家 {from_uid} 的事件 {event_id} 对象未创建，跳过通知")
                     continue
 
-                # 设置事件，通知等待者
-                event.set()
-                notified_count += 1
-                logger.debug(f"已通知事件 {event_id}")
+                # 检查 event 所属的 loop 是否仍然存活
+                # is_closed() 返回 True 表示 loop 已关闭
+                # 已关闭/已死的 loop 不能再调度任何回调，否则触发 access violation
+                if binding_loop.is_closed():
+                    logger.warning(
+                        f"买家 {from_uid} 的事件 {event_id} 绑定的 event loop 已关闭，"
+                        f"跳过通知并标记清理"
+                    )
+                    dead_event_ids.append(event_id)
+                    continue
 
-            if notified_count > 0:
-                logger.info(f"人工客服已回复，通知 {from_uid} 的 {notified_count} 个等待事件")
+                try:
+                    # 跨线程安全地向 event 所属的 loop 投递 event.set()
+                    # call_soon_threadsafe 是 asyncio 官方推荐的安全跨线程方式
+                    binding_loop.call_soon_threadsafe(event.set)
+                    notified_count += 1
+                    logger.debug(f"已通知事件 {event_id} (通过 loop.call_soon_threadsafe)")
+                except RuntimeError as e:
+                    # loop 在 is_closed() 检查之后、call_soon_threadsafe 之前被关闭
+                    # (竞态窗口)：捕获 RuntimeError 避免崩溃
+                    logger.warning(
+                        f"买家 {from_uid} 的事件 {event_id} 调度失败 (loop 已关闭): {e}，"
+                        f"标记清理"
+                    )
+                    dead_event_ids.append(event_id)
+                except Exception as e:
+                    logger.error(f"通知事件 {event_id} 时发生未预期异常: {e}")
+                    dead_event_ids.append(event_id)
 
-            return notified_count > 0
+        # 锁外清理已死的 loop 对应的事件（减少锁内耗时）
+        for dead_id in dead_event_ids:
+            self.stop_waiting(from_uid, dead_id)
+
+        if notified_count > 0:
+            logger.info(f"人工客服已回复，通知 {from_uid} 的 {notified_count} 个等待事件")
+
+        return notified_count > 0
 
     def is_in_cooldown(self, from_uid: str) -> bool:
         """
@@ -210,10 +250,17 @@ class StaffReplyEventManager:
                 logger.warning(f"事件 {event_id} 不存在，可能已经被清理")
                 return False
 
-            # 惰性初始化事件对象（确保绑定到当前 event loop）
+            # 惰性初始化事件对象（确保绑定到当前正在运行的 event loop）
+            # 必须用 get_running_loop() 而非 get_event_loop()：
+            #   - get_event_loop() 在没有运行中的循环时会创建/返回默认循环（旧式 API）
+            #   - get_running_loop() 严格返回当前线程正在运行的循环，没有则抛错
+            # 这个 Event 后续会被 notify_staff_reply 通过 loop.call_soon_threadsafe 调度
+            # 如果绑错 loop（比如默认 loop 不是 AutoReplyThread 的 loop），通知时会触发
+            # 跨循环操作 → access violation
             if event_info["event"] is None:
+                current_loop = asyncio.get_running_loop()
                 event_info["event"] = asyncio.Event()
-                event_info["loop"] = asyncio.get_event_loop()
+                event_info["loop"] = current_loop
 
             event = event_info["event"]
 
@@ -247,7 +294,7 @@ class StaffReplyEventManager:
 
     def cleanup_expired(self, max_age: float = 300.0) -> int:
         """
-        清理过期的等待事件
+        清理过期的等待事件，同时清理绑定 loop 已死亡的孤儿事件
 
         Args:
             max_age: 最大存活时间（秒），默认5分钟
@@ -257,13 +304,25 @@ class StaffReplyEventManager:
         """
         current_time = time.time()
         expired_count = 0
+        dead_loop_count = 0
 
         with self._lock:
             for from_uid in list(self._waiting_events.keys()):
                 events = self._waiting_events[from_uid]
-                # 过滤掉过期的事件
                 original_count = len(events)
-                events[:] = [e for e in events if current_time - e["timestamp"] <= max_age]
+
+                # 过滤掉过期的 或 绑定 loop 已关闭的事件
+                def _should_keep(e):
+                    nonlocal dead_loop_count
+                    if current_time - e["timestamp"] > max_age:
+                        return False
+                    binding_loop = e.get("loop")
+                    if e["event"] is not None and binding_loop is not None and binding_loop.is_closed():
+                        dead_loop_count += 1
+                        return False
+                    return True
+
+                events[:] = [e for e in events if _should_keep(e)]
                 expired_count += original_count - len(events)
 
                 # 如果列表为空，删除整个条目
@@ -271,7 +330,7 @@ class StaffReplyEventManager:
                     del self._waiting_events[from_uid]
 
         if expired_count:
-            logger.info(f"清理过期等待事件: {expired_count}个")
+            logger.info(f"清理过期/孤儿等待事件: {expired_count}个 (其中绑定死 loop: {dead_loop_count}个)")
 
         return expired_count
 

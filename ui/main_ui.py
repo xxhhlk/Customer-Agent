@@ -139,11 +139,21 @@ class MainWindow(FluentWindow):
                 # 通过堆栈深度和内容判断是否是主线程（Qt主线程通常有app.exec）
                 stack_str = ''.join(traceback.format_list(frame_info[-5:]))
                 stack_frames.append(stack_str)
-            
+
             self.logger.warning(
                 f"⚠️ 主线程卡顿检测: 事件循环间隔 {gap:.1f}s（正常应≈3s），可能存在阻塞操作\n"
                 f"主线程堆栈（最近5帧）:\n{stack_frames[0] if stack_frames else '无法获取'}"
             )
+
+        # 顺便清理 staff_reply_event_manager 中的孤儿事件
+        # 长时间运行下，AutoReplyThread 重启会留下绑定死 loop 的 asyncio.Event，
+        # 这些孤儿事件引用着已 close 的 loop 对象，长期不清会泄漏，且如果下次
+        # notify 撞上死 loop 触发 RuntimeError 也已被 notify_staff_reply 自身捕获。
+        try:
+            from Message.handlers.staff_reply_event import staff_reply_event_manager
+            staff_reply_event_manager.cleanup_expired()
+        except Exception:
+            pass  # 清理失败不影响主流程
 
     def lazy_load_views(self):
         """延迟加载各个视图，提高启动速度"""

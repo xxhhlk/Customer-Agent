@@ -174,7 +174,18 @@ class AutoReplyThread(QThread):
                 break
 
     def stop(self):
-        """停止后端引擎 - 线程安全版本"""
+        """停止后端引擎 - 线程安全版本
+
+        关键时序：
+        1. 先设停止标志（_stop_requested）— 让 run() 内部循环不会再重启新 loop
+        2. channel.request_stop() — 通知业务层停止，内部 _stop_event 的 set 是线程安全的
+        3. 等一个微小延时（10ms）让 channel 内部的协程有机会进入收尾，
+           避免在 channel 仍持有 loop 强引用时 loop 已被 close
+        4. 最后 loop.call_soon_threadsafe(loop.stop) — 让事件循环自身优雅退出
+
+        千万不要先 close loop 再让 channel 写：channel 协程若在已 close 的 loop 上
+        调度回调会触发 access violation（C 级 trap，Python except 抓不住）。
+        """
         try:
             self._stop_requested = True
             self.requestInterruption()
