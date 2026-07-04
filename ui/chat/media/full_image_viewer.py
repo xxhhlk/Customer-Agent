@@ -103,6 +103,13 @@ class FullImageViewer(QDialog):
         )
 
     def _on_image_loaded(self, url: str, pixmap: QPixmap):
+        # 安全检查：对话框可能已被关闭
+        try:
+            if not self._scene:
+                return
+        except RuntimeError:
+            return
+
         if url != self._url:
             return
 
@@ -117,6 +124,13 @@ class FullImageViewer(QDialog):
         self._fit_to_window()
 
     def _on_load_failed(self, url: str):
+        # 安全检查
+        try:
+            if not self._status_label:
+                return
+        except RuntimeError:
+            return
+
         self._status_label.setText("图片加载失败")
         # 尝试直接用浏览器打开
         from PyQt6.QtGui import QDesktopServices

@@ -99,6 +99,13 @@ class VideoPreviewWidget(QFrame):
         )
 
     def _on_pixmap_ready(self, url: str, pixmap: QPixmap):
+        # 安全检查：widget 可能已被 deleteLater()
+        try:
+            if not self._image_label or not self._image_label.isVisible():
+                return
+        except RuntimeError:
+            return
+
         if url != self._cover_url:
             return  # 过期回调
 
@@ -195,11 +202,21 @@ class VideoPreviewWidget(QFrame):
         self._image_label.setPixmap(result)
 
     def _on_load_failed(self, url: str):
+        # 安全检查：widget 可能已被 deleteLater()
+        try:
+            if not self._fallback_label:
+                return
+        except RuntimeError:
+            return
+
         if url and url != self._cover_url:
             return
 
         # 隐藏封面 label，显示降级文本（纯文本+蓝色下划线样式模拟链接，不弹出浏览器）
-        self._image_label.hide()
+        try:
+            self._image_label.hide()
+        except RuntimeError:
+            return
         self._fallback_label.setText("▶ 查看视频")
         self._fallback_label.setToolTip(self._url)
         self._apply_fallback_style()

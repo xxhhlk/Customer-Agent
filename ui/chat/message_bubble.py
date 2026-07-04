@@ -232,15 +232,33 @@ class MessageBubble(QFrame):
     def _on_image_clicked(self, url: str):
         from ui.chat.media.full_image_viewer import FullImageViewer
 
-        self._full_viewer = FullImageViewer(url, self.window())
-        self._full_viewer.show()
+        # 用 window() 作为 parent，不存引用到 self 上，
+        # 避免 MessageBubble 被 deleteLater() 后引用断裂
+        viewer = FullImageViewer(url, self.window())
+        # 存到 window 上防止 GC（而不是 self）
+        win = self.window()
+        if hasattr(win, '_open_viewers'):
+            win._open_viewers.append(viewer)
+        else:
+            win._open_viewers = [viewer]
+        viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        viewer.show()
+        # 对话框关闭时从列表移除
+        viewer.destroyed.connect(lambda: win._open_viewers.remove(viewer) if hasattr(win, '_open_viewers') and viewer in win._open_viewers else None)
 
     def _on_video_clicked(self, url: str):
         """点击视频 → 打开视频播放器"""
         from ui.chat.media.video_player_dialog import VideoPlayerDialog
 
-        self._video_player = VideoPlayerDialog(url, self.window())
-        self._video_player.show()
+        player = VideoPlayerDialog(url, self.window())
+        win = self.window()
+        if hasattr(win, '_open_viewers'):
+            win._open_viewers.append(player)
+        else:
+            win._open_viewers = [player]
+        player.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        player.show()
+        player.destroyed.connect(lambda: win._open_viewers.remove(player) if hasattr(win, '_open_viewers') and player in win._open_viewers else None)
 
     def _apply_theme(self):
         """应用主题颜色"""

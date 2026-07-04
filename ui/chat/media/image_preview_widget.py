@@ -68,6 +68,14 @@ class ImagePreviewWidget(QFrame):
         )
 
     def _on_pixmap_ready(self, url: str, pixmap: QPixmap):
+        # 安全检查：widget 可能已被 deleteLater()
+        try:
+            if not self._image_label or not self._image_label.isVisible():
+                return
+        except RuntimeError:
+            # C++ 对象已删除
+            return
+
         if url != self._url:
             return  # 过期回调
 
@@ -88,11 +96,21 @@ class ImagePreviewWidget(QFrame):
         self.setFixedSize(scaled.size())
 
     def _on_load_failed(self, url: str):
+        # 安全检查：widget 可能已被 deleteLater()
+        try:
+            if not self._fallback_label:
+                return
+        except RuntimeError:
+            return
+
         if url != self._url:
             return
 
         # 隐藏图片 label，显示降级链接
-        self._image_label.hide()
+        try:
+            self._image_label.hide()
+        except RuntimeError:
+            return
         self._fallback_label.setText(
             f'<a href="{self._url}" style="color: #007bff;">查看图片</a>'
         )

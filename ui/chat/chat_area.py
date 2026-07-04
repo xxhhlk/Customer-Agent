@@ -47,6 +47,7 @@ class ChatAreaPanel(QWidget):
         self._current_user_id: str = ""
         self._current_buyer_uid: str = ""
         self._loader: _MessageLoader | None = None
+        self._load_token: int = 0  # 每次加载递增，用于区分过期回调
 
         self._init_ui()
         self._apply_theme()
@@ -119,6 +120,9 @@ class ChatAreaPanel(QWidget):
         # 缓存 shop_id/buyer_uid 用于手动发送
         self._current_shop_id = shop_id
         self._current_buyer_uid = buyer_uid
+        # 递增 token，让旧的 loader 回调过期
+        self._load_token += 1
+        token = self._load_token
 
         # 清空旧消息
         self._clear_messages()
@@ -128,16 +132,21 @@ class ChatAreaPanel(QWidget):
 
         # 后台线程加载
         if self._loader is not None:
-            self._loader.result.disconnect(self._on_messages_loaded)
+            try:
+                self._loader.result.disconnect(self._on_messages_loaded)
+            except (TypeError, RuntimeError):
+                pass
             self._loader.quit()
             self._loader.wait(500)
         self._loader = _MessageLoader(shop_id, buyer_uid, self)
-        self._loader.result.connect(self._on_messages_loaded)
+        self._loader.result.connect(lambda sid, buid, msgs: self._on_messages_loaded(sid, buid, msgs, token))
         self._loader.start()
 
-    def _on_messages_loaded(self, shop_id: str, buyer_uid: str, messages: list):
+    def _on_messages_loaded(self, shop_id: str, buyer_uid: str, messages: list, token: int = 0):
         """后台线程加载完成后，在主线程渲染气泡"""
         # 防止过期结果（用户已切换到其他会话）
+        if token != self._load_token:
+            return
         if shop_id != self._current_shop_id or buyer_uid != self._current_buyer_uid:
             return
 
