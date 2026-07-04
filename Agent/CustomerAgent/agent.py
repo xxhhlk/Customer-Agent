@@ -18,6 +18,144 @@ from utils.logger_loguru import get_logger
 from pydantic import BaseModel, Field
 from typing import Dict
 
+# ---------------------------------------------------------------------------
+# agno monkey-patch: 同步 DB 操作在 async 上下文中必须走 asyncio.to_thread()
+#
+# agno 框架的 async 版本函数（aupsert_session / aread_or_create_session /
+# asave_session）在检测到同步 DB（SqliteDb，非 AsyncBaseDb）时，会直接
+# 调用同步 SQLAlchemy 操作，阻塞 asyncio 事件循环。当阻塞超过数秒时，
+# Qt 主线程的事件处理也会被冻结，期间 paintEvent 读取不一致的主题状态
+# 可能导致 QSvgRenderer access violation 崩溃。
+#
+# 解决方案：monkey-patch 这些函数，让同步 DB 操作通过 asyncio.to_thread()
+# 在后台线程池执行，不再阻塞事件循环。
+# ---------------------------------------------------------------------------
+
+_agno_patched = False  # 全局标志，确保只 patch 一次
+
+
+def _patch_agno_async_db():
+    """Patch agno 框架的 async DB 函数，让同步 DB 操作走 to_thread()"""
+    global _agno_patched
+    if _agno_patched:
+        return
+    _agno_patched = True
+
+    from agno.agent import _storage, _session, _init
+
+    # 保存原始函数引用
+    _original_aupsert_session = _storage.aupsert_session
+    _original_aread_or_create_session = _storage.aread_or_create_session
+    _original_asave_session = _session.asave_session
+
+    async def _patched_aupsert_session(agent, session):
+        """aupsert_session 的安全版本：同步 DB 操作走 to_thread()"""
+        try:
+            if not agent.db:
+                raise ValueError("Db not initialized")
+            if _init.has_async_db(agent):
+                return await agent.db.upsert_session(session=session)
+            else:
+                # 关键修复：同步 DB 操作不直接调用，而是投到线程池
+                return await asyncio.to_thread(agent.db.upsert_session, session=session)
+        except Exception as e:
+            import traceback
+            traceback.print_exc(limit=3)
+            from agno.utils.log import log_warning
+            log_warning(f"Error upserting session into db: {str(e)}")
+            return None
+
+    async def _patched_aread_or_create_session(agent, session_id, user_id=None):
+        """aread_or_create_session 的安全版本：同步 DB 读取走 to_thread()"""
+        from time import time
+        from uuid import uuid4
+        from typing import cast
+        from agno.db.types import AgentSession
+        from agno.agent._storage import read_session, get_agent_data
+        from agno.utils.log import log_debug
+        from agno.run.output import RunOutput
+        from agno.run.message import Message
+
+        # 返回缓存 session
+        if (
+            agent._cached_session is not None
+            and agent._cached_session.session_id == session_id
+            and (user_id is None or agent._cached_session.user_id == user_id)
+        ):
+            return agent._cached_session
+
+        # 从数据库加载
+        agent_session = None
+        if agent.db is not None and agent.team_id is None and agent.workflow_id is None:
+            log_debug(f"Reading AgentSession: {session_id}")
+            if _init.has_async_db(agent):
+                agent_session = cast(AgentSession, await _storage.aread_session(agent, session_id=session_id, user_id=user_id))
+            else:
+                # 关键修复：同步 DB 读取走 to_thread()
+                agent_session = cast(AgentSession, await asyncio.to_thread(
+                    _storage.read_session, agent, session_id=session_id, user_id=user_id
+                ))
+
+        if agent_session is None:
+            log_debug(f"Creating new AgentSession: {session_id}")
+            session_data = {}
+            if agent.session_state is not None:
+                from copy import deepcopy
+                session_data["session_state"] = deepcopy(agent.session_state)
+            agent_session = AgentSession(
+                session_id=session_id,
+                agent_id=agent.id,
+                user_id=user_id,
+                agent_data=get_agent_data(agent),
+                session_data=session_data,
+                metadata=agent.metadata,
+                created_at=int(time()),
+            )
+            if agent.introduction is not None:
+                agent_session.upsert_run(
+                    RunOutput(
+                        run_id=str(uuid4()),
+                        session_id=session_id,
+                        agent_id=agent.id,
+                        agent_name=agent.name,
+                        user_id=user_id,
+                        content=agent.introduction,
+                        messages=[
+                            Message(role=agent.model.assistant_message_role, content=agent.introduction)
+                        ],
+                    )
+                )
+
+        if agent.cache_session:
+            agent._cached_session = agent_session
+
+        return agent_session
+
+    async def _patched_asave_session(agent, session):
+        """asave_session 的安全版本：同步 DB 操作走 to_thread()"""
+        if (
+            agent.db is not None
+            and agent.team_id is None
+            and agent.workflow_id is None
+            and session.session_data is not None
+        ):
+            if session.session_data is not None and isinstance(session.session_data.get("session_state"), dict):
+                session.session_data["session_state"].pop("current_session_id", None)
+                session.session_data["session_state"].pop("current_user_id", None)
+                session.session_data["session_state"].pop("current_run_id", None)
+            if _init.has_async_db(agent):
+                await _storage.aupsert_session(agent, session=session)
+            else:
+                # 关键修复：同步 upsert_session 走 to_thread()
+                await asyncio.to_thread(_storage.upsert_session, agent, session=session)
+            from agno.utils.log import log_debug
+            log_debug(f"Created or updated AgentSession record: {session.session_id}")
+
+    # 替换模块级函数
+    _storage.aupsert_session = _patched_aupsert_session
+    _storage.aread_or_create_session = _patched_aread_or_create_session
+    _session.asave_session = _patched_asave_session
+
 
 class CustomerAgent(Bot):
     knowledge_manager: KnowledgeManager
@@ -41,6 +179,9 @@ class CustomerAgent(Bot):
         """初始化CustomerAgent"""
         if self._is_initialized:
             return True
+
+        # Patch agno 框架的 async DB 函数（幂等，全局只执行一次）
+        _patch_agno_async_db()
 
         try:
             # 获取配置
@@ -174,6 +315,22 @@ class CustomerAgent(Bot):
                 "user_id": str(context.kwargs.user_id),
                 "from_uid": str(context.kwargs.from_uid),
             }
+
+            # 预读 session 到缓存，避免 arun_dispatch 中的同步 read_or_create_session 阻塞事件循环
+            # arun_dispatch（非 async 函数）内部会同步调用 read_or_create_session 读取 pre_session，
+            # 对同步 DB 这会直接阻塞 asyncio 事件循环。通过提前在线程池中预读并设置
+            # agent._cached_session，让 read_or_create_session 命中缓存直接返回，不触发 DB I/O。
+            try:
+                if self._agent.db is not None:
+                    from agno.agent._storage import read_or_create_session as _sync_read_or_create
+                    # 在线程池中执行同步 DB 读取
+                    _pre_session = await asyncio.to_thread(
+                        _sync_read_or_create, self._agent, session_id=session_id, user_id=context.kwargs.user_id
+                    )
+                    # 设置缓存，让 arun_dispatch 中的 read_or_create_session 命中缓存
+                    self._agent._cached_session = _pre_session
+            except Exception:
+                pass  # 预读失败不影响主流程，最坏情况 arun_dispatch 做同步读取
 
             response: RunOutput = await self._agent.arun(
                 user_id=context.kwargs.user_id,

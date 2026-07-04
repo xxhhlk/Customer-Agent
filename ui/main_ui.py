@@ -42,6 +42,10 @@ class SafeSystemThemeListener(SystemThemeListener):
     @pyqtSlot(str)
     def _do_theme_change_in_main(self, theme_lower: str):
         """在主线程中安全地执行主题切换"""
+        # 获取主窗口引用，用于冻结导航栏
+        main_window = self.parent()
+        nav_frozen = False
+
         try:
             theme = Theme.DARK if theme_lower == "dark" else Theme.LIGHT
 
@@ -49,12 +53,35 @@ class SafeSystemThemeListener(SystemThemeListener):
             if qconfig.themeMode.value != Theme.AUTO or theme == qconfig.theme:
                 return
 
-            # 现在在主线程中安全地修改主题状态
-            qconfig.theme = Theme.AUTO  # setter 内部会调用 darkdetect.theme() 获取实际值
-            qconfig._cfg.themeChanged.emit(Theme.AUTO)
+            # 在 setTheme() 之前冻结导航栏重绘，防止 paintEvent 在主题状态过渡期间
+            # 读取不一致的 isDarkTheme() → QSvgRenderer 拿到无效 SVG 数据 → access violation
+            if main_window is not None and hasattr(main_window, 'navigationInterface'):
+                try:
+                    main_window.navigationInterface.setUpdatesEnabled(False)
+                    nav_frozen = True
+                except Exception:
+                    nav_frozen = False
+
+            # 使用 setTheme() API 原子性地切换主题
+            # setTheme 内部会：1) qconfig.set() 更新主题并 emit themeChanged
+            #                   2) updateStyleSheet() 更新样式表
+            #                   3) emit themeChangedFinished
+            # 比 直接操作 qconfig.theme + 手动 emit 信号更安全，确保
+            # isDarkTheme() 和样式表在 paintEvent 中始终一致
+            setTheme(Theme.AUTO, save=True)
             self.systemThemeChanged.emit()
         except Exception:
             pass
+        finally:
+            if nav_frozen:
+                # 延迟恢复导航栏重绘，确保所有主题相关的样式变更已处理完毕
+                def _restore_nav():
+                    try:
+                        main_window.navigationInterface.setUpdatesEnabled(True)
+                        main_window.navigationInterface.update()
+                    except Exception:
+                        pass
+                QTimer.singleShot(100, _restore_nav)
 
 if TYPE_CHECKING:
     from ui.auto_reply import AutoReplyUI

@@ -206,7 +206,11 @@ class AutoReplyCard(CardWidget):
                 self.offline_btn.setEnabled(True)
 
     def setAutoReplyStatus(self, is_running: bool):
-        """设置自动回复状态"""
+        """设置自动回复状态
+
+        注意：该方法会同时恢复按钮的启用状态，确保无论从哪里调用，
+        按钮在状态切换后都能保持可点击（避免出现"停止中..."后按钮永久禁用）。
+        """
         self.auto_reply_status = is_running
         if is_running:
             self.auto_reply_btn.setText("停止回复")
@@ -214,6 +218,8 @@ class AutoReplyCard(CardWidget):
         else:
             self.auto_reply_btn.setText("开始回复")
             self.auto_reply_btn.setIcon(FIF.ROBOT)
+        # 状态切换后必须重新启用按钮，避免出现"启动中..."/"停止中..."之后按钮永久禁用
+        self.auto_reply_btn.setEnabled(True)
 
     def updateStatus(self, new_status: int):
         """更新账号状态"""
