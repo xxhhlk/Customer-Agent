@@ -286,13 +286,14 @@ class ChatUI(QFrame):
         class _ForwardWorker(QThread):
             done = pyqtSignal(bool, str)  # success, error_msg
 
-            def __init__(self, sid, uid, target_uid, cnt, ctx_type):
+            def __init__(self, sid, uid, target_uid, cnt, ctx_type, media_meta=None):
                 super().__init__()
                 self._sid = sid
                 self._uid = uid
                 self._target_uid = target_uid
                 self._cnt = cnt
                 self._ctx_type = ctx_type
+                self._media_meta = media_meta
 
             def run(self):
                 try:
@@ -302,7 +303,26 @@ class ChatUI(QFrame):
                     if self._ctx_type == "image":
                         result = sender.send_image(str(self._target_uid), self._cnt)
                     elif self._ctx_type == "video":
-                        result = sender.send_video(str(self._target_uid), self._cnt)
+                        # 从 media_meta 构造 PDD 要求的 info 字段
+                        info = None
+                        if self._media_meta:
+                            try:
+                                import json
+                                meta = json.loads(self._media_meta) if isinstance(self._media_meta, str) else self._media_meta
+                                cover_url = meta.get("cover_url")
+                                cover_size = meta.get("cover_size")
+                                duration = meta.get("duration")
+                                if cover_url:
+                                    info = {}
+                                    preview = {"url": cover_url}
+                                    if cover_size:
+                                        preview["size"] = cover_size
+                                    info["preview"] = preview
+                                    if duration is not None:
+                                        info["duration"] = duration
+                            except Exception as e:
+                                logger.warning(f"构造视频 info 失败: {e}")
+                        result = sender.send_video(str(self._target_uid), self._cnt, info=info)
                     elif self._ctx_type == "goods_card":
                         # 商品卡片尝试提取 goods_id
                         try:
@@ -337,7 +357,7 @@ class ChatUI(QFrame):
                 except Exception as e:
                     self.done.emit(False, str(e))
 
-        worker = _ForwardWorker(shop_id, user_id, target_buyer_uid, content, context_type)
+        worker = _ForwardWorker(shop_id, user_id, target_buyer_uid, content, context_type, media_meta=msg_data.get("media_meta"))
         worker.done.connect(
             lambda success, err: logger.info(f"转发消息: success={success}, err={err}")
             if not success else None
