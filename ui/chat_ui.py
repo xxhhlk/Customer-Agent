@@ -302,8 +302,7 @@ class ChatUI(QFrame):
                     if self._ctx_type == "image":
                         result = sender.send_image(str(self._target_uid), self._cnt)
                     elif self._ctx_type == "video":
-                        # 视频消息转发时发送视频URL作为文本
-                        result = sender.send_text(str(self._target_uid), self._cnt)
+                        result = sender.send_video(str(self._target_uid), self._cnt)
                     elif self._ctx_type == "goods_card":
                         # 商品卡片尝试提取 goods_id
                         try:
@@ -326,6 +325,7 @@ class ChatUI(QFrame):
                                 buyer_uid=self._target_uid,
                                 reply_content=self._cnt,
                                 reply_source="manual",
+                                context_type=self._ctx_type,
                             )
                             if msg_dict:
                                 message_persistence_service.notify_new_message(msg_dict)

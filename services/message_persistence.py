@@ -23,7 +23,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
-from database.models import ChatMessageRecord
+from database.models import ChatMessageRecord, Shop, Channel
 from database.db_manager import get_db_manager
 from utils.logger_loguru import get_logger
 
@@ -350,6 +350,7 @@ class MessagePersistenceService:
         buyer_uid: str,
         reply_content: str,
         reply_source: str,
+        context_type: str = "text",
     ) -> Optional[Dict[str, Any]]:
         """保存出站消息（AI/关键词/兜底/手动 回复）
 
@@ -359,6 +360,7 @@ class MessagePersistenceService:
             buyer_uid: 买家 UID（也是发送目标 to_uid）
             reply_content: 回复内容
             reply_source: 回复来源 'ai'/'keyword'/'staff'/'fallback'/'manual'
+            context_type: 消息类型 'text'/'image'/'video'/'goods_card' 等
         """
         try:
             # 生成唯一 msg_id
@@ -373,6 +375,25 @@ class MessagePersistenceService:
             from_role = "mall_cs"
             to_role = "user"
 
+            # 查询店铺名称（避免依赖调用方传入，统一在持久化层处理）
+            shop_name = None
+            try:
+                db_manager = get_db_manager()
+                session: Session = db_manager.Session()
+                try:
+                    shop_row = session.query(Shop.shop_name).join(
+                        Channel, Channel.id == Shop.channel_id
+                    ).filter(
+                        Channel.channel_name == "pinduoduo",
+                        Shop.shop_id == str(shop_id),
+                    ).first()
+                    if shop_row:
+                        shop_name = shop_row.shop_name
+                finally:
+                    session.close()
+            except Exception:
+                pass
+
             db_manager = get_db_manager()
             session: Session = db_manager.Session()
             try:
@@ -380,7 +401,7 @@ class MessagePersistenceService:
                     msg_id=msg_id,
                     shop_id=str(shop_id),
                     user_id=str(user_id),
-                    shop_name=None,
+                    shop_name=shop_name,
                     buyer_uid=str(buyer_uid),
                     from_uid=str(user_id),
                     from_role=from_role,
@@ -389,7 +410,7 @@ class MessagePersistenceService:
                     nickname=nickname,
                     content=reply_content,
                     msg_type=None,
-                    context_type="text",
+                    context_type=context_type,
                     direction="outbound",
                     reply_source=reply_source,
                     timestamp=timestamp,
@@ -454,6 +475,12 @@ class MessagePersistenceService:
                           AND nickname != 'user' AND nickname != 'mall_cs'
                     ) sub
                     WHERE rn = 1
+                ),
+                shop_names AS (
+                    SELECT s.shop_id, s.shop_name
+                    FROM shops s
+                    JOIN channels ch ON ch.id = s.channel_id
+                    WHERE ch.channel_name = 'pinduoduo'
                 )
                 SELECT * FROM (
                     SELECT
@@ -465,9 +492,11 @@ class MessagePersistenceService:
                         COUNT(*) OVER (
                             PARTITION BY c.shop_id, c.buyer_uid
                         ) AS msg_count,
-                        bn.nickname AS buyer_nickname
+                        bn.nickname AS buyer_nickname,
+                        sn.shop_name AS shop_name_reliable
                     FROM chat_message_records c
                     LEFT JOIN buyer_nicks bn ON bn.shop_id = c.shop_id AND bn.buyer_uid = c.buyer_uid
+                    LEFT JOIN shop_names sn ON sn.shop_id = c.shop_id
                     WHERE (:shop_id IS NULL OR c.shop_id = :shop_id)
                 ) sub2
                 WHERE rn = 1
@@ -489,7 +518,7 @@ class MessagePersistenceService:
                     last_time = ""
                 result.append({
                     "shop_id": row.shop_id,
-                    "shop_name": row.shop_name or row.shop_id,
+                    "shop_name": row.shop_name_reliable or row.shop_name or row.shop_id,
                     "buyer_uid": row.buyer_uid,
                     "nickname": row.buyer_nickname or row.nickname or row.buyer_uid,
                     "last_content": row.content or "",

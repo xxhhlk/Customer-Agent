@@ -27,7 +27,7 @@ class _TargetLoader(QThread):
             # 空字符串会让 SQL WHERE c.shop_id = "" 匹配不到任何记录，转为 None
             sid = self._shop_id if self._shop_id else None
             convs = message_persistence_service.get_conversations(
-                shop_id=sid, limit=200
+                shop_id=sid, limit=5000
             )
             result = []
             for c in convs:
@@ -170,7 +170,7 @@ class ForwardDialog(QDialog):
 
         filtered = []
         for uid, nick, shop, count in self._all_items:
-            if keyword in nick.lower() or keyword in uid.lower():
+            if keyword in nick.lower() or keyword in uid.lower() or keyword in shop.lower():
                 filtered.append((uid, nick, shop, count))
         self._rebuild_list(filtered)
 

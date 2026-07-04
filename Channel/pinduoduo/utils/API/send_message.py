@@ -85,6 +85,39 @@ class SendMessage(BaseRequest):
             self.logger.debug(f"发送图片消息成功: {result}")
             return result
 
+    def send_video(self, recipient_uid, video_url):
+        """
+        发送视频消息（type=14）
+        """
+        url = "https://mms.pinduoduo.com/plateau/chat/send_message"
+        data = {
+            "data": {
+                "cmd": "send_message",
+                "request_id": self.generate_request_id(),
+                "message": {
+                    "to": {
+                        "role": "user",
+                        "uid": recipient_uid
+                    },
+                    "from": {
+                        "role": "mall_cs"
+                    },
+                    "content": video_url,
+                    "msg_id": None,
+                    "chat_type": "cs",
+                    "type": 14,
+                    "is_aut": 0,
+                    "manual_reply": 1,
+                }
+            },
+            "client": "WEB"
+        }
+
+        result = self.post(url, json_data=data)
+        if result:
+            self.logger.debug(f"发送视频消息成功: {result}")
+            return result
+
 
     def send_mallGoodsCard(self, recipient_uid, goods_id, biz_type: int = 2):
         """
