@@ -339,6 +339,10 @@ class ChatUI(QFrame):
                         # 持久化
                         try:
                             from services.message_persistence import message_persistence_service
+                            # 对于视频/图片消息，持久化时携带 media_meta
+                            out_media_meta = None
+                            if self._ctx_type in ("video", "image") and self._media_meta:
+                                out_media_meta = self._media_meta if isinstance(self._media_meta, str) else json.dumps(self._media_meta, ensure_ascii=False)
                             msg_dict = message_persistence_service.save_outbound_message(
                                 shop_id=self._sid,
                                 user_id=self._uid,
@@ -346,6 +350,7 @@ class ChatUI(QFrame):
                                 reply_content=self._cnt,
                                 reply_source="manual",
                                 context_type=self._ctx_type,
+                                media_meta=out_media_meta,
                             )
                             if msg_dict:
                                 message_persistence_service.notify_new_message(msg_dict)

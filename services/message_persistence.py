@@ -351,6 +351,7 @@ class MessagePersistenceService:
         reply_content: str,
         reply_source: str,
         context_type: str = "text",
+        media_meta: str = None,
     ) -> Optional[Dict[str, Any]]:
         """保存出站消息（AI/关键词/兜底/手动 回复）
 
@@ -361,6 +362,7 @@ class MessagePersistenceService:
             reply_content: 回复内容
             reply_source: 回复来源 'ai'/'keyword'/'staff'/'fallback'/'manual'
             context_type: 消息类型 'text'/'image'/'video'/'goods_card' 等
+            media_meta: 媒体元数据 JSON 字符串（视频/图片消息的封面/时长等）
         """
         try:
             # 生成唯一 msg_id
@@ -415,6 +417,7 @@ class MessagePersistenceService:
                     reply_source=reply_source,
                     timestamp=timestamp,
                     created_at=datetime.now(),
+                    media_meta=media_meta,
                 )
                 session.add(record)
                 session.commit()
