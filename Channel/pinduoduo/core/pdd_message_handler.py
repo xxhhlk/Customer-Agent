@@ -72,6 +72,17 @@ class MessageHandlerMixin:
             from_uid_log = message_data.get("message", {}).get("from_uid", "unknown")
             self.logger.debug(f"收到消息: type={msg_type}, from_uid={from_uid_log}, shop_id={shop_id}")
 
+            # 当收到客服端发送的视频消息（mall_cs + type=14），打印完整结构用于对比
+            if msg_type == 14:
+                msg_body = message_data.get("message", {})
+                self.logger.info(f"[MALL_CS_VIDEO] ===== 收到客服端视频消息（对比用）=====")
+                self.logger.info(f"[MALL_CS_VIDEO] from_role={msg_body.get('from', {}).get('role')}, "
+                                f"to_uid={msg_body.get('to', {}).get('uid')}, "
+                                f"content={str(msg_body.get('content', ''))[:120]}...")
+                self.logger.info(f"[MALL_CS_VIDEO] message.info={json.dumps(msg_body.get('info'), ensure_ascii=False, default=str)}")
+                self.logger.info(f"[MALL_CS_VIDEO] 完整 message keys: {list(msg_body.keys())}")
+                self.logger.info(f"[MALL_CS_VIDEO] 完整 message: {json.dumps(msg_body, ensure_ascii=False, default=str)}")
+
             try:
                 pdd_message = PDDChatMessage(message_data)
             except Exception as pdd_error:
