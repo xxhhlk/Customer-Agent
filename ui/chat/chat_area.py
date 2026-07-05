@@ -40,6 +40,9 @@ class ChatAreaPanel(QWidget):
     send_manual_reply = pyqtSignal(str, str, str, str)  # shop_id, user_id, text, buyer_uid
     forward_message = pyqtSignal(dict, str)  # msg_data, target_buyer_uid
 
+    # 判断"在底部"的像素容差
+    _BOTTOM_THRESHOLD = 60
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ChatAreaPanel")
@@ -48,6 +51,10 @@ class ChatAreaPanel(QWidget):
         self._current_buyer_uid: str = ""
         self._loader: _MessageLoader | None = None
         self._load_token: int = 0  # 每次加载递增，用于区分过期回调
+        self._user_scrolled_up: bool = False  # 用户是否手动向上滚动（浏览历史）
+        self._scroll_retry_timer: QTimer | None = None  # 滚动重试定时器
+        self._scroll_retry_count: int = 0  # 重试计数
+        self._scroll_target_token: int = 0  # 滚动重试对应的 load_token
 
         self._init_ui()
         self._apply_theme()
@@ -107,6 +114,9 @@ class ChatAreaPanel(QWidget):
         self._msg_layout.addStretch()
         self.scroll_area.setWidget(self._msg_container)
 
+        # 监听滚动条变化，检测用户是否手动向上滚动
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+
         layout.addWidget(self.scroll_area, 1)
 
         # 输入区域
@@ -123,6 +133,10 @@ class ChatAreaPanel(QWidget):
         # 递增 token，让旧的 loader 回调过期
         self._load_token += 1
         token = self._load_token
+
+        # 切换会话时重置滚动状态
+        self._user_scrolled_up = False
+        self._cancel_scroll_retry()
 
         # 清空旧消息
         self._clear_messages()
@@ -169,8 +183,8 @@ class ChatAreaPanel(QWidget):
             self.header_detail.setText("")
             self.input_area.set_enabled(False)
 
-        # 滚动到底部
-        QTimer.singleShot(80, self._scroll_to_bottom)
+        # 滚动到底部 — 使用带重试的滚动策略
+        self._schedule_scroll_to_bottom(token)
 
     def append_message(self, msg_data: dict):
         """追加新消息（实时）"""
@@ -185,7 +199,10 @@ class ChatAreaPanel(QWidget):
         bubble = MessageBubble(msg_data)
         self._connect_bubble_signal(bubble)
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
-        QTimer.singleShot(50, self._scroll_to_bottom)
+
+        # 智能滚动：用户在浏览历史时不强制拉回，否则滚到底部
+        if not self._user_scrolled_up:
+            self._schedule_scroll_to_bottom(self._load_token)
 
     def _clear_messages(self):
         """清空消息气泡"""
@@ -239,11 +256,61 @@ class ChatAreaPanel(QWidget):
         )
         dlg.exec()
 
-    def _scroll_to_bottom(self):
-        """滚动到底部"""
+    def _on_scroll_value_changed(self, value: int):
+        """滚动条值变化时，检测用户是否手动向上滚动"""
         vbar = self.scroll_area.verticalScrollBar()
-        if vbar is not None:
-            vbar.setValue(vbar.maximum())
+        if vbar is None:
+            return
+        # 如果滚动条不在底部附近，标记用户正在浏览历史
+        at_bottom = value >= vbar.maximum() - self._BOTTOM_THRESHOLD
+        self._user_scrolled_up = not at_bottom
+
+    def _is_at_bottom(self) -> bool:
+        """判断当前滚动条是否在底部附近"""
+        vbar = self.scroll_area.verticalScrollBar()
+        if vbar is None:
+            return True
+        return vbar.value() >= vbar.maximum() - self._BOTTOM_THRESHOLD
+
+    def _schedule_scroll_to_bottom(self, token: int):
+        """调度滚动到底部，带重试机制确保布局完成后再滚动"""
+        self._cancel_scroll_retry()
+        self._scroll_target_token = token
+        self._scroll_retry_count = 0
+        # 首次延迟稍长，让 Qt 布局系统有时间完成重算
+        QTimer.singleShot(100, self._do_scroll_with_retry)
+
+    def _do_scroll_with_retry(self):
+        """执行滚动，如果未到真正底部则重试"""
+        # 检查是否过期（用户已切换会话）
+        if self._scroll_target_token != self._load_token:
+            return
+
+        vbar = self.scroll_area.verticalScrollBar()
+        if vbar is None:
+            return
+
+        vbar.setValue(vbar.maximum())
+
+        # 检查是否真正到达底部：setValue 后 value 可能小于 maximum，
+        # 说明布局尚未完成（widget 高度还在变化）
+        max_retries = 5
+        self._scroll_retry_count += 1
+
+        if vbar.value() < vbar.maximum() - 2 and self._scroll_retry_count <= max_retries:
+            # 布局还没完成，延迟重试（逐渐加长间隔）
+            delay = 50 * self._scroll_retry_count
+            self._scroll_retry_timer = QTimer(self)
+            self._scroll_retry_timer.setSingleShot(True)
+            self._scroll_retry_timer.timeout.connect(self._do_scroll_with_retry)
+            self._scroll_retry_timer.start(delay)
+
+    def _cancel_scroll_retry(self):
+        """取消正在进行的滚动重试"""
+        if self._scroll_retry_timer is not None:
+            self._scroll_retry_timer.stop()
+            self._scroll_retry_timer.deleteLater()
+            self._scroll_retry_timer = None
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:

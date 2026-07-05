@@ -74,6 +74,15 @@ class MessageTypeHandler:
     @staticmethod
     def handle_video(msg_data):
         """处理视频消息"""
+        import json
+        try:
+            message = msg_data.get("message", {})
+            logger = get_logger("PDDMessage")
+            logger.info(f"[INBOUND_VIDEO] 收到视频消息 - content={str(message.get('content', ''))[:80]}..., "
+                        f"type={message.get('type')}, "
+                        f"info={json.dumps(message.get('info', {}), ensure_ascii=False)}")
+        except Exception:
+            pass
         return MessageTypeHandler._get_content(msg_data, ContextType.VIDEO, ("message", "content"))
 
     @staticmethod
