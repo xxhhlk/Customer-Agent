@@ -109,7 +109,8 @@ class SendMessage(BaseRequest):
         if info and isinstance(info, dict):
             message["info"] = info
 
-        data = {
+        import json
+        payload = {
             "data": {
                 "cmd": "send_message",
                 "request_id": self.generate_request_id(),
@@ -117,13 +118,20 @@ class SendMessage(BaseRequest):
             },
             "client": "WEB"
         }
-
-        self.logger.info(f"[SEND_VIDEO] 发送视频消息: recipient={recipient_uid}, "
+        self.logger.info(f"[SEND_VIDEO] ===== 发送视频消息 PAYLOAD =====")
+        self.logger.info(f"[SEND_VIDEO] recipient={recipient_uid}, "
+                        f"video_url={video_url[:120]}..., "
                         f"video_url_len={len(video_url) if video_url else 0}, "
                         f"has_info={'YES' if info else 'NO'}")
+        self.logger.info(f"[SEND_VIDEO] 完整 message: {json.dumps(message, ensure_ascii=False, default=str)}")
+        self.logger.info(f"[SEND_VIDEO] 完整 payload: {json.dumps(payload, ensure_ascii=False, default=str)}")
+
+        data = payload
 
         result = self.post(url, json_data=data)
         if result:
+            self.logger.info(f"[SEND_VIDEO] ===== 发送视频消息 RESPONSE =====")
+            self.logger.info(f"[SEND_VIDEO] 完整响应: {json.dumps(result, ensure_ascii=False, default=str)}")
             # 检查 error_code，与 send_text 保持一致的错误处理
             if result.get("success") == True:
                 error_code = result.get("result", {}).get("error_code")

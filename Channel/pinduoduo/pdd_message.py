@@ -75,6 +75,7 @@ class MessageTypeHandler:
     def handle_video(msg_data):
         """处理视频消息"""
         import json
+        from utils.logger_loguru import get_logger
         try:
             message = msg_data.get("message", {})
             logger = get_logger("PDDMessage")
