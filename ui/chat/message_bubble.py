@@ -195,7 +195,12 @@ class MessageBubble(QFrame):
         menu.addSeparator()
 
         forward_action = QAction("转发消息", self)
-        forward_action.triggered.connect(self._on_forward)
+        # 视频消息 PDD API 不支持直接转发（result=ok 但静默不投递）
+        if context_type == "video":
+            forward_action.setEnabled(False)
+            forward_action.setToolTip("视频消息暂不支持直接转发，可通过复制链接发送")
+        else:
+            forward_action.triggered.connect(self._on_forward)
         menu.addAction(forward_action)
 
         menu.exec(self.mapToGlobal(pos))

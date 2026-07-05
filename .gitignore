@@ -1,4 +1,4 @@
-# ============================================
+﻿# ============================================
 # Python 项目 .gitignore 配置文件
 # 项目: Agent-Customer (拼多多智能客服系统)
 # ============================================
@@ -143,8 +143,8 @@ config.json
 # 工具和框架特定
 # ====================
 # WorkBuddy
-.workbuddy/
-
+.workbuddy
+.codebuddy
 # Serena
 .serena/
 
@@ -152,7 +152,7 @@ config.json
 .claude/
 
 # Qwen
-.qwen/
+.qwen
 
 # Spec workflow
 .spec-workflow/
@@ -183,3 +183,5 @@ site/
 # pip
 pip-log.txt
 pip-delete-this-directory.txt
+
+*.lnk

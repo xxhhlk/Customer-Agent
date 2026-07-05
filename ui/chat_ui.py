@@ -316,12 +316,20 @@ class ChatUI(QFrame):
                             try:
                                 import json
                                 meta = json.loads(self._media_meta) if isinstance(self._media_meta, str) else self._media_meta
-                                # 优先使用完整 raw_info（含 download_url/file_id/size/status 等 PDD 必填字段）
                                 raw_info = meta.get("raw_info")
                                 if raw_info and isinstance(raw_info, dict):
-                                    info = raw_info
-                                    logger.info(f"[FORWARD] 视频 raw_info 复用完成: "
-                                                f"keys={list(info.keys())}, duration={info.get('duration')}")
+                                    # PDD send_video 需要的 info 字段: preview + duration
+                                    # 注意: download_url 会导致 40003；仅 preview+duration 时
+                                    # result=ok 但视频静默不投递，因此视频转发按钮已禁用
+                                    info = {}
+                                    preview = raw_info.get("preview")
+                                    if preview:
+                                        info["preview"] = preview
+                                    if raw_info.get("duration") is not None:
+                                        info["duration"] = raw_info["duration"]
+                                    logger.info(f"[FORWARD] 视频 info（preview+duration）: "
+                                                f"duration={info.get('duration')}, "
+                                                f"has_preview={bool(info.get('preview'))}")
                                 else:
                                     # 回退：用旧字段拼凑（老版本入库的没有 raw_info）
                                     cover_url = meta.get("cover_url")

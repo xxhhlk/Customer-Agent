@@ -98,9 +98,7 @@ class SendMessage(BaseRequest):
         message = {
             "to": {"role": "user", "uid": recipient_uid},
             "from": {
-                "role": "mall_cs",
-                "uid": str(self.shop_id),
-                "mall_id": str(self.shop_id),
+                "role": "mall_cs"
             },
             "content": video_url,
             "msg_id": None,
