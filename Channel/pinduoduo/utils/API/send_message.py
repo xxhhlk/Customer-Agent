@@ -71,7 +71,6 @@ class SendMessage(BaseRequest):
                     },
                     "content": image_url,
                     "msg_id": None,
-                    "chat_type": "cs",
                     "type": 1,
                     "is_aut": 0,
                     "manual_reply": 1,
@@ -101,11 +100,12 @@ class SendMessage(BaseRequest):
             "from": {"role": "mall_cs"},
             "content": video_url,
             "msg_id": None,
-            "chat_type": "cs",
             "type": 14,
             "is_aut": 0,
             "manual_reply": 1,
         }
+        # 注意：不传 chat_type 字段，与 send_text 保持一致
+        # 之前传 "chat_type": "cs" 时，API 返回 success:True 但消息实际未送达
         if info and isinstance(info, dict):
             message["info"] = info
 
@@ -118,10 +118,26 @@ class SendMessage(BaseRequest):
             "client": "WEB"
         }
 
+        self.logger.info(f"[SEND_VIDEO] 发送视频消息: recipient={recipient_uid}, "
+                        f"video_url_len={len(video_url) if video_url else 0}, "
+                        f"has_info={'YES' if info else 'NO'}")
+
         result = self.post(url, json_data=data)
         if result:
-            self.logger.debug(f"发送视频消息成功: {result}")
+            # 检查 error_code，与 send_text 保持一致的错误处理
+            if result.get("success") == True:
+                error_code = result.get("result", {}).get("error_code")
+                if error_code and error_code != 0:
+                    error_msg = result.get('result', {}).get('error', '未知错误')
+                    self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: error_code={error_code}, error={error_msg}")
+                    return result
+                self.logger.info(f"[SEND_VIDEO] 发送视频消息成功: msg_id={result.get('result', {}).get('msg_id')}")
+            else:
+                self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: success=False, result={result}")
             return result
+        else:
+            self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: 请求返回None")
+            return None
 
 
     def send_mallGoodsCard(self, recipient_uid, goods_id, biz_type: int = 2):

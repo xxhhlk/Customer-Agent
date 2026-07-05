@@ -283,6 +283,10 @@ class ChatUI(QFrame):
             logger.warning("转发消息缺少必要参数")
             return
 
+        logger.info(f"[FORWARD] 开始转发: shop_id={shop_id}, user_id={user_id}, "
+                    f"target_buyer_uid={target_buyer_uid}, context_type={context_type}, "
+                    f"content_len={len(content) if content else 0}")
+
         class _ForwardWorker(QThread):
             done = pyqtSignal(bool, str)  # success, error_msg
 
@@ -299,8 +303,11 @@ class ChatUI(QFrame):
                 try:
                     from Channel.pinduoduo.utils.API.send_message import SendMessage
                     sender = SendMessage(str(self._sid), str(self._uid))
+                    logger.info(f"[FORWARD] SendMessage 已创建: shop_id={self._sid}, user_id={self._uid}, "
+                                f"account_name={sender.account_name}, has_cookies={bool(sender.cookies)}")
 
                     if self._ctx_type == "image":
+                        logger.info(f"[FORWARD] 调用 send_image: target={self._target_uid}")
                         result = sender.send_image(str(self._target_uid), self._cnt)
                     elif self._ctx_type == "video":
                         # 从 media_meta 构造 PDD 要求的 info 字段
@@ -320,8 +327,15 @@ class ChatUI(QFrame):
                                     info["preview"] = preview
                                     if duration is not None:
                                         info["duration"] = duration
+                                    logger.info(f"[FORWARD] 视频 info 构造完成: cover_url={cover_url[:80]}..., "
+                                                f"duration={duration}, has_size={bool(cover_size)}")
+                                else:
+                                    logger.warning(f"[FORWARD] media_meta 缺少 cover_url: {list(meta.keys())}")
                             except Exception as e:
                                 logger.warning(f"构造视频 info 失败: {e}")
+                        else:
+                            logger.warning("[FORWARD] 视频消息缺少 media_meta，将不带 info 字段发送")
+                        logger.info(f"[FORWARD] 调用 send_video: target={self._target_uid}, has_info={bool(info)}")
                         result = sender.send_video(str(self._target_uid), self._cnt, info=info)
                     elif self._ctx_type == "goods_card":
                         # 商品卡片尝试提取 goods_id
@@ -333,7 +347,16 @@ class ChatUI(QFrame):
                         except Exception:
                             result = sender.send_text(str(self._target_uid), self._cnt)
                     else:
+                        logger.info(f"[FORWARD] 调用 send_text: target={self._target_uid}")
                         result = sender.send_text(str(self._target_uid), self._cnt)
+
+                    logger.info(f"[FORWARD] API 响应: success={isinstance(result, dict) and result.get('success')}, "
+                                f"result_keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
+                    if isinstance(result, dict):
+                        error_code = result.get("result", {}).get("error_code")
+                        if error_code:
+                            logger.warning(f"[FORWARD] API 返回 error_code={error_code}, "
+                                          f"error={result.get('result', {}).get('error')}")
 
                     if isinstance(result, dict) and result.get("success"):
                         # 持久化
@@ -354,17 +377,20 @@ class ChatUI(QFrame):
                             )
                             if msg_dict:
                                 message_persistence_service.notify_new_message(msg_dict)
-                        except Exception:
-                            pass
+                                logger.info(f"[FORWARD] 持久化成功: buyer={self._target_uid}, type={self._ctx_type}")
+                        except Exception as e:
+                            logger.error(f"[FORWARD] 持久化失败: {e}")
                         self.done.emit(True, "")
                     else:
+                        logger.error(f"[FORWARD] 发送失败: {result}")
                         self.done.emit(False, str(result))
                 except Exception as e:
+                    logger.error(f"[FORWARD] 转发异常: {e}", exc_info=True)
                     self.done.emit(False, str(e))
 
         worker = _ForwardWorker(shop_id, user_id, target_buyer_uid, content, context_type, media_meta=msg_data.get("media_meta"))
         worker.done.connect(
-            lambda success, err: logger.info(f"转发消息: success={success}, err={err}")
+            lambda success, err: logger.info(f"转发消息完成: success={success}, err={err}")
             if not success else None
         )
         worker.start()
