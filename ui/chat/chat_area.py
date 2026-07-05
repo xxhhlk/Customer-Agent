@@ -52,9 +52,7 @@ class ChatAreaPanel(QWidget):
         self._loader: _MessageLoader | None = None
         self._load_token: int = 0  # 每次加载递增，用于区分过期回调
         self._user_scrolled_up: bool = False  # 用户是否手动向上滚动（浏览历史）
-        self._scroll_retry_timer: QTimer | None = None  # 滚动重试定时器
-        self._scroll_retry_count: int = 0  # 重试计数
-        self._scroll_target_token: int = 0  # 滚动重试对应的 load_token
+        self._scroll_fallback_timer: QTimer | None = None  # 兜底定时器（1.5s后强制滚动）
 
         self._init_ui()
         self._apply_theme()
@@ -256,61 +254,65 @@ class ChatAreaPanel(QWidget):
         )
         dlg.exec()
 
+    _SCROLL_FALLBACK_MS = 2000  # 兜底：2秒后强制滚动
+
     def _on_scroll_value_changed(self, value: int):
-        """滚动条值变化时，检测用户是否手动向上滚动"""
+        """滚动条值变化 → 检测用户是否手动向上滚动"""
         vbar = self.scroll_area.verticalScrollBar()
         if vbar is None:
             return
-        # 如果滚动条不在底部附近，标记用户正在浏览历史
-        at_bottom = value >= vbar.maximum() - self._BOTTOM_THRESHOLD
+        at_bottom = vbar.maximum() - value <= self._BOTTOM_THRESHOLD
         self._user_scrolled_up = not at_bottom
 
     def _is_at_bottom(self) -> bool:
-        """判断当前滚动条是否在底部附近"""
         vbar = self.scroll_area.verticalScrollBar()
         if vbar is None:
             return True
-        return vbar.value() >= vbar.maximum() - self._BOTTOM_THRESHOLD
+        return vbar.maximum() - vbar.value() <= self._BOTTOM_THRESHOLD
+
+    # ---------- 自动滚动 --------
 
     def _schedule_scroll_to_bottom(self, token: int):
-        """调度滚动到底部，带重试机制确保布局完成后再滚动"""
+        """布局完成后自动滚到底，通过 rangeChanged + 兜底定时器保证"""
         self._cancel_scroll_retry()
-        self._scroll_target_token = token
-        self._scroll_retry_count = 0
-        # 首次延迟稍长，让 Qt 布局系统有时间完成重算
-        QTimer.singleShot(100, self._do_scroll_with_retry)
-
-    def _do_scroll_with_retry(self):
-        """执行滚动，如果未到真正底部则重试"""
-        # 检查是否过期（用户已切换会话）
-        if self._scroll_target_token != self._load_token:
-            return
 
         vbar = self.scroll_area.verticalScrollBar()
         if vbar is None:
             return
 
+        # 方案：rangeChanged 在滚动区域几何变化后触发，此时 maximum 是准确的
+        def _on_range(min_val, max_val):
+            vbar.setValue(max_val)
+            # 再补一发 QTimer(0)：某些 widget 在 rangeChanged 后才完成最终大小计算
+            QTimer.singleShot(0, lambda: vbar.setValue(vbar.maximum()) if vbar else None)
+            self._cancel_scroll_retry()  # 成功后取消兜底
+
+        # 先做一次即时滚动（可能不准）
         vbar.setValue(vbar.maximum())
 
-        # 检查是否真正到达底部：setValue 后 value 可能小于 maximum，
-        # 说明布局尚未完成（widget 高度还在变化）
-        max_retries = 5
-        self._scroll_retry_count += 1
+        # 监听范围变化（布局完成后会触发），成功滚动后会自动断开
+        vbar.rangeChanged.connect(_on_range)
 
-        if vbar.value() < vbar.maximum() - 2 and self._scroll_retry_count <= max_retries:
-            # 布局还没完成，延迟重试（逐渐加长间隔）
-            delay = 50 * self._scroll_retry_count
-            self._scroll_retry_timer = QTimer(self)
-            self._scroll_retry_timer.setSingleShot(True)
-            self._scroll_retry_timer.timeout.connect(self._do_scroll_with_retry)
-            self._scroll_retry_timer.start(delay)
+        # 兜底定时器：如果 rangeChanged 长时间不触发，2秒后强滚
+        self._scroll_fallback_timer = QTimer(self)
+        self._scroll_fallback_timer.setSingleShot(True)
+        self._scroll_fallback_timer.timeout.connect(
+            lambda: (vbar.setValue(vbar.maximum()), self._cancel_scroll_retry()) if vbar else None
+        )
+        self._scroll_fallback_timer.start(self._SCROLL_FALLBACK_MS)
 
     def _cancel_scroll_retry(self):
-        """取消正在进行的滚动重试"""
-        if self._scroll_retry_timer is not None:
-            self._scroll_retry_timer.stop()
-            self._scroll_retry_timer.deleteLater()
-            self._scroll_retry_timer = None
+        """断开 rangeChanged 监听并停止兜底定时器"""
+        vbar = self.scroll_area.verticalScrollBar()
+        if vbar is not None:
+            try:
+                vbar.rangeChanged.disconnect()
+            except TypeError:
+                pass
+        if self._scroll_fallback_timer is not None:
+            self._scroll_fallback_timer.stop()
+            self._scroll_fallback_timer.deleteLater()
+            self._scroll_fallback_timer = None
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:
