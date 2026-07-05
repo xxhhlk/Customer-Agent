@@ -97,7 +97,11 @@ class SendMessage(BaseRequest):
         url = "https://mms.pinduoduo.com/plateau/chat/send_message"
         message = {
             "to": {"role": "user", "uid": recipient_uid},
-            "from": {"role": "mall_cs"},
+            "from": {
+                "role": "mall_cs",
+                "uid": str(self.shop_id),
+                "mall_id": str(self.shop_id),
+            },
             "content": video_url,
             "msg_id": None,
             "type": 14,
