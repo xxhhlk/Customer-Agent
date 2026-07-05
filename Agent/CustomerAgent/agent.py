@@ -41,7 +41,10 @@ def _patch_agno_async_db():
         return
     _agno_patched = True
 
-    from agno.agent import _storage, _session, _init
+    # 直接导入子模块（agno >= 2.x 不再从 __init__ 导出这些内部模块）
+    import agno.agent._storage as _storage
+    import agno.agent._session as _session
+    import agno.agent._init as _init
 
     # 保存原始函数引用
     _original_aupsert_session = _storage.aupsert_session
