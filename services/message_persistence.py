@@ -292,6 +292,9 @@ class MessagePersistenceService:
             meta: Dict[str, Any] = {}
 
             if context_type_str == "video":
+                # 保存完整 raw_info，转发时需要原样发送给 PDD
+                # PDD 对 info 字段有严格校验，缺 download_url/file_id/size/status 会返回 param error
+                meta["raw_info"] = info
                 preview = info.get("preview")
                 if preview and isinstance(preview, dict):
                     cover_url = preview.get("url")
@@ -303,7 +306,7 @@ class MessagePersistenceService:
                 duration = info.get("duration")
                 if duration is not None:
                     meta["duration"] = duration
-                logger.info(f"[MEDIA_META] video: cover_url={'YES' if meta.get('cover_url') else 'NO'}, duration={meta.get('duration')}")
+                logger.info(f"[MEDIA_META] video: cover_url={'YES' if meta.get('cover_url') else 'NO'}, duration={meta.get('duration')}, has_raw_info=True")
             elif context_type_str == "image":
                 w = info.get("width")
                 h = info.get("height")

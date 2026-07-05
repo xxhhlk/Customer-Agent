@@ -89,7 +89,7 @@ class MessageTypeHandler:
     @staticmethod
     def handle_emotion(msg_data):
         """处理表情消息"""
-        return MessageTypeHandler._get_content(msg_data, ContextType.EMOTION, ("info", "description"))
+        return MessageTypeHandler._get_content(msg_data, ContextType.EMOTION, ("message", "info", "description"))
 
     @staticmethod
     def handle_withdraw(msg_data):

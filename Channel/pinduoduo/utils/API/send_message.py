@@ -136,14 +136,19 @@ class SendMessage(BaseRequest):
         if result:
             self.logger.info(f"[SEND_VIDEO] ===== 发送视频消息 RESPONSE =====")
             self.logger.info(f"[SEND_VIDEO] 完整响应: {json.dumps(result, ensure_ascii=False, default=str)}")
-            # 检查 error_code，与 send_text 保持一致的错误处理
             if result.get("success") == True:
-                error_code = result.get("result", {}).get("error_code")
+                inner = result.get("result", {})
+                # PDD 视频消息额外校验：result.result 为 "fail" 时表示参数错误等
+                if inner.get("result") == "fail":
+                    reason = inner.get("reason", "未知错误")
+                    self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: result=fail, reason={reason}")
+                    return result
+                error_code = inner.get("error_code")
                 if error_code and error_code != 0:
-                    error_msg = result.get('result', {}).get('error', '未知错误')
+                    error_msg = inner.get("error", "未知错误")
                     self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: error_code={error_code}, error={error_msg}")
                     return result
-                self.logger.info(f"[SEND_VIDEO] 发送视频消息成功: msg_id={result.get('result', {}).get('msg_id')}")
+                self.logger.info(f"[SEND_VIDEO] 发送视频消息成功: msg_id={inner.get('msg_id')}")
             else:
                 self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: success=False, result={result}")
             return result

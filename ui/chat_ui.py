@@ -316,21 +316,29 @@ class ChatUI(QFrame):
                             try:
                                 import json
                                 meta = json.loads(self._media_meta) if isinstance(self._media_meta, str) else self._media_meta
-                                cover_url = meta.get("cover_url")
-                                cover_size = meta.get("cover_size")
-                                duration = meta.get("duration")
-                                if cover_url:
-                                    info = {}
-                                    preview = {"url": cover_url}
-                                    if cover_size:
-                                        preview["size"] = cover_size
-                                    info["preview"] = preview
-                                    if duration is not None:
-                                        info["duration"] = duration
-                                    logger.info(f"[FORWARD] 视频 info 构造完成: cover_url={cover_url[:80]}..., "
-                                                f"duration={duration}, has_size={bool(cover_size)}")
+                                # 优先使用完整 raw_info（含 download_url/file_id/size/status 等 PDD 必填字段）
+                                raw_info = meta.get("raw_info")
+                                if raw_info and isinstance(raw_info, dict):
+                                    info = raw_info
+                                    logger.info(f"[FORWARD] 视频 raw_info 复用完成: "
+                                                f"keys={list(info.keys())}, duration={info.get('duration')}")
                                 else:
-                                    logger.warning(f"[FORWARD] media_meta 缺少 cover_url: {list(meta.keys())}")
+                                    # 回退：用旧字段拼凑（老版本入库的没有 raw_info）
+                                    cover_url = meta.get("cover_url")
+                                    cover_size = meta.get("cover_size")
+                                    duration = meta.get("duration")
+                                    if cover_url:
+                                        info = {}
+                                        preview = {"url": cover_url}
+                                        if cover_size:
+                                            preview["size"] = cover_size
+                                        info["preview"] = preview
+                                        if duration is not None:
+                                            info["duration"] = duration
+                                        logger.warning(f"[FORWARD] 视频 info 用旧字段拼凑（缺少 raw_info）: "
+                                                       f"cover_url={cover_url[:80]}..., duration={duration}")
+                                    else:
+                                        logger.warning(f"[FORWARD] media_meta 缺少 cover_url: {list(meta.keys())}")
                             except Exception as e:
                                 logger.warning(f"构造视频 info 失败: {e}")
                         else:
@@ -353,12 +361,26 @@ class ChatUI(QFrame):
                     logger.info(f"[FORWARD] API 响应: success={isinstance(result, dict) and result.get('success')}, "
                                 f"result_keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
                     if isinstance(result, dict):
-                        error_code = result.get("result", {}).get("error_code")
+                        inner = result.get("result", {})
+                        error_code = inner.get("error_code")
                         if error_code:
                             logger.warning(f"[FORWARD] API 返回 error_code={error_code}, "
-                                          f"error={result.get('result', {}).get('error')}")
+                                          f"error={inner.get('error')}")
+                        # PDD 视频: result.result="fail" 但 success=True（参数错误等）
+                        if inner.get("result") == "fail":
+                            logger.warning(f"[FORWARD] API 返回 result=fail, reason={inner.get('reason')}")
 
+                    # 发送成功需同时满足: success=True, result.result != "fail", 无 error_code
                     if isinstance(result, dict) and result.get("success"):
+                        inner = result.get("result", {})
+                        if inner.get("result") == "fail":
+                            logger.error(f"[FORWARD] 发送失败(param error): reason={inner.get('reason')}")
+                            self.done.emit(False, f"param error: {inner.get('reason')}")
+                            return
+                        if inner.get("error_code") and inner.get("error_code") != 0:
+                            logger.error(f"[FORWARD] 发送失败(error_code): code={inner.get('error_code')}")
+                            self.done.emit(False, str(inner))
+                            return
                         # 持久化
                         try:
                             from services.message_persistence import message_persistence_service
