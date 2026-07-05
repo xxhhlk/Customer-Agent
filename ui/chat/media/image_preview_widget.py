@@ -70,8 +70,7 @@ class ImagePreviewWidget(QFrame):
     def _on_pixmap_ready(self, url: str, pixmap: QPixmap):
         # 安全检查：widget 可能已被 deleteLater()
         try:
-            if not self._image_label or not self._image_label.isVisible():
-                return
+            _ = self._image_label
         except RuntimeError:
             # C++ 对象已删除
             return
