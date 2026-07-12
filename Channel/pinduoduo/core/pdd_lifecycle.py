@@ -493,6 +493,7 @@ class LifecycleMixin:
                     )
                     account_info = await asyncio.to_thread(db_manager.get_account, "pinduoduo", shop_id, user_id)
                     if account_info:
+                        self.logger.info(f"开始主动重登: {shop_id}-{username}")
                         success = await asyncio.to_thread(
                             perform_relogin,
                             "pinduoduo", shop_id, user_id,
@@ -505,7 +506,7 @@ class LifecycleMixin:
                         else:
                             self.logger.error(f"主动重登失败: {shop_id}-{username}")
                 else:
-                    self.logger.debug(f"Cookie 健康检查通过: {shop_id}-{username}")
+                    self.logger.info(f"Cookie 健康检查通过: {shop_id}-{username}")
 
         except asyncio.CancelledError:
             self.logger.debug(f"Cookie 健康检查循环被取消: {shop_id}-{username}")
@@ -522,9 +523,7 @@ class LifecycleMixin:
             self.logger.info(f"消息循环开始: {shop_id}-{username}")
 
             async for message in websocket:
-                if (self._stop_event and self._stop_event.is_set()) or self._threading_stop_event.is_set():
-                    self.logger.info(f"停止事件已设置，退出消息循环: {shop_id}-{username}")
-                    break
+
                 task = asyncio.create_task(
                     self._process_websocket_message_concurrent(
                         message, shop_id, user_id, username, queue_name

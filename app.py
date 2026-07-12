@@ -54,6 +54,27 @@ _fault_file.flush()
 faulthandler.enable(_fault_file)
 faulthandler.dump_traceback_later(timeout=30, repeat=True, file=_fault_file)
 
+# 注册信号处理：崩溃时立即 dump 堆栈到文件
+# faulthandler.enable() 已注册 SIGSEGV，但某些 C 扩展崩溃（如堆损坏）可能绕过它。
+# faulthandler.register() 在 Unix 上可用，Windows 上不支持。
+for _sig_name in ('SIGABRT', 'SIGFPE', 'SIGILL', 'SIGSEGV'):
+    _sig = getattr(__import__('signal'), _sig_name, None)
+    if _sig is not None:
+        try:
+            faulthandler.register(_sig, file=_fault_file, all_threads=True, chain=False)
+        except (ValueError, OSError, AttributeError):
+            pass  # Windows 不支持 register
+
+# atexit 钩子：记录退出方式（正常 atexit vs 异常终止）
+import atexit
+def _on_exit():
+    try:
+        _fault_file.write(f"\n=== Process exiting at {_time.strftime('%Y-%m-%d %H:%M:%S')} (atexit) ===\n")
+        _fault_file.flush()
+    except Exception:
+        pass
+atexit.register(_on_exit)
+
 # 周期性写入时间戳到 fault file，方便定位崩溃发生的时间点
 def _periodic_fault_timestamp():
     """每 30 秒在 crash_trace.log 中写入时间戳，与 faulthandler dump 交替出现"""
