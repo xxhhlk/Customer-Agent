@@ -34,6 +34,16 @@ faulthandler.enable()
 # 额外：将 faulthandler 输出写入文件（方便事后排查崩溃）
 _fault_log_path = Path("./temp") / "crash_trace.log"
 _fault_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+# 清理 crash_trace.log：超过阈值时只保留最近 1 小时
+from utils.log_manager import truncate_to_recent_hours
+CRASH_LOG_MAX_SIZE = os.environ.get("CRASH_LOG_MAX_SIZE", "100 MB")
+truncate_to_recent_hours(
+    _fault_log_path,
+    hours=1,
+    max_size=CRASH_LOG_MAX_SIZE,
+)
+
 _fault_file = open(_fault_log_path, "a", encoding="utf-8")
 
 # 写入启动时间戳，方便定位每次运行
@@ -57,6 +67,22 @@ def _periodic_fault_timestamp():
 
 _ts_thread = threading.Thread(target=_periodic_fault_timestamp, daemon=True)
 _ts_thread.start()
+
+# ============================================================================
+# 三层崩溃捕获系统（VEH + 心跳 + WER minidump）
+# 必须在 faulthandler 之后、其他模块导入之前初始化
+# ============================================================================
+from utils.crash_detector import setup_crash_detection, check_previous_crash
+
+_prev_crash = setup_crash_detection(enable_wer=True, heartbeat_interval=5.0)
+if _prev_crash:
+    _fault_file.write(
+        f"!!! WARNING: Previous session crashed (not clean exit) !!!\n"
+        f"  Last heartbeat: {_prev_crash['last_heartbeat']}\n"
+        f"  Time since crash: {_prev_crash['seconds_ago']}s ago\n"
+        f"  PID: {_prev_crash['pid']}\n"
+    )
+    _fault_file.flush()
 
 # ============================================================================
 # 全局单例预初始化（确保正确的初始化顺序）
@@ -121,20 +147,25 @@ def main():
     sys.excepthook = _global_excepthook
     
     # 多开校验 - 使用 QSharedMemory 确保单实例运行
+    # 注意：进程崩溃后 QSharedMemory 不会自动释放，attach() 可能误判为"已有实例"。
+    # 正确做法：先尝试 create（只有没有任何实例时才会成功），create 失败时再 attach 验证。
     shared_memory_key = "AgentCustomerApp_InstanceChecker"
     shared_mem = QSharedMemory(shared_memory_key)
-    
-    # 尝试附加到已存在的共享内存
-    if shared_mem.attach():
-        # 如果能成功附加，说明已经有实例在运行
-        QMessageBox.critical(None, "程序已在运行", "拼多多AI客服助手已经在运行中，请勿重复启动。")
-        sys.exit(1)
-    
-    # 如果不能附加，尝试创建新的共享内存
+
+    # 先尝试 create — 如果成功，说明没有其他实例（即使上次崩溃残留的共享内存也会被覆盖）
     if not shared_mem.create(1):
-        # 如果创建失败，说明可能有并发问题或其他异常
-        QMessageBox.critical(None, "启动失败", "无法创建实例检查器，请检查权限或重启电脑后再试。")
-        sys.exit(1)
+        # create 失败，可能是真的有其他实例在运行
+        # 再用 attach 验证：如果 attach 也失败，说明是残留的共享内存
+        if shared_mem.attach():
+            shared_mem.detach()
+            QMessageBox.critical(None, "程序已在运行", "拼多多AI客服助手已经在运行中，请勿重复启动。")
+            sys.exit(1)
+        else:
+            # create 和 attach 都失败 — 尝试清理后重新 create
+            shared_mem.detach()
+            if not shared_mem.create(1):
+                QMessageBox.critical(None, "启动失败", "无法创建实例检查器，请检查权限或重启电脑后再试。")
+                sys.exit(1)
 
     # 创建主窗口
     logger = _get_logger("App")
