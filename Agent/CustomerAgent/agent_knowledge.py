@@ -124,11 +124,14 @@ class KnowledgeManager:
             print(f"[DEBUG] 配置读取失败: {e}")
         
         # 使用火山引擎多模态嵌入模型
+        # search_type: vector (纯向量搜索) — 避免 tantivy C 扩展在低内存环境下崩溃
+        # hybrid 模式会加载 tantivy 全文索引，4GB 内存服务器上夜间内存不足时
+        # tantivy 堆操作导致 ntdll 堆管理器 access violation 崩溃
         vector_db = LanceDbWithProgress(
                 table_name="customer_knowledge",
                 uri=str(vector_path),
                 embedder=VolcengineEmbedder(**embedder_config),
-                search_type=SearchType.hybrid
+                search_type=SearchType.vector
             )
         print(f"[DEBUG] [OK] 向量数据库创建成功")
             
@@ -430,7 +433,7 @@ class KnowledgeManager:
                     try:
                         content_row = KnowledgeRow(
                             id=doc.content_id,
-                            name=doc.name,
+                            name=doc.name or "",
                             description="",
                             metadata=doc.meta_data,
                             type="csv",
@@ -679,11 +682,14 @@ class KnowledgeManager:
                 doc.content_id = new_doc_id
 
                 # 调用 vector_db.insert 插入（会触发我们重写的 insert 方法）
-                self.knowledge.vector_db.insert(
-                    content_hash=content_hash,
-                    documents=[doc],
-                    filters=None
-                )
+                if self.knowledge.vector_db is not None:
+                    self.knowledge.vector_db.insert(
+                        content_hash=content_hash,
+                        documents=[doc],
+                        filters=None
+                    )
+                else:
+                    logger.warning("vector_db 为 None，跳过 insert")
 
             logger.info(f"成功更新文档: {title}, 新 ID: {new_doc_id}")
             return new_doc_id

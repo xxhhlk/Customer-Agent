@@ -1,8 +1,9 @@
 import sys
 import traceback
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer, QEvent, QMetaObject, Q_ARG, pyqtSlot, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
+from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMessageBox, QWidget
 from PyQt6.QtGui import QColor, QFont, QIcon, QPixmap
 from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
@@ -30,7 +31,7 @@ class SafeSystemThemeListener(SystemThemeListener):
     def __init__(self, parent=None):
         super().__init__(parent)
         # 将信号连接到主线程槽（parent 通常在主线程，AutoConnection 会选择 QueuedConnection）
-        self._theme_changed_in_main.connect(self._do_theme_change_in_main, Qt.ConnectionType.QueuedConnection)
+        self._theme_changed_in_main.connect(self._do_theme_change_in_main, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
 
     def _onThemeChanged(self, theme: str):
         """后台线程回调 — 不直接修改 qconfig，仅转发到主线程"""
@@ -57,7 +58,7 @@ class SafeSystemThemeListener(SystemThemeListener):
             # 读取不一致的 isDarkTheme() → QSvgRenderer 拿到无效 SVG 数据 → access violation
             if main_window is not None and hasattr(main_window, 'navigationInterface'):
                 try:
-                    main_window.navigationInterface.setUpdatesEnabled(False)
+                    main_window.navigationInterface.setUpdatesEnabled(False)  # type: ignore[union-attr]
                     nav_frozen = True
                 except Exception:
                     nav_frozen = False
@@ -77,8 +78,8 @@ class SafeSystemThemeListener(SystemThemeListener):
                 # 延迟恢复导航栏重绘，确保所有主题相关的样式变更已处理完毕
                 def _restore_nav():
                     try:
-                        main_window.navigationInterface.setUpdatesEnabled(True)
-                        main_window.navigationInterface.update()
+                        main_window.navigationInterface.setUpdatesEnabled(True)  # type: ignore[union-attr]
+                        main_window.navigationInterface.update()  # type: ignore[union-attr]
                     except Exception:
                         pass
                 QTimer.singleShot(100, _restore_nav)
@@ -127,6 +128,13 @@ class MainWindow(FluentWindow):
         self._freeze_check_last = time.perf_counter()
         self._freeze_check_timer.timeout.connect(self._check_freeze)
         self._freeze_check_timer.start()
+
+        # 内存监控定时器 — 每60秒检查系统可用内存，低于阈值时警告+gc
+        self._mem_check_timer = QTimer(self)
+        self._mem_check_timer.setInterval(60000)
+        self._mem_check_timer.timeout.connect(self._check_memory)
+        self._mem_check_timer.start()
+        self._last_mem_warning = 0.0
         
         t = time.perf_counter()
         self.setWindowTitle('拼多多AI客服助手')
@@ -150,6 +158,31 @@ class MainWindow(FluentWindow):
 
         # 延迟加载各个视图，让窗口先显示
         QTimer.singleShot(200, self.lazy_load_views)
+
+        # 检测上次是否崩溃退出
+        QTimer.singleShot(500, self._notify_previous_crash)
+
+    def _notify_previous_crash(self):
+        """如果上次会话异常退出，弹窗提醒并提供日志路径"""
+        try:
+            from utils.crash_detector import get_last_crash_info
+            info = get_last_crash_info()
+            if info:
+                crash_log = Path("./temp/crash_veh.log")
+                minidump_dir = Path("./temp/dumps")
+                detail = (
+                    f"上次会话异常退出！\n\n"
+                    f"最后心跳: {info['last_heartbeat']}\n"
+                    f"距今: {info['seconds_ago']}秒\n\n"
+                )
+                if crash_log.exists():
+                    detail += f"VEH 崩溃日志:\n{crash_log.resolve()}\n"
+                if minidump_dir.exists():
+                    detail += f"Minidump 目录:\n{minidump_dir.resolve()}\n"
+                detail += "\n请将以上文件提供给开发者排查。"
+                QMessageBox.warning(self, "检测到异常退出", detail)
+        except Exception:
+            pass
     
     def _check_freeze(self):
         """检测主线程是否卡顿 — 如果3秒定时器触发时发现距离上次超过5秒，说明中间有阻塞"""
@@ -181,6 +214,52 @@ class MainWindow(FluentWindow):
             staff_reply_event_manager.cleanup_expired()
         except Exception:
             pass  # 清理失败不影响主流程
+
+    def _check_memory(self):
+        """检查系统可用内存，低于阈值时触发 gc 并警告"""
+        try:
+            import ctypes
+            import gc
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+
+            avail_mb = stat.ullAvailPhys / 1024 / 1024
+            total_mb = stat.ullTotalPhys / 1024 / 1024
+            load = stat.dwMemoryLoad
+
+            # 低于 500MB 时触发 gc
+            if avail_mb < 500:
+                collected = gc.collect()
+                self.logger.warning(
+                    f"⚠️ 系统可用内存低: {avail_mb:.0f}MB / {total_mb:.0f}MB (load={load}%), "
+                    f"gc.collect 回收 {collected} 个对象"
+                )
+            # 低于 200MB 时严重警告（5分钟内不重复）
+            elif avail_mb < 200:
+                now = time.time()
+                if now - self._last_mem_warning > 300:
+                    self.logger.error(
+                        f"❌ 系统内存严重不足: {avail_mb:.0f}MB / {total_mb:.0f}MB "
+                        f"(load={load}%)，存在崩溃风险！"
+                    )
+                    self._last_mem_warning = now
+        except Exception:
+            pass
 
     def lazy_load_views(self):
         """延迟加载各个视图，提高启动速度"""
@@ -290,6 +369,9 @@ class MainWindow(FluentWindow):
     
     def _deferred_show(self):
         """延迟显示窗口，确保 paint engine 已初始化"""
+        # 必须先 show() 再 showMaximized()，否则 FluentWindow 在未显示的
+        # 状态下直接 showMaximized 会触发 SIGSEGV (exit code 139)
+        self.show()
         # 设置标题栏文字颜色
         self._update_title_bar_color()
         # 最大化显示
