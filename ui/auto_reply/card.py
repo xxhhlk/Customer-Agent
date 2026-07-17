@@ -244,17 +244,51 @@ class AutoReplyCard(CardWidget):
             def _start():
                 assert self.shop_logo is not None
                 self.logo_loader_thread = LogoLoaderThread(str(self.shop_logo))
-                self.logo_loader_thread.logo_loaded.connect(self.setLogo, Qt.ConnectionType.QueuedConnection)
+                self.logo_loader_thread.logo_loaded.connect(self.setLogo, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
                 self.logo_loader_thread.start()
             QTimer.singleShot(200, _start)
         else:
             self.logo_label.setText("无Logo")
 
-    def setLogo(self, pixmap: QPixmap):
-        """设置Logo"""
-        if not pixmap.isNull():
-            self.logo_label.setPixmap(pixmap)
-        else:
+    def setLogo(self, image_data: bytes):
+        """设置Logo — 在主线程中创建 QPixmap（线程安全）"""
+        if not image_data:
+            self.logo_label.setText("加载失败")
+            return
+
+        try:
+            # 在主线程创建 QPixmap
+            from PyQt6.QtGui import QPixmap, QPainter, QPainterPath
+            from PyQt6.QtCore import Qt
+
+            pixmap = QPixmap()
+            pixmap.loadFromData(image_data)
+
+            if pixmap.isNull():
+                self.logo_label.setText("加载失败")
+                return
+
+            # 创建圆形pixmap
+            size = 60
+            circular_pixmap = QPixmap(size, size)
+            circular_pixmap.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(circular_pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            path = QPainterPath()
+            path.addEllipse(0, 0, size, size)
+
+            painter.setClipPath(path)
+
+            scaled_pixmap = pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+            painter.drawPixmap(0, 0, scaled_pixmap)
+            painter.end()
+
+            self.logo_label.setPixmap(circular_pixmap)
+        except Exception as e:
+            from utils.logger_loguru import get_logger
+            get_logger().error(f"创建 Logo pixmap 失败: {e}")
             self.logo_label.setText("加载失败")
 
     def cleanup(self):

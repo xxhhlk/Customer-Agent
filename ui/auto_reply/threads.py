@@ -8,8 +8,16 @@ from utils.logger_loguru import get_logger
 
 
 class LogoLoaderThread(QThread):
-    """异步加载Logo的线程"""
-    logo_loaded = pyqtSignal(QPixmap)
+    """异步加载Logo的线程
+
+    ⚠️ 线程安全规则：
+    - QPixmap/QPainter 不能在非 GUI 线程创建
+    - 本线程只负责下载图片数据（bytes），通过信号传到主线程
+    - 主线程回调中创建 QPixmap + QPainter 并绘制圆形头像
+    - 信号携带 bytes 而非 QPixmap，避免 C++ 级 GUI 资源在线程间传递
+    """
+    # 信号改为携带 bytes（图片原始数据），而非 QPixmap
+    logo_loaded = pyqtSignal(bytes)
 
     def __init__(self, url):
         super().__init__()
@@ -17,39 +25,15 @@ class LogoLoaderThread(QThread):
         self.setObjectName("LogoLoaderThread")
 
     def run(self):
+        """后台线程：只下载图片数据，不做任何 GUI 操作"""
         try:
             response = requests.get(self.url, timeout=10)
             response.raise_for_status()
-
-            pixmap = QPixmap()
-            pixmap.loadFromData(response.content)
-
-            if pixmap.isNull():
-                raise ValueError("Loaded data is not a valid image.")
-
-            # 创建圆形pixmap
-            size = 60
-            circular_pixmap = QPixmap(size, size)
-            circular_pixmap.fill(Qt.GlobalColor.transparent)
-
-            painter = QPainter(circular_pixmap)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-            path = QPainterPath()
-            path.addEllipse(0, 0, size, size)
-
-            painter.setClipPath(path)
-
-            # 缩放并绘制原始图片
-            scaled_pixmap = pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap(0, 0, scaled_pixmap)
-            painter.end()
-
-            # 直接 emit 是安全的：Qt 自动使用 QueuedConnection 将信号投递到主线程
-            self.logo_loaded.emit(circular_pixmap)
+            # 只传递 bytes，不在后台线程创建 QPixmap
+            self.logo_loaded.emit(response.content)
         except Exception as e:
             get_logger().error(f"Failed to load logo from {self.url}: {e}")
-            self.logo_loaded.emit(QPixmap())  # 失败时发射空pixmap
+            self.logo_loaded.emit(b'')  # 失败时发射空 bytes
 
 
 class AutoReplyThread(QThread):
