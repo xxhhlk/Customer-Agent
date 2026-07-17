@@ -60,6 +60,8 @@ class ChatUI(QFrame):
         self._shop_loader = None   # _ShopLoader 引用
         self._conv_loader = None   # _ConversationLoader 引用
         self._shops_loaded = False  # 店铺列表是否已加载过
+        self._persist_workers: list = []  # 持久化 worker 列表（支持并发）
+        self._forward_workers: list = []  # 转发 worker 列表（支持并发）
         self._init_ui()
         self._apply_theme()
         # 延迟加载数据，放到事件队列末尾确保窗口先渲染
@@ -265,8 +267,17 @@ class ChatUI(QFrame):
 
                 worker.done.connect(_on_persist_done)
                 worker.start()
-                # 保持引用防止 GC
-                self._persist_worker = worker
+                # 保持引用防止 GC（使用列表支持并发 worker）
+                self._persist_workers.append(worker)
+                # 清理已完成的 worker
+                def _cleanup_persist(_w=worker):
+                    try:
+                        if _w in self._persist_workers:
+                            self._persist_workers.remove(_w)
+                        _w.deleteLater()
+                    except Exception:
+                        pass
+                worker.done.connect(lambda *_: _cleanup_persist())
             else:
                 logger.warning(f"发送手动回复失败: {result}")
         except Exception as e:
@@ -424,8 +435,17 @@ class ChatUI(QFrame):
             if not success else None
         )
         worker.start()
-        # 保持引用防止 GC
-        self._forward_worker = worker
+        # 保持引用防止 GC（使用列表支持并发 worker）
+        self._forward_workers.append(worker)
+        # 清理已完成的 worker
+        def _cleanup_forward(_w=worker):
+            try:
+                if _w in self._forward_workers:
+                    self._forward_workers.remove(_w)
+                _w.deleteLater()
+            except Exception:
+                pass
+        worker.done.connect(lambda *_: _cleanup_forward())
 
     def cleanup(self):
         """清理资源"""

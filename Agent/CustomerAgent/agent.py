@@ -19,7 +19,7 @@ from Agent.CustomerAgent.tools.move_conversation import transfer_conversation
 from Agent.CustomerAgent.tools.get_product_list import get_shop_products
 from Agent.CustomerAgent.tools.send_goods_link import send_goods_link
 from config import get_config
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 from utils.logger_loguru import get_logger
 from pydantic import BaseModel, Field
 from typing import Dict
@@ -364,7 +364,9 @@ class CustomerAgent(Bot):
                         self._agent._read_session, session_id=session_id
                     )
                     # 设置缓存，让 _aread_or_create_session 命中缓存
-                    self._agent._cached_session = _pre_session
+                    # _read_session 返回类型是 Union[AgentSession, TeamSession, WorkflowSession, None]，
+                    # 但我们用的是单 agent 模式，实际只会返回 AgentSession，用 cast 安抚类型检查器
+                    self._agent._cached_session = cast(Optional[AgentSession], _pre_session)
                     self.logger.info("[async_reply] 预读 session 完成")
             except Exception as e:
                 self.logger.warning(f"[async_reply] 预读 session 失败（将继续）: {e}")
