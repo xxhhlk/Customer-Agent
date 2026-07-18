@@ -1,9 +1,7 @@
-"""
-分析 minidump 崩溃线程 — 直接从文件读取上下文和栈。
-"""
+"""分析 minidump 崩溃线程 — 直接从文件读取上下文和栈。"""
 import struct
 
-dump_path = r'C:\Users\Administrator\Documents\git\Customer-Agent\temp\dumps\python.exe.9220.dmp'
+dump_path = r'C:\Users\Administrator\Documents\git\Customer-Agent\temp\dumps\python.exe.1412.dmp'
 
 from minidump.minidumpfile import MinidumpFile
 from minidump.minidumpreader import MinidumpFileReader
@@ -18,7 +16,10 @@ crash_rip = exc.ExceptionRecord.ExceptionAddress
 print(f"Crash TID: {crash_tid:#x}")
 print(f"Crash RIP: {crash_rip:#018x}")
 print(f"Exception Code: {exc.ExceptionRecord.ExceptionCode_raw:#010x}")
-print(f"Access: WRITE to {exc.ExceptionRecord.ExceptionInformation[1]:#018x}")
+num_params = exc.ExceptionRecord.NumberParameters
+print(f"NumberParameters: {num_params}")
+if num_params >= 2:
+    print(f"Access: Info[0]={exc.ExceptionRecord.ExceptionInformation[0]}, target={exc.ExceptionRecord.ExceptionInformation[1]:#018x}")
 
 # 直接从文件读取 ThreadContext
 tc = exc.ThreadContext
@@ -27,7 +28,7 @@ print(f"\nThreadContext: Rva={tc.Rva}, DataSize={tc.DataSize}")
 with open(dump_path, 'rb') as f:
     f.seek(tc.Rva)
     ctx_data = f.read(tc.DataSize)
-print(f"Read {len(ctx_data)} bytes of context from file offset {tc.Rva}")
+print(f"Read {len(ctx_data)} bytes of context")
 
 # x64 CONTEXT 寄存器偏移
 def read_reg(offset):
@@ -66,18 +67,20 @@ print(f"R15: {r15:#018x}")
 
 # 崩溃地址分析
 print(f"\n=== Crash address analysis ===")
+crash_mod = None
 for mod in mf.modules.modules:
     start = mod.baseaddress
     end = mod.baseaddress + mod.size
     if start <= crash_rip < end:
         mod_name = mod.name.replace('\\', '/').split('/')[-1]
         print(f"CRASH MODULE: {mod_name}")
+        print(f"  Full path: {mod.name}")
         print(f"  Base: {start:#018x}")
         print(f"  Offset: {crash_rip - start:#x}")
+        crash_mod = mod
         break
 else:
     print(f"Crash address {crash_rip:#018x} is NOT in any loaded module (heap/JIT code)")
-    print("Likely a C++ virtual method call on freed/corrupted object (use-after-free)")
 
 # 扫描崩溃线程的栈内存中的返回地址
 print(f"\n=== Stack scan (return addresses) ===")
@@ -94,18 +97,16 @@ for t in mf.threads.threads:
 
 # 读取 RSP 到栈顶的内存
 scan_start = rsp
-scan_size = min(stack_end - rsp, 0x4000)  # 最多扫描 16KB
+scan_size = min(stack_end - rsp, 0x4000)
 
 try:
     stack_data = reader.read(scan_start, scan_size)
-    print(f"Read {len(stack_data)} bytes from stack (RSP to RSP+{scan_size:#x})")
+    print(f"Read {len(stack_data)} bytes from stack")
 
-    # 扫描 8 字节对齐的地址，找返回地址
     found = 0
     seen = set()
     for offset in range(0, len(stack_data) - 8, 8):
         val = struct.unpack_from('<Q', stack_data, offset)[0]
-        # 检查是否是有效的代码地址（在某个模块范围内）
         for mod in mf.modules.modules:
             if mod.baseaddress <= val < mod.baseaddress + mod.size:
                 if val not in seen:

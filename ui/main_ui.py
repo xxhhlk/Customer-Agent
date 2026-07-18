@@ -129,9 +129,11 @@ class MainWindow(FluentWindow):
         self._freeze_check_timer.timeout.connect(self._check_freeze)
         self._freeze_check_timer.start()
 
-        # 内存监控定时器 — 每60秒检查系统可用内存，低于阈值时警告+gc
+        # 内存监控定时器 — 每15秒检查系统可用内存，低于阈值时警告+gc+清缓存
+        # 4GB 内存机器上后台服务(BITS/GoogleUpdater)启动时会在30秒内耗尽内存导致
+        # ntdll 堆管理器崩溃，必须高频监控并在内存紧张时主动释放资源
         self._mem_check_timer = QTimer(self)
-        self._mem_check_timer.setInterval(60000)
+        self._mem_check_timer.setInterval(15000)
         self._mem_check_timer.timeout.connect(self._check_memory)
         self._mem_check_timer.start()
         self._last_mem_warning = 0.0
@@ -216,7 +218,14 @@ class MainWindow(FluentWindow):
             pass  # 清理失败不影响主流程
 
     def _check_memory(self):
-        """检查系统可用内存，低于阈值时触发 gc 并警告"""
+        """检查系统可用内存，低于阈值时触发 gc + 清缓存 + 警告
+
+        4GB 内存机器上，系统空闲内存经常低于 200MB。当后台服务(BITS/Google
+        Updater)启动时，ntdll 堆管理器在内存极度紧张时会 access violation 崩溃。
+        必须在内存耗尽前主动释放资源：
+        - < 600MB: gc.collect() + 清图片内存缓存
+        - < 300MB: 严重警告（5分钟内不重复）
+        """
         try:
             import ctypes
             import gc
@@ -242,20 +251,27 @@ class MainWindow(FluentWindow):
             total_mb = stat.ullTotalPhys / 1024 / 1024
             load = stat.dwMemoryLoad
 
-            # 低于 500MB 时触发 gc
-            if avail_mb < 500:
+            # 低于 600MB 时触发 gc + 清图片内存缓存
+            if avail_mb < 600:
                 collected = gc.collect()
+                # 清理图片加载器内存缓存（可能持有大量 PNG bytes）
+                try:
+                    from ui.chat.media.image_loader import ImageLoaderManager
+                    ImageLoaderManager().clear_cache()
+                except Exception:
+                    pass
                 self.logger.warning(
                     f"⚠️ 系统可用内存低: {avail_mb:.0f}MB / {total_mb:.0f}MB (load={load}%), "
-                    f"gc.collect 回收 {collected} 个对象"
+                    f"gc.collect 回收 {collected} 个对象，已清图片缓存"
                 )
-            # 低于 200MB 时严重警告（5分钟内不重复）
-            elif avail_mb < 200:
+
+            # 低于 300MB 时严重警告（5分钟内不重复）— 独立条件，不是 elif
+            if avail_mb < 300:
                 now = time.time()
                 if now - self._last_mem_warning > 300:
                     self.logger.error(
                         f"❌ 系统内存严重不足: {avail_mb:.0f}MB / {total_mb:.0f}MB "
-                        f"(load={load}%)，存在崩溃风险！"
+                        f"(load={load}%)，存在 ntdll 堆崩溃风险！"
                     )
                     self._last_mem_warning = now
         except Exception:
