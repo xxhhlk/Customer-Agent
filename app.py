@@ -147,6 +147,17 @@ def main():
     # 设置 Playwright 浏览器路径
     browsers_path = setup_playwright_browsers_path()
 
+    # Qt 渲染后端配置 — 强制使用软件渲染
+    # 根因：7-13/7-14/7-15/7-18 的 ntdll 堆崩溃，崩溃 RIP 在堆地址（非任何模块），
+    # 崩溃线程不在 faulthandler 的 Python 线程列表中（是 Qt/D3D 内部线程），
+    # WER 报告显示 d3d10warp.dll（WARP 软件光栅化器）曾被加载并卸载。
+    # 推测：Qt 的 D3D 渲染线程在 d3d10warp.dll 卸载后仍引用其代码地址 → 跳到
+    # 已释放堆地址执行 → access violation。
+    # 修复：强制 Qt 使用软件渲染，避免 D3D/WARP 相关的内部线程崩溃。
+    os.environ.setdefault("QT_OPENGL", "software")       # 禁用硬件 OpenGL
+    os.environ.setdefault("QT_QUICK_BACKEND", "software") # QML 用软件后端
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")   # Mesa 软件渲染
+
     # 创建应用
     app = QApplication(sys.argv)
     app.setApplicationName("Agent-Customer")
