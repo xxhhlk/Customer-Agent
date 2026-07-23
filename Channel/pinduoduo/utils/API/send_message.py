@@ -1,5 +1,5 @@
 from ..base_request import BaseRequest
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 class SendMessage(BaseRequest):
@@ -84,7 +84,7 @@ class SendMessage(BaseRequest):
             self.logger.debug(f"发送图片消息成功: {result}")
             return result
 
-    def send_video(self, recipient_uid, video_url, info: dict = None):
+    def send_video(self, recipient_uid, video_url, info: Optional[dict] = None):
         """
         发送视频消息（type=14）
 

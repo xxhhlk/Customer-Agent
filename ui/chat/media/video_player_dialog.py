@@ -236,14 +236,26 @@ class VideoPlayerDialog(QDialog):
         super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        """关闭时停止播放和清理 worker"""
+        """关闭时停止播放并彻底释放多媒体资源
+
+        QMediaPlayer 在 Windows 上会创建 WMF/MMDevAPI 后台线程；
+        只调用 stop() 不能立即释放这些线程。关闭对话框时必须：
+        1. 停止播放；2. 清空媒体源；3. 释放视频输出；4. 终止下载 worker。
+        """
         try:
-            self._play_bar.stop()
+            if self._play_bar and self._play_bar.player:
+                self._play_bar.player.stop()
+                # 清空媒体源，释放文件/网络句柄和 WMF 音频线程
+                self._play_bar.player.setSource(QUrl())
+                # 释放视频输出引用，让后端可以销毁渲染资源
+                self._play_bar.player.setVideoOutput(None)  # type: ignore[arg-type]
         except Exception:
             pass
+
         if self._download_worker and self._download_worker.isRunning():
-            self._download_worker.terminate()
+            self._download_worker.requestInterruption()
             self._download_worker.wait(3000)
+
         super().closeEvent(event)
 
     @staticmethod

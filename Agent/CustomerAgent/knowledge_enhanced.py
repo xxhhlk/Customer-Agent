@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import threading
 import uuid
 from enum import Enum
 from typing import Callable, Optional, List, Any, Dict, Protocol, TYPE_CHECKING, cast
@@ -89,6 +90,11 @@ class LanceDbWithProgress(LanceDb):
     fill_value: Optional[float]
     table: Optional["LanceTable"]
 
+    # 进程级搜索锁：LanceDB C++ 层对同一张表的并发读取/FTS 索引访问不稳定，
+    # 多个 asyncio 事件循环线程同时搜索时曾导致 access violation。
+    # 所有 search / async_search 都必须先获取此锁。
+    _search_lock = threading.Lock()
+
     def __init__(
         self,
         *args,
@@ -106,6 +112,32 @@ class LanceDbWithProgress(LanceDb):
         super().__init__(*args, **kwargs)
         self.progress_callback = progress_callback
         self.cancel_token = cancel_token
+
+    def search(
+        self,
+        query: str,
+        limit: int = 5,
+        filters: Optional[Any] = None
+    ) -> List[Document]:
+        """
+        重写同步 search，加进程级锁保护 LanceDB C++ 并发访问。
+        """
+        logger.debug(f"[LanceDbWithProgress] search() 被调用，query={query[:30]!r}...")
+        with self._search_lock:
+            logger.debug("[LanceDbWithProgress] search() 获取锁，执行父类搜索")
+            return super().search(query=query, limit=limit, filters=filters)
+
+    async def async_search(
+        self,
+        query: str,
+        limit: int = 5,
+        filters: Optional[Any] = None
+    ) -> List[Document]:
+        """
+        重写异步 search，在线程池中执行同步 search，避免阻塞事件循环。
+        """
+        logger.debug(f"[LanceDbWithProgress] async_search() 被调用，query={query[:30]!r}...")
+        return await asyncio.to_thread(self.search, query, limit, filters)
 
     def insert(
         self,
@@ -366,7 +398,7 @@ class LanceDbWithProgress(LanceDb):
         # 直接调用我们的 async_insert 方法
         await self.async_insert(content_hash, documents, filters)
 
-    def _build_search_results(self, results: List[Dict[str, Any]]) -> List[Document]:
+    def _build_search_results(self, results: Any) -> List[Document]:
         """
         重写 _build_search_results — 修复 Agno 不设置 Document.id 的问题
 

@@ -1,5 +1,6 @@
-"""分析 minidump 崩溃线程 — 直接从文件读取上下文和栈。"""
+"""深度分析 minidump — 读取崩溃线程的完整栈，找所有模块的返回地址"""
 import struct
+import sys
 
 dump_path = r'C:\Users\Administrator\Documents\git\Customer-Agent\temp\dumps\python.exe.1412.dmp'
 
@@ -17,20 +18,15 @@ print(f"Crash TID: {crash_tid:#x}")
 print(f"Crash RIP: {crash_rip:#018x}")
 print(f"Exception Code: {exc.ExceptionRecord.ExceptionCode_raw:#010x}")
 num_params = exc.ExceptionRecord.NumberParameters
-print(f"NumberParameters: {num_params}")
 if num_params >= 2:
     print(f"Access: Info[0]={exc.ExceptionRecord.ExceptionInformation[0]}, target={exc.ExceptionRecord.ExceptionInformation[1]:#018x}")
 
 # 直接从文件读取 ThreadContext
 tc = exc.ThreadContext
-print(f"\nThreadContext: Rva={tc.Rva}, DataSize={tc.DataSize}")
-
 with open(dump_path, 'rb') as f:
     f.seek(tc.Rva)
     ctx_data = f.read(tc.DataSize)
-print(f"Read {len(ctx_data)} bytes of context")
 
-# x64 CONTEXT 寄存器偏移
 def read_reg(offset):
     return struct.unpack_from('<Q', ctx_data, offset)[0]
 
@@ -82,10 +78,9 @@ for mod in mf.modules.modules:
 else:
     print(f"Crash address {crash_rip:#018x} is NOT in any loaded module (heap/JIT code)")
 
-# 扫描崩溃线程的栈内存中的返回地址
+# 扫描崩溃线程的栈内存 — 扫描更大的范围
 print(f"\n=== Stack scan (return addresses) ===")
 
-# 找到崩溃线程的栈范围
 for t in mf.threads.threads:
     if t.ThreadId == crash_tid:
         stack_start = t.Stack.StartOfMemoryRange
@@ -95,9 +90,9 @@ for t in mf.threads.threads:
         print(f"RSP:   {rsp:#018x}")
         break
 
-# 读取 RSP 到栈顶的内存
+# 扫描整个栈（不只是 0x4000）
 scan_start = rsp
-scan_size = min(stack_end - rsp, 0x4000)
+scan_size = min(stack_end - rsp, 0x20000)  # 扫描 128KB
 
 try:
     stack_data = reader.read(scan_start, scan_size)
@@ -116,7 +111,7 @@ try:
                     seen.add(val)
                     found += 1
                 break
-        if found >= 40:
+        if found >= 80:
             break
 
     if found == 0:
@@ -124,6 +119,37 @@ try:
 
 except Exception as e:
     print(f"  Stack read failed: {e}")
+
+# 检查崩溃地址附近是否有可执行内存（可能是 JIT 或 shellcode）
+print(f"\n=== Memory region around crash RIP ===")
+crash_page = crash_rip & ~0xFFF
+for info in mf.memory_info.infos:
+    if info.BaseAddress <= crash_rip < info.BaseAddress + info.RegionSize:
+        print(f"Region: {info.BaseAddress:#018x} - {info.BaseAddress + info.RegionSize:#018x}")
+        print(f"  State: {info.State:#x}")
+        print(f"  Protect: {info.Protect:#x}")
+        print(f"  Type: {info.Type:#x}")
+        # 0x10 = PAGE_EXECUTE
+        # 0x20 = PAGE_EXECUTE_READ
+        # 0x40 = PAGE_EXECUTE_READWRITE
+        # 0x80 = PAGE_EXECUTE_WRITECOPY
+        protect_names = {0x10: "EXECUTE", 0x20: "EXECUTE_READ", 0x40: "EXECUTE_READWRITE",
+                        0x02: "READONLY", 0x04: "READ_WRITE", 0x08: "WRITECOPY"}
+        print(f"  Protect name: {protect_names.get(info.Protect, 'UNKNOWN')}")
+        break
+
+# 列出所有包含 EXECUTE 的内存区域（可能是 JIT 代码所在）
+print(f"\n=== All EXECUTE memory regions ===")
+execute_regions = []
+for info in mf.memory_info.infos:
+    if info.Protect in (0x10, 0x20, 0x40, 0x80) and info.State == 0x1000:  # MEM_COMMIT
+        if info.Baseaddress <= crash_rip < info.BaseAddress + info.RegionSize:
+            execute_regions.append((info, "*** CRASH HERE ***"))
+        else:
+            execute_regions.append((info, ""))
+
+for info, marker in execute_regions[:20]:
+    print(f"  {info.BaseAddress:#018x} - {info.BaseAddress + info.RegionSize:#018x} protect={info.Protect:#x} {marker}")
 
 # 检查卸载的模块
 if mf.unloaded_modules:

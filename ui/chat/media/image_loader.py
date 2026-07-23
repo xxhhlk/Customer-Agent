@@ -124,7 +124,7 @@ class ImageLoadWorker(QThread):
         ratio = min(max_w / w, max_h / h)
         new_w = int(w * ratio)
         new_h = int(h * ratio)
-        return img.resize((new_w, new_h), Image.LANCZOS)
+        return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     def _store_memory(self, url: str, data: bytes):
         """存入内存缓存 (LRU)"""

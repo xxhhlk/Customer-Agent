@@ -1,17 +1,52 @@
 # 自动回复管理器模块
 import time
 from typing import Dict
+from PyQt6.QtCore import QThread, pyqtSignal, QObject
 from utils.logger_loguru import get_logger
 from .threads import AutoReplyThread
 
 
-class AutoReplyManager:
+class _StopAllWorker(QThread):
+    """在后台线程执行 stop_all 的等待逻辑，避免阻塞主线程事件循环"""
+
+    progress = pyqtSignal(str)  # 日志/进度信号
+    finished_ok = pyqtSignal()  # 全部停止完成
+    finished_with_timeout = pyqtSignal(list)  # 部分线程超时，参数为线程对象名列表
+
+    def __init__(self, threads, parent=None):
+        super().__init__(parent)
+        self._threads = threads
+
+    def run(self):
+        timeout_names = []
+        for thread in self._threads:
+            try:
+                if thread.isRunning():
+                    if not thread.wait(5000):
+                        timeout_names.append(thread.objectName() or str(thread))
+                        self.progress.emit(f"线程未在5秒内结束: {thread.objectName()}")
+                    else:
+                        self.progress.emit(f"线程已正常结束: {thread.objectName()}")
+            except Exception as e:
+                self.progress.emit(f"等待线程结束时异常: {e}")
+
+        if timeout_names:
+            self.finished_with_timeout.emit(timeout_names)
+        else:
+            self.finished_ok.emit()
+
+
+class AutoReplyManager(QObject):
     """自动回复管理器 - 管理所有账号的自动回复连接"""
 
+    all_stopped = pyqtSignal()  # 所有自动回复已停止（异步通知）
+
     def __init__(self):
+        super().__init__()
         self.running_accounts: Dict[str, 'AutoReplyThread'] = {}  # 正在运行的账号线程
         self.logger = get_logger("AutoReplyManager")
         self._stopping = False  # 添加停止标志，防止重复调用
+        self._stop_worker: '_StopAllWorker | None' = None  # 保留 worker 引用防止 GC
 
     def start_auto_reply(self, account_data: dict) -> bool:
         """启动账号自动回复"""
@@ -134,43 +169,59 @@ class AutoReplyManager:
         """获取正在运行的账号数量"""
         return len(self.running_accounts)
 
-    def stop_all(self):
-        """停止所有自动回复"""
+    def stop_all(self, blocking: bool = False):
+        """停止所有自动回复
+
+        Args:
+            blocking: 为 True 时阻塞调用线程直到所有线程结束（用于程序退出清理）。
+                     默认 False，不阻塞主线程事件循环。
+        """
         # 防止重复调用（shutdown场景，不需要重置标志）
         if self._stopping:
             self.logger.debug("stop_all()已执行过，跳过重复调用")
             return
 
         self._stopping = True
-        try:
-            threads = list(self.running_accounts.values())
-            if not threads:
-                self.logger.info("没有正在运行的自动回复任务")
-                return
+        threads = list(self.running_accounts.values())
+        if not threads:
+            self.logger.info("没有正在运行的自动回复任务")
+            self.all_stopped.emit()
+            return
 
-            self.logger.info(f"正在停止 {len(threads)} 个自动回复线程...")
+        self.logger.info(f"正在停止 {len(threads)} 个自动回复线程...")
 
-            # 先全部发起 stop
-            for thread in threads:
+        # 先全部发起 stop（stop() 本身是轻量的，只设置标志和投递 loop.stop）
+        for thread in threads:
+            try:
                 if thread.is_running():
                     thread.stop()
+            except Exception as e:
+                self.logger.error(f"发起停止线程时异常: {e}")
 
-            # 等待一小段时间，让线程有机会开始清理
-            time.sleep(0.2)
+        # 在后台线程等待所有线程结束，避免阻塞主线程
+        self._stop_worker = _StopAllWorker(threads)
+        self._stop_worker.finished_ok.connect(self._on_stop_all_finished)
+        self._stop_worker.finished_with_timeout.connect(self._on_stop_all_timeout)
+        self._stop_worker.start()
 
-            # 然后统一等待线程结束
-            for thread in threads:
-                if thread.is_running():
-                    if not thread.wait(5000):
-                        self.logger.warning(f"线程未在5秒内结束: {thread.objectName()}")
-                    else:
-                        self.logger.debug(f"线程已正常结束: {thread.objectName()}")
+        if blocking:
+            # 程序退出等场景需要同步等待
+            if not self._stop_worker.wait(10000):
+                self.logger.warning("stop_all 阻塞等待超时（10秒）")
 
-            self.running_accounts.clear()
-            self.logger.info("所有自动回复任务已停止")
+    def _on_stop_all_finished(self):
+        """所有线程已正常结束"""
+        self.running_accounts.clear()
+        self.logger.info("所有自动回复任务已停止")
+        self._stop_worker = None
+        self.all_stopped.emit()
 
-        except Exception as e:
-            self.logger.error(f"停止所有自动回复失败: {e}")
+    def _on_stop_all_timeout(self, timeout_names: list):
+        """部分线程等待超时"""
+        self.running_accounts.clear()
+        self.logger.warning(f"部分自动回复线程未在5秒内结束: {timeout_names}")
+        self._stop_worker = None
+        self.all_stopped.emit()
 
 
 # 全局自动回复管理器实例

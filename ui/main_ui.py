@@ -1,3 +1,4 @@
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -113,14 +114,20 @@ class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         
-        # 自动跟随系统主题（深色/浅色）
-        setTheme(Theme.AUTO)
-        
-        # 监听系统主题切换事件（使用线程安全版本）
-        self.theme_listener = SafeSystemThemeListener(self)
-        self.theme_listener.systemThemeChanged.connect(self._on_theme_changed)
-        self.theme_listener.setObjectName("SystemThemeListener")
-        self.theme_listener.start()
+        # 主题设置：默认固定浅色，避免夜间系统自动切换主题时触发全量 UI 重绘。
+        # 7-21 01:21 纯挂机崩溃的 dump 显示崩溃线程为 Qt/D3D 内部线程，且
+        # d3d10warp.dll 刚被卸载；夜间 Windows 自动主题切换会触发所有 widget
+        # 的 PaletteChange/重绘，是高度可疑的触发源。固定主题可消除该变量。
+        enable_auto_theme = os.environ.get("AGENT_ENABLE_AUTO_THEME", "0").lower() in ("1", "true", "yes")
+        if enable_auto_theme:
+            setTheme(Theme.AUTO)
+            # 监听系统主题切换事件（使用线程安全版本）
+            self.theme_listener = SafeSystemThemeListener(self)
+            self.theme_listener.systemThemeChanged.connect(self._on_theme_changed)
+            self.theme_listener.setObjectName("SystemThemeListener")
+            self.theme_listener.start()
+        else:
+            setTheme(Theme.LIGHT)
         
         # 主线程卡顿检测定时器 — 每3秒检查事件循环是否畅通
         self._freeze_check_timer = QTimer(self)
@@ -129,11 +136,12 @@ class MainWindow(FluentWindow):
         self._freeze_check_timer.timeout.connect(self._check_freeze)
         self._freeze_check_timer.start()
 
-        # 内存监控定时器 — 每15秒检查系统可用内存，低于阈值时警告+gc+清缓存
-        # 4GB 内存机器上后台服务(BITS/GoogleUpdater)启动时会在30秒内耗尽内存导致
-        # ntdll 堆管理器崩溃，必须高频监控并在内存紧张时主动释放资源
+        # 内存监控定时器 — 每60秒检查系统可用内存，低于阈值时警告+gc+清缓存
+        # 4GB 内存机器上后台服务(BITS/GoogleUpdater)启动时会在短时间内耗尽内存，
+        # 导致 ntdll 堆管理器崩溃。原本 15 秒频率在内存极低时反而会增加主线程负担
+        # （gc.collect 遍历对象图、清理缓存都会短暂占用 CPU/内存），改为 60 秒降低干扰。
         self._mem_check_timer = QTimer(self)
-        self._mem_check_timer.setInterval(15000)
+        self._mem_check_timer.setInterval(60000)
         self._mem_check_timer.timeout.connect(self._check_memory)
         self._mem_check_timer.start()
         self._last_mem_warning = 0.0
@@ -222,9 +230,9 @@ class MainWindow(FluentWindow):
 
         4GB 内存机器上，系统空闲内存经常低于 200MB。当后台服务(BITS/Google
         Updater)启动时，ntdll 堆管理器在内存极度紧张时会 access violation 崩溃。
-        必须在内存耗尽前主动释放资源：
-        - < 600MB: gc.collect() + 清图片内存缓存
-        - < 300MB: 严重警告（5分钟内不重复）
+        必须在内存耗尽前主动释放资源，但过于频繁的 gc 本身也会增加堆不稳定风险：
+        - < 500MB: gc.collect() + 清图片内存缓存
+        - < 300MB: 严重警告 + 尝试释放更多可丢弃缓存（5分钟内不重复）
         """
         try:
             import ctypes
@@ -251,8 +259,8 @@ class MainWindow(FluentWindow):
             total_mb = stat.ullTotalPhys / 1024 / 1024
             load = stat.dwMemoryLoad
 
-            # 低于 600MB 时触发 gc + 清图片内存缓存
-            if avail_mb < 600:
+            # 低于 500MB 时触发 gc + 清图片内存缓存
+            if avail_mb < 500:
                 collected = gc.collect()
                 # 清理图片加载器内存缓存（可能持有大量 PNG bytes）
                 try:
@@ -265,10 +273,19 @@ class MainWindow(FluentWindow):
                     f"gc.collect 回收 {collected} 个对象，已清图片缓存"
                 )
 
-            # 低于 300MB 时严重警告（5分钟内不重复）— 独立条件，不是 elif
+            # 低于 300MB 时严重警告 + 额外清理（5分钟内不重复）— 独立条件，不是 elif
             if avail_mb < 300:
                 now = time.time()
                 if now - self._last_mem_warning > 300:
+                    # 额外尝试清理可能存在的缓存（动态查找，避免引入未知导入）
+                    try:
+                        import importlib
+                        base_mod = importlib.import_module("Message.handlers.base")
+                        cache = getattr(base_mod, "session_cache", None)
+                        if cache is not None and hasattr(cache, "clear"):
+                            cache.clear()
+                    except Exception:
+                        pass
                     self.logger.error(
                         f"❌ 系统内存严重不足: {avail_mb:.0f}MB / {total_mb:.0f}MB "
                         f"(load={load}%)，存在 ntdll 堆崩溃风险！"

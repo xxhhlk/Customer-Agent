@@ -15,9 +15,12 @@ from pathlib import Path
 
 from loguru import logger
 
+# 导入日志管理工具
+from utils.log_manager import delete_old_files
+
 # 可选的PyQt6依赖
 try:
-    from PyQt6.QtCore import QObject, pyqtSignal  # pyright: ignore
+    from PyQt6.QtCore import QObject, QTimer, pyqtSignal  # pyright: ignore
     PYQT6_AVAILABLE = True
 except ImportError:
     PYQT6_AVAILABLE = False
@@ -26,6 +29,18 @@ except ImportError:
         """占位符类，当 PyQt6 不可用时使用"""
         def __init__(self, *args, **kwargs):
             pass
+    class QTimer:  # type: ignore[misc,no-redef]
+        """占位符类，当 PyQt6 不可用时使用"""
+        def __init__(self, *args, **kwargs):
+            pass
+        def setInterval(self, ms: int): pass  # type: ignore[empty-body]
+        def start(self): pass  # type: ignore[empty-body]
+        def stop(self): pass  # type: ignore[empty-body]
+        @property
+        def timeout(self):
+            class DummyTimeout:
+                def connect(self, *args, **kwargs): pass
+            return DummyTimeout()
     def pyqtSignal(*args):  # type: ignore[misc,no-redef]
         """占位符信号，当 PyQt6 不可用时使用"""
         class DummySignal:
@@ -40,8 +55,12 @@ except ImportError:
 # 默认配置
 DEFAULT_LOG_LEVEL = "info"
 DEFAULT_LOG_FILE = "logs/app.log"
-MAX_LOG_SIZE = "10 MB"
-BACKUP_COUNT = 5
+MAX_LOG_SIZE = os.environ.get("LOG_MAX_SIZE", "50 MB")
+LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", "7"))
+
+# 启动时清理过期日志（loguru 会负责轮转保留，这里只删除超过保留期的旧文件/zip）
+log_dir = Path(DEFAULT_LOG_FILE).parent
+delete_old_files(log_dir, retention_days=LOG_RETENTION_DAYS, delete_zip=True)
 
 # 确保日志目录存在
 os.makedirs(os.path.dirname(DEFAULT_LOG_FILE), exist_ok=True)
@@ -67,13 +86,13 @@ if not is_frozen:
         diagnose=not is_frozen
     )
 
-# 添加文件处理器（自动轮转和压缩）
+# 添加文件处理器（按大小轮转，保留 7 天）
 logger.add(
     DEFAULT_LOG_FILE,
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
     level=log_level.upper(),
     rotation=MAX_LOG_SIZE,
-    retention=BACKUP_COUNT,
+    retention=f"{LOG_RETENTION_DAYS} days",
     compression="zip",
     encoding="utf-8",
     backtrace=True,
@@ -228,8 +247,7 @@ class UILogHandler(QObject):  # type: ignore[misc]
     def _install_timer(self):
         """安装主线程定时器，定期从缓冲区取日志并 emit"""
         try:
-            from PyQt6.QtCore import QTimer
-            self._timer = QTimer(self)
+            self._timer = QTimer(self)  # type: ignore[arg-type]
             self._timer.setInterval(self._POLL_INTERVAL_MS)
             self._timer.timeout.connect(self._flush_buffer)
             self._timer.start()

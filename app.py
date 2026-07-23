@@ -144,6 +144,30 @@ def setup_playwright_browsers_path():
 
 def main():
     """ 应用程序主函数 """
+    # —— 看门狗联动：写 pid 文件，供 scripts/watchdog.py 监控存活 ——
+    # 正常退出时 atexit 删除 pid（看门狗静默）；崩溃时进程被 OS 杀死、pid 残留
+    # → 看门狗据此区分「正常关闭」与「崩溃」。同时清除上次崩溃通知标记，
+    #   让本会话若再次崩溃仍可推送（避免标记残留导致漏通知）。
+    _root = Path(__file__).resolve().parent
+    _pid_file = _root / "temp" / "agent.pid"
+    _crash_notified = _root / "temp" / "agent.crash_notified"
+    try:
+        _pid_file.parent.mkdir(parents=True, exist_ok=True)
+        _pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        if _crash_notified.exists():
+            _crash_notified.unlink()
+    except Exception:
+        pass
+
+    def _cleanup_pid():
+        try:
+            if _pid_file.exists():
+                _pid_file.unlink()
+        except Exception:
+            pass
+
+    atexit.register(_cleanup_pid)
+
     # 设置 Playwright 浏览器路径
     browsers_path = setup_playwright_browsers_path()
 

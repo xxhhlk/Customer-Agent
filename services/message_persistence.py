@@ -354,7 +354,7 @@ class MessagePersistenceService:
         reply_content: str,
         reply_source: str,
         context_type: str = "text",
-        media_meta: str = None,
+        media_meta: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """保存出站消息（AI/关键词/兜底/手动 回复）
 

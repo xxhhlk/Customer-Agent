@@ -1,16 +1,31 @@
 # 自动回复主界面模块
 import time
 from PyQt6.QtCore import Qt, QTimer, QEvent, QThread, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QWidget, QMessageBox, QVBoxLayout, QHBoxLayout
+from PyQt6.QtWidgets import QDialog, QFrame, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt6.QtGui import QFont
 from qfluentwidgets import (SubtitleLabel, CaptionLabel, PushButton, PrimaryPushButton,
-                          ScrollArea, FluentIcon as FIF, isDarkTheme)
+                          ScrollArea, FluentIcon as FIF, isDarkTheme, MessageBox,
+                          InfoBar, InfoBarPosition)
 from utils.logger_loguru import get_logger
 from database.db_manager import db_manager
 from config import config
 from .card import AutoReplyCard
 from .manager import auto_reply_manager
 from .threads import SetStatusThread
+
+
+class _StopAutoReplyWorker(QThread):
+    """在后台线程停止单个账号的自动回复，避免阻塞主线程事件循环"""
+
+    finished = pyqtSignal(dict, bool)  # account_data, success
+
+    def __init__(self, account_data: dict, parent=None):
+        super().__init__(parent)
+        self.account_data = account_data
+
+    def run(self):
+        success = auto_reply_manager.stop_auto_reply(self.account_data)
+        self.finished.emit(self.account_data, success)
 
 
 class AutoReplyUI(QFrame):
@@ -22,6 +37,7 @@ class AutoReplyUI(QFrame):
         self.accounts_data: list = []  # 存储账号数据
         self._loaded_once = False
         self._is_cold_starting = False  # 冷启动标志，控制失败时不弹窗
+        self._offline_stop_workers: list[_StopAutoReplyWorker] = []  # 离线后异步停止自动回复的 worker 引用
         self.setupUI()
         QTimer.singleShot(300, self._maybeLoadOnShow)
 
@@ -51,8 +67,8 @@ class AutoReplyUI(QFrame):
                 self.status_thread.requestInterruption()
                 self.status_thread.wait(3000)
 
-            # 停止所有自动回复线程
-            auto_reply_manager.stop_all()
+            # 停止所有自动回复线程（退出时阻塞等待，确保线程结束）
+            auto_reply_manager.stop_all(blocking=True)
 
             # 清理所有账号卡片的线程
             for i in range(self.accounts_layout.count()):
@@ -421,18 +437,21 @@ class AutoReplyUI(QFrame):
             ]
 
             if not eligible_accounts:
-                QMessageBox.information(self, "提示", "没有符合条件的账号可以启动自动回复。\n\n(需要账号状态为'在线'且当前未在回复中)")
+                InfoBar.warning(
+                    title="提示",
+                    content="没有符合条件的账号可以启动自动回复。\n(需要账号状态为'在线'且当前未在回复中)",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self,
+                )
                 return
 
-            reply = QMessageBox.question(
-                self,
+            if not self._ask_confirm(
                 "确认开始",
-                f"找到 {len(eligible_accounts)} 个可启动的账号。确定要全部开始自动回复吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-
-            if reply == QMessageBox.StandardButton.No:
+                f"找到 {len(eligible_accounts)} 个可启动的账号。确定要全部开始自动回复吗？"
+            ):
                 return
 
             started_count = 0
@@ -445,11 +464,27 @@ class AutoReplyUI(QFrame):
             self._update_all_cards_auto_reply_status()
             self.updateStats()
 
-            QMessageBox.information(self, "操作完成", f"已成功为 {started_count} / {len(eligible_accounts)} 个账号启动自动回复。")
+            InfoBar.success(
+                title="操作完成",
+                content=f"已成功为 {started_count} / {len(eligible_accounts)} 个账号启动自动回复。",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+                parent=self,
+            )
 
         except Exception as e:
             self.logger.error(f"开始所有自动回复失败: {str(e)}")
-            QMessageBox.critical(self, "错误", f"开始所有自动回复失败：{str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"开始所有自动回复失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
 
     def stopAllAutoReply(self):
         """停止所有自动回复"""
@@ -457,26 +492,80 @@ class AutoReplyUI(QFrame):
             running_count = auto_reply_manager.get_running_count()
 
             if running_count == 0:
-                QMessageBox.information(self, "提示", "当前没有正在运行的自动回复")
+                InfoBar.info(
+                    title="提示",
+                    content="当前没有正在运行的自动回复",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=2000,
+                    parent=self,
+                )
                 return
 
-            reply = QMessageBox.question(
-                self,
+            if not self._ask_confirm(
                 "确认停止",
-                f"确定要停止所有 {running_count} 个正在运行的自动回复吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
+                f"确定要停止所有 {running_count} 个正在运行的自动回复吗？"
+            ):
+                return
 
-            if reply == QMessageBox.StandardButton.Yes:
-                auto_reply_manager.stop_all()
-                self._update_all_cards_auto_reply_status()
-                self.updateStats()
-                QMessageBox.information(self, "成功", "已停止所有自动回复")
+            # 禁用按钮防止重复点击，并在后台等待线程结束
+            self.stop_all_btn.setEnabled(False)
+            self.stop_all_btn.setText("停止中...")
+            auto_reply_manager.all_stopped.connect(
+                self._on_stop_all_finished, Qt.ConnectionType.QueuedConnection  # type: ignore[call-arg]
+            )
+            auto_reply_manager.stop_all()
 
         except Exception as e:
             self.logger.error(f"停止所有自动回复失败: {str(e)}")
-            QMessageBox.critical(self, "错误", f"停止所有自动回复失败：{str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"停止所有自动回复失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+
+    def _on_stop_all_finished(self):
+        """所有自动回复停止完成后的回调（在后台等待结束后由主线程调用）"""
+        try:
+            # 断开一次性信号，避免多次触发
+            try:
+                auto_reply_manager.all_stopped.disconnect(self._on_stop_all_finished)
+            except Exception:
+                pass
+
+            self._update_all_cards_auto_reply_status()
+            self.updateStats()
+            self.stop_all_btn.setEnabled(True)
+            self.stop_all_btn.setText("停止所有")
+            # 使用无系统提示音的方式提示，避免触发 winmm 音频线程
+            self._show_slient_tip("已停止所有自动回复")
+        except Exception as e:
+            self.logger.error(f"停止所有完成回调失败: {str(e)}")
+
+    def _show_slient_tip(self, text: str):
+        """显示一个无系统提示音的轻量提示，避免触发多媒体服务线程"""
+        InfoBar.success(
+            title=text,
+            content="",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+            parent=self,
+        )
+
+    def _ask_confirm(self, title: str, content: str,
+                     yes_text: str = "确认", no_text: str = "取消") -> bool:
+        """使用 qfluentwidgets MessageBox 显示确认对话框，不触发 Windows 系统提示音"""
+        mb = MessageBox(title, content, self)
+        mb.yesButton.setText(yes_text)
+        mb.cancelButton.setText(no_text)
+        return mb.exec() == QDialog.DialogCode.Accepted
 
     def _update_all_cards_auto_reply_status(self):
         """更新所有卡片的自动回复状态"""
@@ -502,14 +591,22 @@ class AutoReplyUI(QFrame):
 
             self.status_thread = SetStatusThread(account_data, 1)
 
-            self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)
-            self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)
+            self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
+            self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
 
             self.status_thread.start()
 
         except Exception as e:
             self.logger.error(f"启动上线操作失败: {str(e)}")
-            QMessageBox.critical(self, "错误", f"启动上线操作失败：{str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"启动上线操作失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
 
     def onAccountOffline(self, account_data: dict):
         """账号离线回调"""
@@ -520,14 +617,22 @@ class AutoReplyUI(QFrame):
 
             self.status_thread = SetStatusThread(account_data, 3)
 
-            self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)
-            self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)
+            self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
+            self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
 
             self.status_thread.start()
 
         except Exception as e:
             self.logger.error(f"启动离线操作失败: {str(e)}")
-            QMessageBox.critical(self, "错误", f"启动离线操作失败：{str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"启动离线操作失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
 
     def findAccountCard(self, account_data: dict):
         """查找对应的账号卡片"""
@@ -553,8 +658,42 @@ class AutoReplyUI(QFrame):
             status_text = "在线" if new_status == 1 else "离线"
             self.logger.info(f"账号 '{account_data['username']}' 已成功设置为{status_text}状态")
 
+            # 离线成功后，自动停止该账号的自动回复（在后台线程执行，不阻塞 UI）
+            if new_status != 1 and auto_reply_manager.is_running(account_data):
+                self.logger.info(f"账号 '{account_data['username']}' 已离线，自动停止自动回复")
+                worker = _StopAutoReplyWorker(account_data, self)
+                worker.finished.connect(
+                    self._on_auto_reply_stopped_after_offline, Qt.ConnectionType.QueuedConnection  # type: ignore[call-arg]
+                )
+                self._offline_stop_workers.append(worker)
+                worker.start()
+
         except Exception as e:
             self.logger.error(f"处理状态设置成功回调失败: {str(e)}")
+
+    def _on_auto_reply_stopped_after_offline(self, account_data: dict, success: bool):
+        """离线后自动停止自动回复完成的回调"""
+        try:
+            # 清理已完成的 worker 引用
+            for worker in list(self._offline_stop_workers):
+                if not worker.isRunning():
+                    self._offline_stop_workers.remove(worker)
+
+            account_card = self.findAccountCard(account_data)
+            if account_card:
+                account_card.setAutoReplyStatus(False)
+
+            self.updateStats()
+
+            if success:
+                self.logger.info(f"账号 '{account_data['username']}' 离线后自动回复已停止")
+                self._show_slient_tip(f"账号 '{account_data['username']}' 已离线，自动回复已停止")
+            else:
+                self.logger.warning(f"账号 '{account_data['username']}' 离线后自动回复停止未生效（可能未在运行）")
+                self._update_all_cards_auto_reply_status()
+
+        except Exception as e:
+            self.logger.error(f"处理离线后停止自动回复回调失败: {str(e)}")
 
     def onStatusSetFailed(self, account_data: dict, error_message: str):
         """状态设置失败回调"""
@@ -565,7 +704,15 @@ class AutoReplyUI(QFrame):
                 account_card.setButtonLoading("offline", False)
 
             self.logger.error(f"设置账号 '{account_data['username']}' 状态失败：{error_message}")
-            QMessageBox.warning(self, "失败", f"设置账号 '{account_data['username']}' 状态失败：{error_message}")
+            InfoBar.warning(
+                title="失败",
+                content=f"设置账号 '{account_data['username']}' 状态失败：{error_message}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
 
         except Exception as e:
             self.logger.error(f"处理状态设置失败回调失败: {str(e)}")
@@ -587,13 +734,29 @@ class AutoReplyUI(QFrame):
 
         except Exception as e:
             self.logger.error(f"自动回复开关操作失败: {str(e)}")
-            QMessageBox.critical(self, "错误", f"自动回复操作失败：{str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"自动回复操作失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
 
     def _start_auto_reply(self, account_data: dict, account_card):
         """启动自动回复"""
         try:
             if account_data.get("status") != 1:
-                QMessageBox.warning(self, "提示", "账号必须先上线才能开始自动回复！")
+                InfoBar.warning(
+                    title="提示",
+                    content="账号必须先上线才能开始自动回复！",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=2000,
+                    parent=self,
+                )
                 return
 
             account_card.auto_reply_btn.setText("启动中...")
@@ -608,13 +771,29 @@ class AutoReplyUI(QFrame):
             else:
                 account_card.auto_reply_btn.setText("开始回复")
                 account_card.auto_reply_btn.setEnabled(True)
-                QMessageBox.warning(self, "失败", f"启动账号 '{account_data['username']}' 自动回复失败！")
+                InfoBar.warning(
+                    title="失败",
+                    content=f"启动账号 '{account_data['username']}' 自动回复失败！",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self,
+                )
 
         except Exception as e:
             self.logger.error(f"启动自动回复失败: {str(e)}")
             account_card.auto_reply_btn.setText("开始回复")
             account_card.auto_reply_btn.setEnabled(True)
-            QMessageBox.critical(self, "错误", f"启动自动回复失败：{str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"启动自动回复失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
 
     def _stop_auto_reply(self, account_data: dict, account_card):
         """停止自动回复"""
@@ -637,7 +816,15 @@ class AutoReplyUI(QFrame):
         except Exception as e:
             self.logger.error(f"停止自动回复失败: {str(e)}")
             account_card.setAutoReplyStatus(False)
-            QMessageBox.critical(self, "错误", f"停止自动回复失败：{str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"停止自动回复失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
             self.updateStats()
 
     def _connect_auto_reply_signals(self, account_data: dict):
@@ -650,11 +837,11 @@ class AutoReplyUI(QFrame):
 
                 thread.connection_success.connect(
                     lambda: self._on_auto_reply_success(account_data),
-                    Qt.ConnectionType.QueuedConnection
+                    Qt.ConnectionType.QueuedConnection  # type: ignore[call-arg]
                 )
                 thread.connection_failed.connect(
                     lambda error: self._on_auto_reply_failed(account_data, error),
-                    Qt.ConnectionType.QueuedConnection
+                    Qt.ConnectionType.QueuedConnection  # type: ignore[call-arg]
                 )
 
         except Exception as e:
@@ -669,10 +856,20 @@ class AutoReplyUI(QFrame):
                 account_card.auto_reply_btn.setEnabled(True)
 
             self.logger.info(f"账号 '{account_data['username']}' 自动回复连接成功")
-            self.updateStats()
+
+            # 防抖：多个账号几乎同时连接成功时，合并 updateStats() 调用
+            # 避免重连竞态下短时间内多次触发 UI 更新（可能触发行绘制中的 access violation）
+            if not getattr(self, '_stats_debounce_pending', False):
+                self._stats_debounce_pending = True
+                QTimer.singleShot(200, self._debounced_update_stats)
 
         except Exception as e:
             self.logger.error(f"处理自动回复成功回调失败: {str(e)}")
+
+    def _debounced_update_stats(self):
+        """防抖后的统计更新"""
+        self._stats_debounce_pending = False
+        self.updateStats()
 
     def _on_auto_reply_failed(self, account_data: dict, error: str):
         """自动回复连接失败回调"""
@@ -685,9 +882,17 @@ class AutoReplyUI(QFrame):
 
             self.logger.error(f"账号 '{account_data['username']}' 自动回复连接失败: {error}")
 
-            # 冷启动期间不弹窗，仅日志记录
+            # 冷启动期间不弹提示，仅日志记录
             if not self._is_cold_starting:
-                QMessageBox.warning(self, "连接失败", f"账号 '{account_data['username']}' 自动回复连接失败：{error}")
+                InfoBar.warning(
+                    title="连接失败",
+                    content=f"账号 '{account_data['username']}' 自动回复连接失败：{error}",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self,
+                )
 
             self.updateStats()
 

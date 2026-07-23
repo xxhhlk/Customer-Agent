@@ -157,7 +157,7 @@ class _KnowledgeSearchWorker(QThread):
 
         # 使用 jieba 分词
         try:
-            import jieba
+            import jieba  # type: ignore[import-untyped]
             words = [w.strip() for w in jieba.cut_for_search(query) if w.strip() and len(w.strip()) >= 1]
         except ImportError:
             words = [query]

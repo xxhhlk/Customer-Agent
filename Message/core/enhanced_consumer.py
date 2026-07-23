@@ -5,6 +5,7 @@
 
 import asyncio
 import time
+import threading
 from typing import List, Dict, Any, Optional
 from utils.logger_loguru import get_logger
 from bridge.context import Context, ContextType
@@ -177,17 +178,7 @@ class EnhancedMessageConsumer:
                     if from_uid and isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
                         # 人工回复取消防抖，清空该用户队列中的待处理消息
                         # 这些消息是客服回复前买家发的，客服已看到并回复，不需要AI再处理
-                        user_queue = self._user_queues.get(user_key)
-                        if user_queue:
-                            drained = 0
-                            while True:
-                                try:
-                                    user_queue.get_nowait()
-                                    drained += 1
-                                except asyncio.QueueEmpty:
-                                    break
-                            if drained > 0:
-                                self.logger.info(f"人工回复取消防抖，清空用户 {from_uid} 队列中 {drained} 条待处理消息")
+                        self._clear_pending_user_messages(user_key)
                     return
 
                 # 2. 关键词预处理：检查是否命中关键词
@@ -211,11 +202,15 @@ class EnhancedMessageConsumer:
                             )
                             if staff_replied:
                                 self.logger.info(f"pass_to_ai 关键词后人工客服已回复，跳过AI处理")
+                                # 人工回复了，清空队列中待处理的旧消息
+                                self._clear_pending_user_messages(user_key)
                                 return
                         else:
                             staff_replied = await self._check_staff_reply(merged_wrapper.context)
                             if staff_replied:
                                 self.logger.info(f"pass_to_ai 关键词后人工客服已回复，跳过AI处理")
+                                # 人工回复了，清空队列中待处理的旧消息
+                                self._clear_pending_user_messages(user_key)
                                 return
 
                         # 人工未回复，检查是否有有意义的内容传递给AI
@@ -270,18 +265,23 @@ class EnhancedMessageConsumer:
                     else:
                         # 普通关键词：检查人工回复冷却期
                         if from_uid and isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
-                            # 冷却期内：先等待人工回复，如果人工不回复再发关键词回复
-                            self.logger.info(f"命中关键词但买家 {from_uid} 在人工回复冷却期内，等待人工回复")
+                            # 冷却期内：人工刚刚回复过，等待人工回复
+                            self.logger.info(
+                                f"命中关键词但买家 {from_uid} 在人工回复冷却期内，等待人工回复"
+                            )
                             if event_id and isinstance(from_uid, str):
                                 staff_replied = await self._check_staff_reply_with_event(
                                     merged_wrapper.context,
                                     from_uid,
                                     event_id
                                 )
-                                if staff_replied:
-                                    self.logger.info(f"冷却期内命中关键词，人工客服已回复，跳过自动回复")
-                                    return
-                            # 人工未回复，发送关键词回复
+                            else:
+                                staff_replied = await self._check_staff_reply(merged_wrapper.context)
+                            if staff_replied:
+                                self.logger.info(f"冷却期内命中关键词，人工客服已回复，跳过自动回复")
+                                # 人工回复了，清空队列中待处理的旧消息
+                                self._clear_pending_user_messages(user_key)
+                                return
                             self.logger.info(f"冷却期内命中关键词，人工未回复，发送关键词回复")
                         self.logger.info(f"命中普通关键词，立即发送回复")
                         await self._send_keyword_reply(merged_wrapper.context, keyword_result)
@@ -298,6 +298,8 @@ class EnhancedMessageConsumer:
                         )
                         if staff_replied:
                             self.logger.info(f"User {user_key} staff replied, skip AI")
+                            # 人工回复了，清空队列中待处理的旧消息
+                            self._clear_pending_user_messages(user_key)
                             return
                         else:
                             # 等待超时，检查队列中是否有冷却期内被跳过的消息
@@ -321,6 +323,8 @@ class EnhancedMessageConsumer:
                         staff_replied = await self._check_staff_reply(merged_wrapper.context)
                         if staff_replied:
                             self.logger.info(f"User {user_key} staff replied, skip AI")
+                            # 人工回复了，清空队列中待处理的旧消息
+                            self._clear_pending_user_messages(user_key)
                             return
 
                     # 3. 处理消息（带AI超时中断）
@@ -506,6 +510,26 @@ class EnhancedMessageConsumer:
                 merged_context.content = "\n".join(texts)
 
         return last_wrapper
+
+    def _clear_pending_user_messages(self, user_key: str):
+        """清空用户队列中待处理的消息
+        
+        当人工客服已经回复时，队列中旧消息是客服回复前买家发的，不需要AI再处理。
+        """
+        if not user_key:
+            return
+        user_queue = self._user_queues.get(user_key)
+        if not user_queue:
+            return
+        drained = 0
+        while True:
+            try:
+                user_queue.get_nowait()
+                drained += 1
+            except asyncio.QueueEmpty:
+                break
+        if drained > 0:
+            self.logger.info(f"清空用户 {user_key} 队列中 {drained} 条待处理消息")
 
     async def _process_message_with_ai_timeout(self, wrapper: MessageWrapper, prebuilt_metadata: Optional[Dict[str, Any]] = None):
         """带AI超时中断的消息处理
@@ -945,6 +969,8 @@ class EnhancedMessageConsumerManager:
     def __init__(self):
         self._consumers: Dict[str, EnhancedMessageConsumer] = {}
         self.logger = get_logger("EnhancedConsumerManager")
+        self._cleanup_lock = threading.Lock()  # 保护消费者创建/销毁的互斥锁
+        self._cleaning: set = set()  # 正在清理中的消费者名（防重入）
 
     def create_consumer(self, queue_name: str, max_concurrent: int = 10) -> EnhancedMessageConsumer:
         """创建消费者
@@ -952,15 +978,19 @@ class EnhancedMessageConsumerManager:
         如果同名消费者已存在，先移除旧实例（包括其已注册的 handlers），
         再创建全新实例。调用方随后会重新 add_handler，避免重连后
         handlers 列表累积导致同一条消息被多个处理器链处理多遍。
-        """
-        if queue_name in self._consumers:
-            self.logger.info(f"Consumer {queue_name} already exists, removing old instance to avoid handler duplication")
-            del self._consumers[queue_name]
 
-        consumer = EnhancedMessageConsumer(queue_name, max_concurrent)
-        self._consumers[queue_name] = consumer
-        self.logger.info(f"Created enhanced consumer: {queue_name}")
-        return consumer
+        线程安全：使用 _cleanup_lock 确保同一 queue_name 的创建操作互斥，
+        防止重连时两个 AutoReplyThread 并发执行 stop→create→start 竞态。
+        """
+        with self._cleanup_lock:
+            if queue_name in self._consumers:
+                self.logger.info(f"Consumer {queue_name} already exists, removing old instance to avoid handler duplication")
+                del self._consumers[queue_name]
+
+            consumer = EnhancedMessageConsumer(queue_name, max_concurrent)
+            self._consumers[queue_name] = consumer
+            self.logger.info(f"Created enhanced consumer: {queue_name}")
+            return consumer
 
     def get_consumer(self, queue_name: str) -> Optional[EnhancedMessageConsumer]:
         """获取消费者"""

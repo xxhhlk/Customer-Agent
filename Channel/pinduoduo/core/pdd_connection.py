@@ -86,7 +86,7 @@ class ConnectionMixin:
 
     async def _connect_single_attempt(self, shop_id: str, user_id: str, username: str, on_success, on_failure):
         """单次WebSocket连接尝试"""
-        await self.init(shop_id, user_id, username, on_success, on_failure)
+        await self.init(shop_id, user_id, username, on_success, on_failure)  # type: ignore[attr-defined]
 
     def _is_ws_closed(self, ws: Any) -> bool:
         """检查WebSocket是否已关闭"""

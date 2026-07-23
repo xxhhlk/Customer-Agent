@@ -11,7 +11,7 @@ from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
                            LineEdit, ComboBox, ScrollArea, FluentIcon as FIF,
                            InfoBar, InfoBarPosition, TextEdit, PasswordLineEdit,
-                           TimePicker, isDarkTheme)
+                           TimePicker, SpinBox, isDarkTheme)
 from PyQt6.QtCore import QTime
 from utils.logger_loguru import get_logger
 from config import config
@@ -519,6 +519,95 @@ class AutoStartCard(CardWidget):
         self.auto_start_switch.setChecked(config.get("auto_start_on_launch", False))
 
 
+class RateLimitCard(CardWidget):
+    """限流配置卡片 - AI 请求频率限制与兜底回复"""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self) -> None:
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("AI 请求限流")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 窗口时长（小时）
+        self.window_hours_spin = SpinBox()
+        self.window_hours_spin.setRange(1, 168)  # 1小时 ~ 7天
+        self.window_hours_spin.setValue(4)
+        self.window_hours_spin.setSuffix(" 小时")
+        form_layout.addRow("窗口时长:", self.window_hours_spin)
+
+        # 最大请求数
+        self.max_requests_spin = SpinBox()
+        self.max_requests_spin.setRange(1, 1000)
+        self.max_requests_spin.setValue(10)
+        self.max_requests_spin.setSuffix(" 次")
+        form_layout.addRow("最大请求数:", self.max_requests_spin)
+
+        # 兜底回复
+        self.fallback_reply_edit = TextEdit()
+        self.fallback_reply_edit.setPlaceholderText("输入限流后的兜底回复内容，每行一个回复，发送时随机抽取")
+        self.fallback_reply_edit.setFixedHeight(120)
+        self.fallback_reply_edit.setPlainText("这个我不了解呢，帮你问下我们的技术人员")
+        form_layout.addRow("兜底回复:", self.fallback_reply_edit)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "每个买家在指定时间窗口内最多发送指定次数的 AI 请求，\n"
+            "超出限制后将自动回复兜底内容。窗口从买家第一次请求开始计时，\n"
+            "到期后自动重置。按买家ID全局计数，跨店铺共享。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        # 将多行文本按行分割，过滤空行
+        text = self.fallback_reply_edit.toPlainText().strip()
+        fallback_replies = [line.strip() for line in text.split('\n') if line.strip()]
+        if not fallback_replies:
+            fallback_replies = ["这个我不了解呢，帮你问下我们的技术人员"]
+        return {
+            "rate_limit": {
+                "window_hours": self.window_hours_spin.value(),
+                "max_requests": self.max_requests_spin.value(),
+                "fallback_reply": fallback_replies,
+            }
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        rate_limit = config.get("rate_limit", {})
+        self.window_hours_spin.setValue(rate_limit.get("window_hours", 4))
+        self.max_requests_spin.setValue(rate_limit.get("max_requests", 10))
+        fallback = rate_limit.get("fallback_reply", ["这个我不了解呢，帮你问下我们的技术人员"])
+        # 兼容旧格式（单个字符串）和新格式（数组）
+        if isinstance(fallback, str):
+            text = fallback
+        elif isinstance(fallback, list):
+            text = '\n'.join(fallback)
+        else:
+            text = "这个我不了解呢，帮你问下我们的技术人员"
+        self.fallback_reply_edit.setPlainText(text)
+
+
 class SettingUI(QFrame):
     """设置界面"""
 
@@ -715,6 +804,7 @@ class SettingUI(QFrame):
         self.business_hours_card = BusinessHoursCard()
         self.human_reply_wait_card = HumanReplyWaitCard()
         self.auto_start_card = AutoStartCard()
+        self.rate_limit_card = RateLimitCard()
 
         # 添加到布局
         content_layout.addWidget(self.llm_config_card)
@@ -724,6 +814,7 @@ class SettingUI(QFrame):
         content_layout.addWidget(self.business_hours_card)
         content_layout.addWidget(self.human_reply_wait_card)
         content_layout.addWidget(self.auto_start_card)
+        content_layout.addWidget(self.rate_limit_card)
         content_layout.addStretch()
 
         # 设置容器样式
@@ -772,7 +863,12 @@ class SettingUI(QFrame):
                     "enable": config.get("staff_reply_wait.enable", True),
                     "wait_seconds": config.get("staff_reply_wait.wait_seconds", 30)
                 },
-                "auto_start_on_launch": config.get("auto_start_on_launch", False)
+                "auto_start_on_launch": config.get("auto_start_on_launch", False),
+                "rate_limit": {
+                    "window_hours": config.get("rate_limit.window_hours", 4),
+                    "max_requests": config.get("rate_limit.max_requests", 10),
+                    "fallback_reply": config.get("rate_limit.fallback_reply", [])
+                }
             }
 
             # 验证并设置配置
@@ -813,6 +909,11 @@ class SettingUI(QFrame):
             "business_hours": {
                 "start": "08:00",
                 "end": "23:00"
+            },
+            "rate_limit": {
+                "window_hours": 4,
+                "max_requests": 10,
+                "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]
             }
         }
 
@@ -845,7 +946,8 @@ class SettingUI(QFrame):
                 "instructions": []
             }),
             "business_hours": config_data.get("business_hours", {"start": "08:00", "end": "23:00"}),
-            "staff_reply_wait": config_data.get("staff_reply_wait", {"enable": True, "wait_seconds": 30})
+            "staff_reply_wait": config_data.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
+            "rate_limit": config_data.get("rate_limit", {"window_hours": 4, "max_requests": 10, "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]})
         }
 
         # 验证business_hours格式
@@ -870,6 +972,16 @@ class SettingUI(QFrame):
         if "wait_seconds" not in staff_reply_wait:
             staff_reply_wait["wait_seconds"] = 30
 
+        # 验证rate_limit格式
+        rate_limit = validated_config["rate_limit"]
+        if not isinstance(rate_limit, dict):
+            rate_limit = {"window_hours": 4, "max_requests": 10, "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]}
+            validated_config["rate_limit"] = rate_limit
+
+        rate_limit.setdefault("window_hours", 4)
+        rate_limit.setdefault("max_requests", 10)
+        rate_limit.setdefault("fallback_reply", ["这个我不了解呢，帮你问下我们的技术人员"])
+
         # 设置到界面
         self.llm_config_card.setConfig(validated_config["llm"])
         self.embedder_config_card.setConfig(validated_config["embedder"])
@@ -887,6 +999,7 @@ class SettingUI(QFrame):
         # 处理自动启动配置
         auto_start = config_data.get("auto_start_on_launch", False)
         self.auto_start_card.setConfig({"auto_start_on_launch": auto_start})
+        self.rate_limit_card.setConfig(validated_config)
     
     def onSaveConfig(self):
         """保存配置到config模块"""
@@ -899,6 +1012,7 @@ class SettingUI(QFrame):
             business_config = self.business_hours_card.getConfig()
             staff_reply_wait_config = self.human_reply_wait_card.getConfig()
             auto_start_config = self.auto_start_card.getConfig()
+            rate_limit_config = self.rate_limit_card.getConfig()
 
             # 合并配置为新的结构
             new_config = {
@@ -909,6 +1023,7 @@ class SettingUI(QFrame):
                 "business_hours": business_config.get("businessHours", {"start": "08:00", "end": "23:00"}),
                 "staff_reply_wait": staff_reply_wait_config.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
                 "auto_start_on_launch": auto_start_config.get("auto_start_on_launch", False),
+                **rate_limit_config,
                 # 保持与旧配置的兼容性
                 "db_path": config.get("db_path", "")
             }

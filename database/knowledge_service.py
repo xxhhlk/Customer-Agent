@@ -8,7 +8,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from sqlalchemy import select, and_, or_
 from sqlalchemy.orm import Session
-import jieba
+import jieba  # type: ignore[import-untyped]
 from utils.logger_loguru import get_logger
 from database.models import Base, ProductKnowledge, CustomerServiceKnowledge, Shop
 from database.db_manager import db_manager

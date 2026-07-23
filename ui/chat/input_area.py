@@ -266,11 +266,15 @@ class InputArea(QWidget):
 
     def _install_global_click_filter(self):
         """安装全局鼠标事件过滤器，用于点击外部关闭浮窗"""
-        QApplication.instance().installEventFilter(self)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
     def _remove_global_click_filter(self):
         """移除全局鼠标事件过滤器"""
-        QApplication.instance().removeEventFilter(self)
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
 
     def _on_send_clicked(self):
         """发送按钮 / Enter 触发"""

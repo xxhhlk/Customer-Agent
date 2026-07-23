@@ -252,8 +252,17 @@ class AutoReplyCard(CardWidget):
 
     def setLogo(self, image_data: bytes):
         """设置Logo — 在主线程中创建 QPixmap（线程安全）"""
+        # 安全检查：widget 可能已被 deleteLater()
+        try:
+            _ = self.logo_label
+        except RuntimeError:
+            return
+
         if not image_data:
-            self.logo_label.setText("加载失败")
+            try:
+                self.logo_label.setText("加载失败")
+            except RuntimeError:
+                pass
             return
 
         try:

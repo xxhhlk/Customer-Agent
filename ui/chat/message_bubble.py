@@ -239,31 +239,35 @@ class MessageBubble(QFrame):
 
         # 用 window() 作为 parent，不存引用到 self 上，
         # 避免 MessageBubble 被 deleteLater() 后引用断裂
-        viewer = FullImageViewer(url, self.window())
-        # 存到 window 上防止 GC（而不是 self）
         win = self.window()
+        if win is None:
+            return
+        viewer = FullImageViewer(url, win)
+        # 存到 window 上防止 GC（而不是 self）
         if hasattr(win, '_open_viewers'):
-            win._open_viewers.append(viewer)
+            win._open_viewers.append(viewer)  # type: ignore[attr-defined]
         else:
-            win._open_viewers = [viewer]
+            win._open_viewers = [viewer]  # type: ignore[attr-defined]
         viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         viewer.show()
         # 对话框关闭时从列表移除
-        viewer.destroyed.connect(lambda: win._open_viewers.remove(viewer) if hasattr(win, '_open_viewers') and viewer in win._open_viewers else None)
+        viewer.destroyed.connect(lambda: win._open_viewers.remove(viewer) if hasattr(win, '_open_viewers') and viewer in win._open_viewers else None)  # type: ignore[attr-defined]
 
     def _on_video_clicked(self, url: str):
         """点击视频 → 打开视频播放器"""
         from ui.chat.media.video_player_dialog import VideoPlayerDialog
 
-        player = VideoPlayerDialog(url, self.window())
         win = self.window()
+        if win is None:
+            return
+        player = VideoPlayerDialog(url, win)
         if hasattr(win, '_open_viewers'):
-            win._open_viewers.append(player)
+            win._open_viewers.append(player)  # type: ignore[attr-defined]
         else:
-            win._open_viewers = [player]
+            win._open_viewers = [player]  # type: ignore[attr-defined]
         player.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         player.show()
-        player.destroyed.connect(lambda: win._open_viewers.remove(player) if hasattr(win, '_open_viewers') and player in win._open_viewers else None)
+        player.destroyed.connect(lambda: win._open_viewers.remove(player) if hasattr(win, '_open_viewers') and player in win._open_viewers else None)  # type: ignore[attr-defined]
 
     def _apply_theme(self):
         """应用主题颜色"""

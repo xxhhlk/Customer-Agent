@@ -113,7 +113,9 @@ class ChatAreaPanel(QWidget):
         self.scroll_area.setWidget(self._msg_container)
 
         # 监听滚动条变化，检测用户是否手动向上滚动
-        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        scroll_bar = self.scroll_area.verticalScrollBar()
+        if scroll_bar is not None:
+            scroll_bar.valueChanged.connect(self._on_scroll_value_changed)
 
         layout.addWidget(self.scroll_area, 1)
 
