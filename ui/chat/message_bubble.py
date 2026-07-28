@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy, QTextEdit,
     QApplication, QMenu,
 )
-from PyQt6.QtGui import QFont, QTextOption, QAction
+from PyQt6.QtGui import QFont, QTextOption, QAction, QCursor
 from qfluentwidgets import isDarkTheme, CaptionLabel
 
 
@@ -133,6 +133,10 @@ class MessageBubble(QFrame):
             content_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             self._content_label = content_label
             self._content_widget = content_label  # 统一引用
+            # 文本消息：右键菜单交由气泡统一处理，避免 QLabel 原生菜单在未选中
+            # 文字时无法复制（原生“复制”置灰）。同时支持选中后复制选区。
+            content_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            content_label.customContextMenuRequested.connect(self._show_context_menu)
 
         bubble_layout.addWidget(self._content_widget)
 
@@ -186,6 +190,14 @@ class MessageBubble(QFrame):
             copy_action.triggered.connect(self._copy_content)
             menu.addAction(copy_action)
 
+            # 文本消息若有选中文字，额外提供「复制所选」
+            if context_type not in ("image", "video"):
+                selected = self._get_selected_text()
+                if selected:
+                    copy_sel_action = QAction("复制所选", self)
+                    copy_sel_action.triggered.connect(self._copy_selected)
+                    menu.addAction(copy_sel_action)
+
         # 图片/视频消息：额外提供「复制链接」
         if context_type in ("image", "video") and content.startswith(("http://", "https://")):
             copy_url_action = QAction("复制链接", self)
@@ -203,15 +215,33 @@ class MessageBubble(QFrame):
             forward_action.triggered.connect(self._on_forward)
         menu.addAction(forward_action)
 
-        menu.exec(self.mapToGlobal(pos))
+        menu.exec(QCursor.pos())
 
     def _copy_content(self):
-        """复制消息内容到剪贴板"""
+        """复制整条消息内容到剪贴板（未选中文字时即复制全部）"""
         content = self.msg_data.get("content", "")
         if content:
             clipboard = QApplication.clipboard()
             if clipboard is not None:
                 clipboard.setText(content)
+
+    def _copy_selected(self):
+        """仅复制当前选中的文字"""
+        selected = self._get_selected_text()
+        if selected:
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(selected)
+
+    def _get_selected_text(self) -> str:
+        """返回文本消息当前选中的文字，无选中返回空串"""
+        label = self._content_label
+        if isinstance(label, QLabel):
+            try:
+                return label.selectedText() or ""
+            except Exception:
+                return ""
+        return ""
 
     def _on_forward(self):
         """触发转发请求"""
