@@ -5,12 +5,13 @@ import os
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
-                            QFormLayout, QGroupBox, QMessageBox)
+                            QFormLayout, QGroupBox)
+from PyQt6.QtWidgets import QDialog
 from PyQt6.QtGui import QFont
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
                            LineEdit, ComboBox, ScrollArea, FluentIcon as FIF,
-                           InfoBar, InfoBarPosition, TextEdit, PasswordLineEdit,
+                           InfoBar, InfoBarPosition, MessageBox, TextEdit, PasswordLineEdit,
                            TimePicker, SpinBox, isDarkTheme)
 from PyQt6.QtCore import QTime
 from utils.logger_loguru import get_logger
@@ -829,6 +830,27 @@ class SettingUI(QFrame):
 
         return scroll_area
     
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success":
+            InfoBar.success(**kwargs)
+        elif level == "warning":
+            InfoBar.warning(**kwargs)
+        elif level == "error":
+            InfoBar.error(**kwargs)
+        else:
+            InfoBar.info(**kwargs)
+
+    def _ask_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
+        """使用 qfluentwidgets MessageBox 显示确认对话框"""
+        mb = MessageBox(title, content, self)
+        mb.yesButton.setText(yes_text)
+        mb.cancelButton.setText(no_text)
+        return mb.exec() == QDialog.DialogCode.Accepted
+
     def loadConfig(self):
         """从config模块加载配置"""
         try:
@@ -877,7 +899,7 @@ class SettingUI(QFrame):
 
         except Exception as e:
             self.logger.error(f"加载配置失败: {e}")
-            QMessageBox.warning(self, "加载失败", f"加载配置失败：{str(e)}")
+            self._show_info("加载失败", f"加载配置失败：{str(e)}", "warning")
             self._loadDefaultConfig()
     
     def _loadDefaultConfig(self):
@@ -1030,10 +1052,10 @@ class SettingUI(QFrame):
 
             # 验证 LLM 必填项
             if not llm_config.get("api_key"):
-                QMessageBox.warning(self, "配置错误", "请输入LLM API Key！")
+                self._show_info("配置错误", "请输入LLM API Key！", "warning")
                 return
             if not llm_config.get("model_name"):
-                QMessageBox.warning(self, "配置错误", "请输入LLM模型名称！")
+                self._show_info("配置错误", "请输入LLM模型名称！", "warning")
                 return
 
             # 验证时间设置
@@ -1041,7 +1063,7 @@ class SettingUI(QFrame):
             end_time = self.business_hours_card.end_time_picker.getTime()
 
             if start_time >= end_time:
-                QMessageBox.warning(self, "时间设置错误", "开始时间必须早于结束时间！")
+                self._show_info("时间设置错误", "开始时间必须早于结束时间！", "warning")
                 return
 
             # 使用config模块保存配置
@@ -1062,36 +1084,29 @@ class SettingUI(QFrame):
 
         except Exception as e:
             self.logger.error(f"保存配置失败: {e}")
-            QMessageBox.critical(self, "保存失败", f"保存配置时发生错误：{str(e)}")
+            self._show_info("保存失败", f"保存配置时发生错误：{str(e)}", "error")
     
     def onResetConfig(self):
         """重置配置"""
-        reply = QMessageBox.question(
-            self,
-            "确认重置",
-            "确定要重置所有配置吗？\n这将重新加载配置文件中的原始设置。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            try:
-                # 使用config模块重新加载配置文件
-                config.reload()
-                self.loadConfig()
-                self.logger.info("配置已重置")
-                
-                InfoBar.success(
-                    title="重置成功",
-                    content="配置已重置为配置文件中的设置！",
-                    orient=Qt.Orientation.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP,
-                    duration=2000,
-                    parent=self
-                )
-            except Exception as e:
-                self.logger.error(f"重置配置失败: {e}")
-                QMessageBox.critical(self, "重置失败", f"重置配置失败：{str(e)}")
+        if not self._ask_confirm("确认重置", "确定要重置所有配置吗？\n这将重新加载配置文件中的原始设置。"):
+            return
+        try:
+            # 使用config模块重新加载配置文件
+            config.reload()
+            self.loadConfig()
+            self.logger.info("配置已重置")
+
+            InfoBar.success(
+                title="重置成功",
+                content="配置已重置为配置文件中的设置！",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=2000,
+                parent=self
+            )
+        except Exception as e:
+            self.logger.error(f"重置配置失败: {e}")
+            self._show_info("重置失败", f"重置配置失败：{str(e)}", "error")
     
  

@@ -81,6 +81,8 @@ class DebounceProcessorAdapter:
             self.logger.error(f"Debounce processing error: {e}")
             return wrapper
 
+    MAX_DEBOUNCE_DAY = 120  # 白天防抖总时长上限（秒）
+
     async def _wait_and_merge(
         self, 
         wrapper: MessageWrapper, 
@@ -90,62 +92,116 @@ class DebounceProcessorAdapter:
         from_uid=None,
         event_id=None
     ) -> Optional[MessageWrapper]:
-        """等待防抖窗口并合并消息，同时监听人工回复事件"""
-        try:
-            # 如果提供了人工回复管理器和事件ID，则同时监听人工回复
-            if staff_reply_manager and from_uid and event_id:
-                # 创建防抖超时任务
-                debounce_task = asyncio.create_task(asyncio.sleep(debounce_seconds))
-                
-                # 创建人工回复监听任务
-                # 注意：auto_cleanup=False，事件由外层的 finally 块负责清理
-                staff_reply_task = asyncio.create_task(
-                    staff_reply_manager.wait_for_staff_reply(from_uid, event_id, timeout=debounce_seconds, auto_cleanup=False)
-                )
-                
-                # 等待任一任务完成
-                done, pending = await asyncio.wait(
-                    {debounce_task, staff_reply_task},
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-                
-                # 取消未完成的任务
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                
-                # 检查是哪个任务完成了
-                if staff_reply_task in done:
-                    # 人工回复了，检查结果
-                    try:
-                        staff_replied = staff_reply_task.result()
-                        if staff_replied:
-                            self.logger.info(f"人工客服在防抖期间回复了 {from_uid}，取消自动回复")
-                            # 清理等待事件
-                            staff_reply_manager.stop_waiting(from_uid, event_id)
-                            # 重置防抖状态，让新消息能够正常处理
-                            user_key = self._extract_user_id(wrapper.context)
-                            if user_key in self._last_message_time:
-                                del self._last_message_time[user_key]
-                            return None  # 返回None表示取消自动回复
-                    except Exception as e:
-                        self.logger.error(f"检查人工回复结果时出错: {e}")
-                
-                # 如果是防抖超时完成，继续下面的正常流程
-            else:
-                # 没有提供人工回复管理器，使用原来的简单等待方式
-                await asyncio.sleep(debounce_seconds)
+        """等待防抖窗口并合并消息，同时监听人工回复事件。
+        
+        新消息到达会重置防抖计时器（标准防抖行为）。
+        白天总防抖时长上限 MAX_DEBOUNCE_DAY 秒，夜间不设上限。
+        """
+        start_time = asyncio.get_event_loop().time()
+        is_daytime = debounce_seconds <= self.DEBOUNCE_SECONDS
+        messages_to_merge = [wrapper]
 
-            # 如果没有队列，直接返回原消息
+        try:
             if not user_queue:
+                # 没有队列，简单 sleep 后返回原消息
+                await asyncio.sleep(debounce_seconds)
                 return wrapper
 
-            # 尝试收集队列中的后续消息
-            messages_to_merge = [wrapper]
-            
+            if staff_reply_manager and from_uid and event_id:
+                # === 人工回复监听路径：同时等待队列消息 / 人工回复 / 超时 ===
+                while True:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+
+                    if is_daytime and elapsed >= self.MAX_DEBOUNCE_DAY:
+                        self.logger.info(
+                            f"白天防抖总时长达到 {self.MAX_DEBOUNCE_DAY}s 上限，强制结束"
+                        )
+                        break
+
+                    wait_time = debounce_seconds
+                    if is_daytime:
+                        wait_time = min(debounce_seconds, self.MAX_DEBOUNCE_DAY - elapsed)
+
+                    # 三个任务并行等待
+                    queue_task = asyncio.create_task(user_queue.get())
+                    staff_task = asyncio.create_task(
+                        staff_reply_manager.wait_for_staff_reply(
+                            from_uid, event_id, timeout=wait_time, auto_cleanup=False
+                        )
+                    )
+                    timeout_task = asyncio.create_task(asyncio.sleep(wait_time))
+
+                    done, pending = await asyncio.wait(
+                        {queue_task, staff_task, timeout_task},
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    # 取消未完成的任务
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+
+                    # 检查人工回复
+                    if staff_task in done:
+                        try:
+                            staff_replied = staff_task.result()
+                            if staff_replied:
+                                self.logger.info(
+                                    f"人工客服在防抖期间回复了 {from_uid}，取消自动回复"
+                                )
+                                staff_reply_manager.stop_waiting(from_uid, event_id)
+                                user_key = self._extract_user_id(wrapper.context)
+                                if user_key in self._last_message_time:
+                                    del self._last_message_time[user_key]
+                                return None
+                        except Exception as e:
+                            self.logger.error(f"检查人工回复结果时出错: {e}")
+
+                    # 检查队列新消息 → 重置计时器
+                    if queue_task in done:
+                        try:
+                            next_wrapper = queue_task.result()
+                            messages_to_merge.append(next_wrapper)
+                            self.logger.debug(
+                                f"防抖重置: 收到新消息，已收集 {len(messages_to_merge)} 条"
+                            )
+                            continue
+                        except Exception as e:
+                            self.logger.error(f"获取队列消息时出错: {e}")
+
+                    # timeout 完成：没有新消息也没有人工回复
+                    break
+
+            else:
+                # === 简单路径：只等待队列新消息 ===
+                while True:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+
+                    if is_daytime and elapsed >= self.MAX_DEBOUNCE_DAY:
+                        self.logger.info(
+                            f"白天防抖总时长达到 {self.MAX_DEBOUNCE_DAY}s 上限，强制结束"
+                        )
+                        break
+
+                    wait_time = debounce_seconds
+                    if is_daytime:
+                        wait_time = min(debounce_seconds, self.MAX_DEBOUNCE_DAY - elapsed)
+
+                    try:
+                        next_wrapper = await asyncio.wait_for(
+                            user_queue.get(), timeout=wait_time
+                        )
+                        messages_to_merge.append(next_wrapper)
+                        self.logger.debug(
+                            f"防抖重置: 收到新消息，已收集 {len(messages_to_merge)} 条"
+                        )
+                    except asyncio.TimeoutError:
+                        break
+
+            # 兜底排空：防止 break 瞬间有新消息入队
             while True:
                 try:
                     next_wrapper = user_queue.get_nowait()
@@ -153,17 +209,17 @@ class DebounceProcessorAdapter:
                 except asyncio.QueueEmpty:
                     break
 
-            # 如果只有一条消息，直接返回
             if len(messages_to_merge) == 1:
                 return wrapper
 
-            # 合并多条消息
-            self.logger.info(f"Merged {len(messages_to_merge)} messages")
+            total_wait = asyncio.get_event_loop().time() - start_time
+            self.logger.info(
+                f"Merged {len(messages_to_merge)} messages (total wait: {total_wait:.1f}s)"
+            )
             return self._merge_messages(messages_to_merge)
 
         except Exception as e:
             self.logger.error(f"Wait and merge error: {e}")
-            # 如果出现异常，确保清理等待事件
             if staff_reply_manager and from_uid and event_id:
                 try:
                     staff_reply_manager.stop_waiting(from_uid, event_id)

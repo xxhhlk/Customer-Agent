@@ -1,4 +1,5 @@
 import asyncio
+import random
 import threading
 
 from agno import tools
@@ -386,4 +387,10 @@ class CustomerAgent(Bot):
             return Reply(ReplyType.TEXT, response.content)
         except Exception as e:
             self.logger.error(f"CustomerAgent异步回复失败: {e}")
+            # 异常兜底：优先使用设置中配置的兜底回复话术（rate_limit.fallback_reply，
+            # 即设置面板里的“兜底回复”），随机抽一条；未配置或列表为空时回退到默认文案，
+            # 避免发送空消息。
+            _fallbacks = get_config("rate_limit.fallback_reply", []) or []
+            if _fallbacks:
+                return Reply(ReplyType.TEXT, random.choice(_fallbacks))
             return Reply(ReplyType.TEXT, "抱歉，我现在无法回复，请稍后再试。")

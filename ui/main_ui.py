@@ -4,9 +4,9 @@ import traceback
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer, QEvent, QMetaObject, Q_ARG, pyqtSlot, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMessageBox, QWidget
+from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 from PyQt6.QtGui import QColor, QFont, QIcon, QPixmap
-from qfluentwidgets import FluentWindow, qrouter, NavigationItemPosition
+from qfluentwidgets import FluentWindow, InfoBar, InfoBarPosition, qrouter, NavigationItemPosition
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
 from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, SystemThemeListener, qconfig
@@ -190,9 +190,20 @@ class MainWindow(FluentWindow):
                 if minidump_dir.exists():
                     detail += f"Minidump 目录:\n{minidump_dir.resolve()}\n"
                 detail += "\n请将以上文件提供给开发者排查。"
-                QMessageBox.warning(self, "检测到异常退出", detail)
+                self._show_info("检测到异常退出", detail, "warning")
         except Exception:
             pass
+
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        from PyQt6.QtCore import Qt
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success": InfoBar.success(**kwargs)
+        elif level == "warning": InfoBar.warning(**kwargs)
+        elif level == "error": InfoBar.error(**kwargs)
+        else: InfoBar.info(**kwargs)
     
     def _check_freeze(self):
         """检测主线程是否卡顿 — 如果3秒定时器触发时发现距离上次超过5秒，说明中间有阻塞"""
@@ -258,6 +269,14 @@ class MainWindow(FluentWindow):
             avail_mb = stat.ullAvailPhys / 1024 / 1024
             total_mb = stat.ullTotalPhys / 1024 / 1024
             load = stat.dwMemoryLoad
+            avail_page_mb = stat.ullAvailPageFile / 1024 / 1024
+            total_page_mb = stat.ullTotalPageFile / 1024 / 1024
+
+            # 定期记录内存状态（用于崩溃后诊断内存是否持续下降）
+            self.logger.info(
+                f"📊 物理: {avail_mb:.0f}/{total_mb:.0f}MB (load={load}%)  "
+                f"页面: {avail_page_mb:.0f}/{total_page_mb:.0f}MB"
+            )
 
             # 低于 500MB 时触发 gc + 清图片内存缓存
             if avail_mb < 500:

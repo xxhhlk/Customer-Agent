@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Optional
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSignal as Signal, QTimer, QEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QSizePolicy, QLabel,
-                            QInputDialog, QMessageBox, QComboBox, QDialog, QFormLayout)
+                            QInputDialog, QComboBox, QDialog, QFormLayout)
 from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
-                           ScrollArea, FluentIcon as FIF, isDarkTheme, InfoBadge)
+                           ScrollArea, FluentIcon as FIF, isDarkTheme, InfoBadge,
+                           InfoBar, InfoBarPosition, MessageBox)
 from database.db_manager import db_manager
 from Channel.pinduoduo.pdd_login import login_pdd
 from utils.logger_loguru import get_logger
@@ -429,7 +430,7 @@ class AccountCard(CardWidget):
             logger.info(f"正在为账号 {self.account_name} 打开店铺浏览器...")
         except Exception as e:
             logger.error(f"打开店铺页面失败: {e}")
-            QMessageBox.warning(self, "错误", f"无法打开店铺页面: {str(e)}")
+            self._show_info("错误", f"无法打开店铺页面: {str(e)}", "warning")
     
     def setVerifyStatus(self, is_verifying: bool):
         """设置验证状态"""
@@ -457,7 +458,21 @@ class AccountCard(CardWidget):
             new_badge = self.createStatusBadge()
             # QBoxLayout.insertWidget for QHBoxLayout/QVBoxLayout
             if hasattr(layout, 'insertWidget'):
-                layout.insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)  # type: ignore[union-attr]
+                    layout.insertWidget(0, new_badge, 0, Qt.AlignmentFlag.AlignRight)  # type: ignore[union-attr]
+
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success":
+            InfoBar.success(**kwargs)
+        elif level == "warning":
+            InfoBar.warning(**kwargs)
+        elif level == "error":
+            InfoBar.error(**kwargs)
+        else:
+            InfoBar.info(**kwargs)
 
 
 class UserManagerWidget(QFrame):
@@ -814,7 +829,7 @@ class UserManagerWidget(QFrame):
                 if cookies_updated and status_updated:
                     # 更新卡片状态显示
                     account_card.updateStatus(1)
-                    QMessageBox.information(self, "验证成功", f"账号 '{account_data['username']}")
+                    self._show_info("验证成功", f"账号 '{account_data['username']}' 验证成功！", "success")
                
             else:  # 登录失败，result为False
                 # 登录失败，更新数据库状态为离线
@@ -828,10 +843,10 @@ class UserManagerWidget(QFrame):
                 # 更新卡片状态显示
                 account_card.updateStatus(3)
                 
-                QMessageBox.warning(self, "验证失败", f"账号 '{account_data['username']}' 验证失败，请检查账号密码！")
+                self._show_info("验证失败", f"账号 '{account_data['username']}' 验证失败，请检查账号密码！", "warning")
                 
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"更新账号状态时发生错误：{str(e)}")
+            self._show_info("错误", f"更新账号状态时发生错误：{str(e)}", "error")
             
         # 重新加载数据以确保同步
         self.reloadAccounts()
@@ -858,7 +873,7 @@ class UserManagerWidget(QFrame):
         self.add_btn.setText("添加账号")
 
         if not result or not isinstance(result, dict):
-            QMessageBox.warning(self, "添加失败", "登录验证失败，请检查账号和密码后重试。")
+            self._show_info("添加失败", "登录验证失败，请检查账号和密码后重试。", "warning")
             return
 
         try:
@@ -870,7 +885,7 @@ class UserManagerWidget(QFrame):
             # 1. 检查账号是否已存在
             existing_account = db_manager.get_account(channel_name, shop_id, user_id)
             if existing_account:
-                QMessageBox.information(self, "提示", f"账号 '{username}' 已存在于店铺 '{shop_name}' 中，无需重复添加。")
+                self._show_info("提示", f"账号 '{username}' 已存在于店铺 '{shop_name}' 中，无需重复添加。", "info")
                 return
 
             # 2. 检查店铺是否存在，不存在则添加
@@ -897,13 +912,13 @@ class UserManagerWidget(QFrame):
             )
 
             if success:
-                QMessageBox.information(self, "成功", f"账号 '{username}' 已成功添加到店铺 '{shop_name}'！")
+                self._show_info("成功", f"账号 '{username}' 已成功添加到店铺 '{shop_name}'！", "success")
                 self.reloadAccounts()
             else:
-                QMessageBox.warning(self, "失败", "账号添加失败，数据写入时发生错误。")
+                self._show_info("失败", "账号添加失败，数据写入时发生错误。", "warning")
 
         except Exception as e:
-            QMessageBox.critical(self, "严重错误", f"添加账号过程中发生严重错误：{str(e)}")
+            self._show_info("严重错误", f"添加账号过程中发生严重错误：{str(e)}", "error")
             logger.error(f"添加账号过程中发生错误: {e}")
     
     def onEditAccount(self, account_data: dict):
@@ -918,7 +933,7 @@ class UserManagerWidget(QFrame):
                 status_changed = new_data["status"] != account_data["status"]
 
                 if not (username_changed or password_changed or status_changed):
-                    QMessageBox.information(self, "提示", "账号信息未发生变化。")
+                    self._show_info("提示", "账号信息未发生变化。", "info")
                     return
 
                 update_info_success = True
@@ -945,7 +960,7 @@ class UserManagerWidget(QFrame):
                     )
                 
                 if update_info_success and update_status_success:
-                    QMessageBox.information(self, "成功", "账号信息更新成功！")
+                    self._show_info("成功", "账号信息更新成功！", "success")
                     self.reloadAccounts()
                 else:
                     error_parts = []
@@ -954,41 +969,56 @@ class UserManagerWidget(QFrame):
                     if not update_status_success:
                         error_parts.append("状态")
                     error_message = f"更新以下信息失败: {', '.join(error_parts)}。\n数据库未找到对应条目或发生错误，请检查日志。"
-                    QMessageBox.warning(self, "更新失败", error_message)
+                    self._show_info("更新失败", error_message, "warning")
                 
             except Exception as e:
-                QMessageBox.critical(self, "错误", f"更新账号信息时发生错误：{str(e)}")
+                self._show_info("错误", f"更新账号信息时发生错误：{str(e)}", "error")
     
 
     
     def onDeleteAccount(self, account_data: dict):
         """删除账号回调"""
-        reply = QMessageBox.question(
-            self,
-            "确认删除",
+        if not self._ask_confirm("确认删除",
             f"确定要删除账号 '{account_data['username']}' 吗？\n"
             f"店铺：{account_data['shop_name']}\n"
-            "此操作不可撤销！",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            try:
-                success = db_manager.delete_account(
-                    account_data["channel_name"],
-                    account_data["shop_id"],
-                    account_data["user_id"]
-                )
+            "此操作不可撤销！"):
+            return
+        try:
+            success = db_manager.delete_account(
+                account_data["channel_name"],
+                account_data["shop_id"],
+                account_data["user_id"]
+            )
+            
+            if success:
+                self._show_info("成功", "账号删除成功！", "success")
+                self.reloadAccounts()
+            else:
+                self._show_info("失败", "账号删除失败！", "warning")
                 
-                if success:
-                    QMessageBox.information(self, "成功", "账号删除成功！")
-                    self.reloadAccounts()
-                else:
-                    QMessageBox.warning(self, "失败", "账号删除失败！")
-                    
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"删除账号时发生错误：{str(e)}")
+        except Exception as e:
+            self._show_info("错误", f"删除账号时发生错误：{str(e)}", "error")
+
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success":
+            InfoBar.success(**kwargs)
+        elif level == "warning":
+            InfoBar.warning(**kwargs)
+        elif level == "error":
+            InfoBar.error(**kwargs)
+        else:
+            InfoBar.info(**kwargs)
+
+    def _ask_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
+        """使用 qfluentwidgets MessageBox 显示确认对话框"""
+        mb = MessageBox(title, content, self)
+        mb.yesButton.setText(yes_text)
+        mb.cancelButton.setText(no_text)
+        return mb.exec() == QDialog.DialogCode.Accepted
 
 
 class EditAccountDialog(QDialog):
@@ -1145,11 +1175,11 @@ class EditAccountDialog(QDialog):
     def validateAndAccept(self):
         """验证输入并接受"""
         if not self.username_edit.text().strip():
-            QMessageBox.warning(self, "输入错误", "用户名不能为空！")
+            self._show_info("输入错误", "用户名不能为空！", "warning")
             return
             
         if not self.password_edit.text().strip():
-            QMessageBox.warning(self, "输入错误", "密码不能为空！")
+            self._show_info("输入错误", "密码不能为空！", "warning")
             return
             
         self.accept()
@@ -1165,6 +1195,20 @@ class EditAccountDialog(QDialog):
             "password": self.password_edit.text().strip(),
             "status": self.status_combo.currentData()
         }
+
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success":
+            InfoBar.success(**kwargs)
+        elif level == "warning":
+            InfoBar.warning(**kwargs)
+        elif level == "error":
+            InfoBar.error(**kwargs)
+        else:
+            InfoBar.info(**kwargs)
 
 
 class AddAccountDialog(QDialog):
@@ -1243,11 +1287,11 @@ class AddAccountDialog(QDialog):
     def validateAndAccept(self):
         """验证输入并接受"""
         if not self.username_edit.text().strip():
-            QMessageBox.warning(self, "输入错误", "用户名不能为空！")
+            self._show_info("输入错误", "用户名不能为空！", "warning")
             return
             
         if not self.password_edit.text().strip():
-            QMessageBox.warning(self, "输入错误", "密码不能为空！")
+            self._show_info("输入错误", "密码不能为空！", "warning")
             return
             
         self.accept()
@@ -1258,3 +1302,17 @@ class AddAccountDialog(QDialog):
             "username": self.username_edit.text().strip(),
             "password": self.password_edit.text().strip()
         }
+
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success":
+            InfoBar.success(**kwargs)
+        elif level == "warning":
+            InfoBar.warning(**kwargs)
+        elif level == "error":
+            InfoBar.error(**kwargs)
+        else:
+            InfoBar.info(**kwargs)

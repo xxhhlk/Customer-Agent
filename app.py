@@ -27,7 +27,10 @@ import traceback
 import threading
 from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QSharedMemory
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication
+
+# qfluentwidgets MessageBox（替代 QMessageBox，不触发系统音频线程→崩溃）
+from qfluentwidgets import MessageBox
 
 # 启用 faulthandler：捕获 C++ 级 segfault 的 Python 堆栈
 faulthandler.enable()
@@ -52,7 +55,8 @@ _fault_file.write(f"\n{'='*60}\n=== App started at {_time.strftime('%Y-%m-%d %H:
 _fault_file.flush()
 
 faulthandler.enable(_fault_file)
-faulthandler.dump_traceback_later(timeout=30, repeat=True, file=_fault_file)
+# 不再使用 dump_traceback_later（每 30s dump 一次在 4GB 机器上会加剧内存压力，
+# 且 crash_trace.log 可达 87MB+。faulthandler.enable() 已在 segfault 时 dump，足够。）
 
 # 注册信号处理：崩溃时立即 dump 堆栈到文件
 # faulthandler.enable() 已注册 SIGSEGV，但某些 C 扩展崩溃（如堆损坏）可能绕过它。
@@ -214,13 +218,13 @@ def main():
         # 再用 attach 验证：如果 attach 也失败，说明是残留的共享内存
         if shared_mem.attach():
             shared_mem.detach()
-            QMessageBox.critical(None, "程序已在运行", "拼多多AI客服助手已经在运行中，请勿重复启动。")
+            MessageBox("程序已在运行", "拼多多AI客服助手已经在运行中，请勿重复启动。", None).exec()
             sys.exit(1)
         else:
             # create 和 attach 都失败 — 尝试清理后重新 create
             shared_mem.detach()
             if not shared_mem.create(1):
-                QMessageBox.critical(None, "启动失败", "无法创建实例检查器，请检查权限或重启电脑后再试。")
+                MessageBox("启动失败", "无法创建实例检查器，请检查权限或重启电脑后再试。", None).exec()
                 sys.exit(1)
 
     # 创建主窗口

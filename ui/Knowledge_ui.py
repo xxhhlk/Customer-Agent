@@ -11,13 +11,13 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional, List
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QScrollArea, QFrame, QGridLayout, QFileDialog, QMessageBox, QDialog,
+    QScrollArea, QFrame, QGridLayout, QFileDialog, QDialog,
     QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QEvent
 from qfluentwidgets import (
     FluentIcon, PrimaryPushButton, PushButton,
-    InfoBar, InfoBarPosition, SearchLineEdit, isDarkTheme,
+    InfoBar, InfoBarPosition, MessageBox, SearchLineEdit, isDarkTheme,
     MessageBoxBase, SubtitleLabel, BodyLabel, RadioButton
 )
 
@@ -415,17 +415,18 @@ class ClearConfirmDialog(QDialog):
         if checked:
             self._create_backup = create_backup
 
+    def _ask_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
+        """使用 qfluentwidgets MessageBox 显示确认对话框"""
+        mb = MessageBox(title, content, self)
+        mb.yesButton.setText(yes_text)
+        mb.cancelButton.setText(no_text)
+        return mb.exec() == QDialog.DialogCode.Accepted
+
     def _on_confirm(self):
         """二次确认"""
-        reply = QMessageBox.warning(
-            self,
-            "最终确认",
-            "您确定要清空知识库吗？\n\n此操作不可撤销！",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.accept()
+        if not self._ask_confirm("最终确认", "您确定要清空知识库吗？\n\n此操作不可撤销！"):
+            return
+        self.accept()
 
     def get_create_backup(self) -> bool:
         """是否创建备份"""
@@ -1072,22 +1073,7 @@ class KnowledgeUI(QWidget):
             title, content = dialog.get_data()
 
             try:
-                # 确认对话框
-                confirm_box = QMessageBox(
-                    QMessageBox.Icon.Question,
-                    "确认添加",
-                    f"确定要添加知识「{title}」吗？\n\n内容长度：{len(content)} 字符",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    self
-                )
-                yes_btn = confirm_box.button(QMessageBox.StandardButton.Yes)
-                no_btn = confirm_box.button(QMessageBox.StandardButton.No)
-                if yes_btn is not None:
-                    yes_btn.setText("添加")
-                if no_btn is not None:
-                    no_btn.setText("取消")
-
-                if confirm_box.exec() == QMessageBox.StandardButton.Yes:
+                if self._ask_confirm("确认添加", f"确定要添加知识「{title}」吗？\n\n内容长度：{len(content)} 字符", yes_text="添加"):
                     # 使用工作线程执行添加
                     self._add_worker = AddKnowledgeWorker(self.knowledge_manager, title, content)
                     self._add_worker.success.connect(self._on_add_success)
@@ -1154,7 +1140,7 @@ class KnowledgeUI(QWidget):
         """导入知识库文件"""
         self._ensure_knowledge_manager()
         if self.knowledge_manager is None:
-            QMessageBox.critical(self, "错误", "知识库管理器未初始化，无法导入。")
+            self._show_info("错误", "知识库管理器未初始化，无法导入。", "error")
             return
 
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1190,7 +1176,7 @@ class KnowledgeUI(QWidget):
             # 强制刷新缓存
             self.refresh_data(force_reload=True)
         finally:
-            QMessageBox.information(self, "成功", f"知识库导入完成！\n成功导入 {count} 条记录")
+            self._show_info("成功", f"知识库导入完成！\n成功导入 {count} 条记录", "success")
 
     def _on_import_failed(self, msg: str) -> None:
         """
@@ -1200,19 +1186,19 @@ class KnowledgeUI(QWidget):
             msg: 错误消息
         """
         self._hide_loading_indicator()
-        QMessageBox.critical(self, "错误", f"导入失败：{msg}")
+        self._show_info("错误", f"导入失败：{msg}", "error")
 
     def export_knowledge(self) -> None:
         """导出知识库数据"""
         self._ensure_knowledge_manager()
         if self.knowledge_manager is None:
-            QMessageBox.critical(self, "错误", "知识库管理器未初始化，无法导出。")
+            self._show_info("错误", "知识库管理器未初始化，无法导出。", "error")
             return
 
         # 检查是否有数据
         count = self.knowledge_manager.get_content_count()
         if count == 0:
-            QMessageBox.information(self, "提示", "知识库为空，没有可导出的数据。")
+            self._show_info("提示", "知识库为空，没有可导出的数据。", "info")
             return
 
         # 选择导出格式
@@ -1260,18 +1246,17 @@ class KnowledgeUI(QWidget):
     def _on_export_success(self, file_path: str, count: int) -> None:
         """导出成功回调"""
         self._hide_loading_indicator()
-        QMessageBox.information(
-            self, "导出成功",
+        self._show_info("导出成功",
             f"知识库导出完成！\n\n"
             f"导出文件: {file_path}\n"
             f"导出数量: {count} 条记录\n\n"
-            f"提示: CSV格式的导出文件可直接通过\"导入知识库\"功能重新导入。"
-        )
+            f"提示: CSV格式的导出文件可直接通过\"导入知识库\"功能重新导入。",
+            "success")
 
     def _on_export_failed(self, msg: str) -> None:
         """导出失败回调"""
         self._hide_loading_indicator()
-        QMessageBox.critical(self, "错误", f"导出失败：{msg}")
+        self._show_info("错误", f"导出失败：{msg}", "error")
 
     def _on_export_progress(self, msg: str) -> None:
         """导出进度回调"""
@@ -1281,13 +1266,13 @@ class KnowledgeUI(QWidget):
         """清空知识库"""
         self._ensure_knowledge_manager()
         if self.knowledge_manager is None:
-            QMessageBox.critical(self, "错误", "知识库管理器未初始化，无法清空。")
+            self._show_info("错误", "知识库管理器未初始化，无法清空。", "error")
             return
 
         # 检查是否有数据
         count = self.knowledge_manager.get_content_count()
         if count == 0:
-            QMessageBox.information(self, "提示", "知识库已经是空的。")
+            self._show_info("提示", "知识库已经是空的。", "info")
             return
 
         # 显示确认对话框
@@ -1306,7 +1291,7 @@ class KnowledgeUI(QWidget):
                 os.path.expanduser("~")
             )
             if not backup_dir:
-                QMessageBox.warning(self, "提示", "未选择备份目录，操作已取消。")
+                self._show_info("提示", "未选择备份目录，操作已取消。", "warning")
                 return
 
         # 显示加载指示器
@@ -1332,7 +1317,7 @@ class KnowledgeUI(QWidget):
         if backup_path:
             message += f"\n\n备份已保存到:\n{backup_path}"
 
-        QMessageBox.information(self, "清空成功", message)
+        self._show_info("清空成功", message, "success")
 
         # 强制刷新数据
         self.refresh_data(force_reload=True)
@@ -1340,7 +1325,7 @@ class KnowledgeUI(QWidget):
     def _on_clear_failed(self, msg: str) -> None:
         """清空失败回调"""
         self._hide_loading_indicator()
-        QMessageBox.critical(self, "错误", f"清空失败：{msg}")
+        self._show_info("错误", f"清空失败：{msg}", "error")
 
     def _on_clear_progress(self, msg: str) -> None:
         """清空进度回调"""
@@ -1372,16 +1357,14 @@ class KnowledgeUI(QWidget):
         except Exception as e:
             error_msg = str(e)
             if "Cannot delete" in error_msg or "Access is denied" in error_msg:
-                QMessageBox.warning(
-                    self, "文件锁定",
+                self._show_info("文件锁定",
                     "知识库文件被其他程序占用，请尝试以下方法：\n\n"
                     "1. 关闭其他可能使用知识库的程序\n"
                     "2. 重启本应用程序\n"
                     "3. 检查是否有杀毒软件在扫描该文件\n\n"
-                    "如果问题持续存在，请联系技术支持。"
-                )
+                    "如果问题持续存在，请联系技术支持。", "warning")
             else:
-                QMessageBox.critical(self, "错误", f"刷新失败：{error_msg}")
+                self._show_info("错误", f"刷新失败：{error_msg}", "error")
 
     def _populate_from_cache(self) -> None:
         """从缓存数据快速渲染"""
@@ -1458,6 +1441,23 @@ class KnowledgeUI(QWidget):
             no_data_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             no_data_label.setStyleSheet("font-size: 14px; padding: 40px;")
             self.gridLayout.addWidget(no_data_label, 0, 0)
+
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success": InfoBar.success(**kwargs)
+        elif level == "warning": InfoBar.warning(**kwargs)
+        elif level == "error": InfoBar.error(**kwargs)
+        else: InfoBar.info(**kwargs)
+
+    def _ask_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
+        """使用 qfluentwidgets MessageBox 显示确认对话框"""
+        mb = MessageBox(title, content, self)
+        mb.yesButton.setText(yes_text)
+        mb.cancelButton.setText(no_text)
+        return mb.exec() == QDialog.DialogCode.Accepted
 
     def _show_message(
         self,

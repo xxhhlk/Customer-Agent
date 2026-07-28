@@ -12,14 +12,14 @@ from typing import List, Dict, Any, Optional
 from collections import deque
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QAbstractTableModel, QModelIndex, QObject, QEvent
 from PyQt6.QtWidgets import (QFrame, QVBoxLayout, QHBoxLayout, QWidget,
-                            QTextEdit, QFileDialog, QMessageBox, QSplitter,
+                            QTextEdit, QFileDialog, QDialog, QSplitter,
                             QTableView, QHeaderView, QApplication,
                             QStyledItemDelegate, QStyleOptionViewItem)
 from PyQt6.QtGui import QFont, QTextCursor, QColor, QTextCharFormat, QBrush, QPainter
 from qfluentwidgets import (CardWidget, SubtitleLabel, CaptionLabel, BodyLabel,
                            PrimaryPushButton, PushButton, StrongBodyLabel,
                            ComboBox, LineEdit, ScrollArea, FluentIcon as FIF,
-                           InfoBar, InfoBarPosition, ToolButton, CheckBox, isDarkTheme)
+                           InfoBar, InfoBarPosition, MessageBox, ToolButton, CheckBox, isDarkTheme)
 from utils.logger_loguru import get_logger, logger, UILogHandler  # pyright: ignore[reportAttributeAccessIssue]
 
 
@@ -809,17 +809,26 @@ class LogUI(QFrame):
         # 直接将过滤条件传递给LogDisplayWidget
         self.log_display.set_filter(filter_dict)
     
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
+        if level == "success": InfoBar.success(**kwargs)
+        elif level == "warning": InfoBar.warning(**kwargs)
+        elif level == "error": InfoBar.error(**kwargs)
+        else: InfoBar.info(**kwargs)
+
+    def _ask_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
+        """使用 qfluentwidgets MessageBox 显示确认对话框"""
+        mb = MessageBox(title, content, self)
+        mb.yesButton.setText(yes_text)
+        mb.cancelButton.setText(no_text)
+        return mb.exec() == QDialog.DialogCode.Accepted
+
     def clear_logs(self):
         """清空日志"""
-        reply = QMessageBox.question(
-            self,
-            "确认清空",
-            "确定要清空所有日志吗？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
+        if self._ask_confirm("确认清空", "确定要清空所有日志吗？"):
             self.log_display.clear_all()
             InfoBar.success(
                 title="清空成功",
@@ -872,7 +881,7 @@ class LogUI(QFrame):
                     parent=self
                 )
             except Exception as e:
-                QMessageBox.critical(self, "导出失败", f"导出日志失败：{str(e)}")
+                self._show_info("导出失败", f"导出日志失败：{str(e)}", "error")
 
     def _export_txt(self, file_path: str):
         """导出为TXT格式"""

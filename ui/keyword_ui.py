@@ -4,7 +4,7 @@ from typing import Optional, List
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                              QTableWidgetItem, QHeaderView, QAbstractItemView,
-                             QMessageBox, QDialog, QFormLayout, QLineEdit,
+                             QDialog, QFormLayout, QLineEdit,
                              QSpinBox, QCheckBox, QComboBox, QTextEdit, QListWidget,
                              QListWidgetItem, QSplitter, QMenu)
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QAction
@@ -12,7 +12,8 @@ from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel,
                             PrimaryPushButton, PushButton, ToolButton,
                             ScrollArea, FluentIcon as FIF,
                             TableWidget, LineEdit, SpinBox, CheckBox, ComboBox,
-                            isDarkTheme, TextEdit)
+                            isDarkTheme, TextEdit,
+                            InfoBar, InfoBarPosition, MessageBox)
 from database.db_manager import db_manager
 from Message.handlers.keyword_handler import KeywordDetectionHandler
 
@@ -665,6 +666,36 @@ class KeywordManagerWidget(QFrame):
             self._loaded_once = True
             self.loadGroupsFromDB()
 
+    # ---- 弹窗辅助：禁止 QMessageBox（触发系统音频线程→崩溃），统一用 qfluentwidgets ----
+
+    def _show_info(self, title: str, content: str, level: str = "info"):
+        """显示 InfoBar 提示（非阻塞），替代 QMessageBox.information/warning"""
+        duration = 3000 if level in ("warning", "error") else 2000
+        kwargs = dict(
+            title=title, content=content,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=duration,
+            parent=self,
+        )
+        if level == "success":
+            InfoBar.success(**kwargs)
+        elif level == "warning":
+            InfoBar.warning(**kwargs)
+        elif level == "error":
+            InfoBar.error(**kwargs)
+        else:
+            InfoBar.info(**kwargs)
+
+    def _ask_confirm(self, title: str, content: str,
+                     yes_text: str = "确认", no_text: str = "取消") -> bool:
+        """使用 qfluentwidgets MessageBox 显示确认对话框，替代 QMessageBox.question"""
+        mb = MessageBox(title, content, self)
+        mb.yesButton.setText(yes_text)
+        mb.cancelButton.setText(no_text)
+        return mb.exec() == QDialog.DialogCode.Accepted
+
     def showEvent(self, event):
         """页面显示时加载数据（首次）"""
         super().showEvent(event)
@@ -998,7 +1029,7 @@ class KeywordManagerWidget(QFrame):
         if dialog.exec():
             data = dialog.get_data()
             if not data['group_name']:
-                QMessageBox.warning(self, '失败', '分组名称不能为空！')
+                self._show_info('失败', '分组名称不能为空！', 'warning')
                 return
 
             group_id = db_manager.add_keyword_group(**data)
@@ -1014,9 +1045,9 @@ class KeywordManagerWidget(QFrame):
                 
                 # 触发关键词热加载
                 self.keyword_handler.reload_keywords()
-                QMessageBox.information(self, '成功', f'分组 "{data["group_name"]}" 添加成功！')
+                self._show_info('成功', f'分组 "{data["group_name"]}" 添加成功！', 'success')
             else:
-                QMessageBox.warning(self, '失败', '分组添加失败，可能已存在！')
+                self._show_info('失败', '分组添加失败，可能已存在！', 'warning')
 
     def onEditGroup(self, group_id: int):
         """编辑分组"""
@@ -1027,14 +1058,14 @@ class KeywordManagerWidget(QFrame):
                 break
 
         if not group_data:
-            QMessageBox.warning(self, '错误', '找不到分组数据！')
+            self._show_info('错误', '找不到分组数据！', 'error')
             return
 
         dialog = GroupDialog(self, group_data)
         if dialog.exec():
             data = dialog.get_data()
             if not data['group_name']:
-                QMessageBox.warning(self, '失败', '分组名称不能为空！')
+                self._show_info('失败', '分组名称不能为空！', 'warning')
                 return
 
             if db_manager.update_keyword_group(group_id, **data):
@@ -1045,9 +1076,9 @@ class KeywordManagerWidget(QFrame):
                 
                 # 触发关键词热加载
                 self.keyword_handler.reload_keywords()
-                QMessageBox.information(self, '成功', '分组修改成功！')
+                self._show_info('成功', '分组修改成功！', 'success')
             else:
-                QMessageBox.warning(self, '失败', '分组修改失败！')
+                self._show_info('失败', '分组修改失败！', 'warning')
 
     def onEditCurrentGroup(self):
         """编辑当前选中的分组"""
@@ -1065,58 +1096,57 @@ class KeywordManagerWidget(QFrame):
         if not group_data:
             return
 
-        # 确认删除
-        reply = QMessageBox.question(
-            self, '确认删除',
+        # 确认删除（使用 qfluentwidgets MessageBox，不触发系统音频线程）
+        if not self._ask_confirm(
+            '确认删除',
             f'确定要删除分组 "{group_data["group_name"]}" 吗？\n该分组下的所有关键词也会被删除！',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
+            yes_text='确认删除', no_text='取消'
+        ):
+            return
 
-        if reply == QMessageBox.StandardButton.Yes:
-            if db_manager.delete_keyword_group(group_id):
-                self.loadGroupsFromDB()
-                # 清空右侧
-                if self.current_group_id == group_id:
-                    self.current_group_id = 0
-                    self.current_group_label.setText("请选择一个分组")
-                    self.edit_group_btn.setEnabled(False)
-                    self.add_keyword_btn.setEnabled(False)
-                    self.group_info_label.setText("")
-                    self.keywords_data = []
-                    self.refreshKeywordList()
-                
-                # 触发关键词热加载
-                self.keyword_handler.reload_keywords()
-                QMessageBox.information(self, '成功', f'分组 "{group_data["group_name"]}" 删除成功！')
-            else:
-                QMessageBox.warning(self, '失败', '分组删除失败！')
+        if db_manager.delete_keyword_group(group_id):
+            self.loadGroupsFromDB()
+            # 清空右侧
+            if self.current_group_id == group_id:
+                self.current_group_id = 0
+                self.current_group_label.setText("请选择一个分组")
+                self.edit_group_btn.setEnabled(False)
+                self.add_keyword_btn.setEnabled(False)
+                self.group_info_label.setText("")
+                self.keywords_data = []
+                self.refreshKeywordList()
+            
+            # 触发关键词热加载
+            self.keyword_handler.reload_keywords()
+            self._show_info('成功', f'分组 "{group_data["group_name"]}" 删除成功！', 'success')
+        else:
+            self._show_info('失败', '分组删除失败！', 'warning')
 
     # ========== 关键词操作 ==========
 
     def onAddKeyword(self):
         """添加关键词"""
         if not self.current_group_id:
-            QMessageBox.warning(self, '提示', '请先选择一个分组！')
+            self._show_info('提示', '请先选择一个分组！', 'warning')
             return
 
         dialog = KeywordDialog(self, group_id=self.current_group_id)
         if dialog.exec():
             data = dialog.get_data()
             if not data['keyword']:
-                QMessageBox.warning(self, '失败', '关键词不能为空！')
+                self._show_info('失败', '关键词不能为空！', 'warning')
                 return
             if not data['group_id']:
-                QMessageBox.warning(self, '失败', '请选择一个分组！')
+                self._show_info('失败', '请选择一个分组！', 'warning')
                 return
 
             if db_manager.add_keyword(**data):
                 self.loadKeywordsByGroup(self.current_group_id)
                 # 触发关键词热加载
                 self.keyword_handler.reload_keywords()
-                QMessageBox.information(self, '成功', f'关键词 "{data["keyword"]}" 添加成功！')
+                self._show_info('成功', f'关键词 "{data["keyword"]}" 添加成功！', 'success')
             else:
-                QMessageBox.warning(self, '失败', f'关键词 "{data["keyword"]}" 添加失败，可能已存在！')
+                self._show_info('失败', f'关键词 "{data["keyword"]}" 添加失败，可能已存在！', 'warning')
 
     def onEditKeyword(self, keyword_id: int):
         """编辑关键词"""
@@ -1127,14 +1157,14 @@ class KeywordManagerWidget(QFrame):
                 break
 
         if not keyword_data:
-            QMessageBox.warning(self, '错误', '找不到关键词数据！')
+            self._show_info('错误', '找不到关键词数据！', 'error')
             return
 
         dialog = KeywordDialog(self, keyword_data, self.current_group_id)
         if dialog.exec():
             data = dialog.get_data()
             if not data['keyword']:
-                QMessageBox.warning(self, '失败', '关键词不能为空！')
+                self._show_info('失败', '关键词不能为空！', 'warning')
                 return
 
             if db_manager.update_keyword(
@@ -1147,9 +1177,9 @@ class KeywordManagerWidget(QFrame):
                 self.loadKeywordsByGroup(self.current_group_id)
                 # 触发关键词热加载
                 self.keyword_handler.reload_keywords()
-                QMessageBox.information(self, '成功', '关键词修改成功！')
+                self._show_info('成功', '关键词修改成功！', 'success')
             else:
-                QMessageBox.warning(self, '失败', '关键词修改失败！')
+                self._show_info('失败', '关键词修改失败！', 'warning')
 
     def onDeleteKeyword(self, keyword_id: int):
         """删除关键词"""
@@ -1164,23 +1194,22 @@ class KeywordManagerWidget(QFrame):
 
         keyword = keyword_data.get('keyword', '')
 
-        # 确认删除
-        reply = QMessageBox.question(
-            self, '确认删除',
+        # 确认删除（使用 qfluentwidgets MessageBox，不触发系统音频线程）
+        if not self._ask_confirm(
+            '确认删除',
             f'确定要删除关键词 "{keyword}" 吗？',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
+            yes_text='确认删除', no_text='取消'
+        ):
+            return
 
-        if reply == QMessageBox.StandardButton.Yes:
-            if db_manager.delete_keyword(keyword_id):
-                self.keywords_data = [k for k in self.keywords_data if k.get('id') != keyword_id]
-                self.refreshKeywordList()
-                # 触发关键词热加载
-                self.keyword_handler.reload_keywords()
-                QMessageBox.information(self, '成功', f'关键词 "{keyword}" 删除成功！')
-            else:
-                QMessageBox.warning(self, '失败', f'删除关键词 "{keyword}" 失败！')
+        if db_manager.delete_keyword(keyword_id):
+            self.keywords_data = [k for k in self.keywords_data if k.get('id') != keyword_id]
+            self.refreshKeywordList()
+            # 触发关键词热加载
+            self.keyword_handler.reload_keywords()
+            self._show_info('成功', f'关键词 "{keyword}" 删除成功！', 'success')
+        else:
+            self._show_info('失败', f'删除关键词 "{keyword}" 失败！', 'warning')
 
     def onTestKeywords(self):
         """测试关键词"""

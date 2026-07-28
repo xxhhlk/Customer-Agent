@@ -440,6 +440,11 @@ class EnhancedMessageConsumer:
         if not from_uid:
             return False
 
+        # 冷却期内直接返回 True：人工客服刚刚回复过，不需要再等
+        if isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
+            self.logger.info(f"用户 {from_uid} 在人工回复冷却期内，视为客服已回复")
+            return True
+
         # 夜间时段使用更长的等待时间
         current_hour = time.localtime().tm_hour
         is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
@@ -472,11 +477,12 @@ class EnhancedMessageConsumer:
         staff_wait_config = get_config("staff_reply_wait", {})
         wait_seconds = staff_wait_config.get("wait_seconds", 30)
         
-        # 检查是否在冷却期内，如果是则延长等待时间
-        extended_wait = self.staff_reply_manager.get_extended_wait_time(from_uid)
-        if extended_wait > 0:
-            wait_seconds = extended_wait
-            self.logger.info(f"User in cooldown, extended wait to {wait_seconds}s")
+        # 冷却期内直接返回 True：人工客服刚刚回复过，新消息不需要再等
+        # notify_staff_reply 是一次性通知，已被之前的事件消费；冷却期内客服刚回复过，
+        # 应视为"客服已回复"，而不是只延长等待（会导致超时后误发兜底回复）
+        if self.staff_reply_manager.is_in_cooldown(from_uid):
+            self.logger.info(f"用户 {from_uid} 在人工回复冷却期内，视为客服已回复")
+            return True
 
         self.logger.info(f"Waiting for staff reply (max {wait_seconds}s, event_id={event_id})")
 
