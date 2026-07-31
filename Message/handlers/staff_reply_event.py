@@ -194,6 +194,27 @@ class StaffReplyEventManager:
             del self._staff_reply_times[from_uid]
             return False
 
+    def get_cooldown_remaining(self, from_uid: str) -> float:
+        """
+        获取冷却期剩余时间（秒）
+
+        Args:
+            from_uid: 买家ID
+
+        Returns:
+            float: 剩余冷却时间，不在冷却期返回 0.0
+        """
+        with self._lock:
+            if from_uid not in self._staff_reply_times:
+                return 0.0
+            last_reply_time = self._staff_reply_times[from_uid]
+            elapsed = time.time() - last_reply_time
+            remaining = self.COOLDOWN_SECONDS - elapsed
+            if remaining > 0:
+                return remaining
+            del self._staff_reply_times[from_uid]
+            return 0.0
+
     def get_extended_wait_time(self, from_uid: str) -> float:
         """
         获取该用户的延长等待时间（如果在冷却期内）

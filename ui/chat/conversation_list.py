@@ -8,9 +8,13 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont
 from qfluentwidgets import (
-    CardWidget, StrongBodyLabel, CaptionLabel, BodyLabel, SearchLineEdit,
+    StrongBodyLabel, CaptionLabel, BodyLabel, SearchLineEdit,
     ScrollArea, isDarkTheme,
 )
+
+# 分批创建卡片的配置：避免一次创建 80+ 个 CardWidget 导致内存峰值/ntdll 堆崩溃
+_CARD_BATCH_SIZE = 15      # 每批创建的卡片数
+_CARD_BATCH_INTERVAL = 30  # 批次间隔 ms（给事件循环喘息时间）
 
 
 class _ConversationLoader(QThread):
@@ -31,10 +35,15 @@ class _ConversationLoader(QThread):
         self.result.emit(convs)
 
 
-class ConversationCard(CardWidget):
-    """会话卡片 - 显示在左侧列表"""
+class ConversationCard(QFrame):
+    """会话卡片 - 显示在左侧列表
 
-    # 用 conversation_clicked 避免与父类 CardWidget.clicked (无参数) 冲突
+    不使用 qfluentwidgets CardWidget，因为后者继承 BackgroundAnimationWidget，
+    每个 card 创建 QPropertyAnimation + eventFilter + 复杂 QPainterPath paintEvent。
+    30 个 card 同时首次显示时触发大量绘制，在 ntdll 堆已损坏的环境下崩溃。
+    改用纯 QFrame + setStyleSheet 实现选中/hover 效果。
+    """
+
     conversation_clicked = pyqtSignal(str, str)  # shop_id, buyer_uid
 
     def __init__(self, conv_data: dict, parent=None):
@@ -146,10 +155,7 @@ class ConversationCard(CardWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
-        """重写父类 mouseReleaseEvent，emit 带参数的 conversation_clicked 信号"""
         super().mouseReleaseEvent(event)
-        # 父类 CardWidget.mouseReleaseEvent 会调用 self.clicked.emit()（无参数）
-        # 我们不使用父类的 clicked 信号，而是 emit 自定义的 conversation_clicked
         self.conversation_clicked.emit(self.shop_id, self.buyer_uid)
 
     def set_selected(self, selected: bool):
@@ -194,6 +200,9 @@ class ConversationListPanel(QWidget):
 
     conversation_selected = pyqtSignal(str, str)  # shop_id, buyer_uid
 
+    # 首次加载最大卡片数，避免一次创建过多 CardWidget 引发 ntdll 堆崩溃
+    MAX_INITIAL_CARDS = 30
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("ConversationListPanel")
@@ -202,6 +211,10 @@ class ConversationListPanel(QWidget):
         self._current_shop_filter: str | None = None
         self._all_data: list[dict] = []
         self._loader: _ConversationLoader | None = None
+        # 分批重建状态
+        self._pending_convs: list[dict] = []
+        self._rebuild_index: int = 0
+        self._rebuild_timer: QTimer | None = None
         self._init_ui()
         self._apply_theme()
 
@@ -232,9 +245,9 @@ class ConversationListPanel(QWidget):
         layout.addWidget(self.search_edit)
 
         # 滚动区域
-        scroll = ScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area = ScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._card_container = QWidget()
         self._card_layout = QVBoxLayout(self._card_container)
@@ -242,8 +255,8 @@ class ConversationListPanel(QWidget):
         self._card_layout.setSpacing(4)
         self._card_layout.addStretch()
 
-        scroll.setWidget(self._card_container)
-        layout.addWidget(scroll)
+        self._scroll_area.setWidget(self._card_container)
+        layout.addWidget(self._scroll_area)
 
     def refresh(self, shop_id: str | None = None):
         """刷新会话列表（后台异步加载）"""
@@ -308,7 +321,13 @@ class ConversationListPanel(QWidget):
             self.refresh(self._current_shop_filter)
 
     def _rebuild_cards(self, convs: list[dict]):
-        """重建卡片列表"""
+        """重建卡片列表 — 分批创建，避免一次创建 80+ CardWidget 触发堆崩溃
+
+        先展示最多 MAX_INITIAL_CARDS 个，剩余在滚动到底时按需加载。
+        """
+        # 取消进行中的分批重建
+        self._cancel_batch_rebuild()
+
         # 清除旧卡片
         for card in self._cards:
             card.setParent(None)
@@ -316,7 +335,7 @@ class ConversationListPanel(QWidget):
         self._cards.clear()
         self._selected_card = None
 
-        # 移除 stretch
+        # 移除所有布局项（stretch + 可能的残留 widget）
         while self._card_layout.count():
             item = self._card_layout.takeAt(0)
             if item is not None:
@@ -324,14 +343,121 @@ class ConversationListPanel(QWidget):
                 if w is not None:
                     w.setParent(None)
 
-        # 创建新卡片
-        for conv in convs:
+        if not convs:
+            self._card_layout.addStretch()
+            return
+
+        # 准备分批数据
+        self._pending_convs = convs
+        # 首次加载限制为 MAX_INITIAL_CARDS
+        initial = convs[:self.MAX_INITIAL_CARDS]
+        self._rebuild_index = len(initial)
+        remaining = convs[self._rebuild_index:]
+
+        # 如果初始数量少，直接一次性创建
+        if len(initial) <= _CARD_BATCH_SIZE:
+            self._create_card_batch(initial)
+            self._card_layout.addStretch()
+        else:
+            # 分批创建：先创建首批 _CARD_BATCH_SIZE 个，其余通过定时器异步加载
+            self._card_layout.addStretch()
+            self._create_card_batch(initial[:_CARD_BATCH_SIZE])
+            self._rebuild_index = _CARD_BATCH_SIZE
+            # 安排异步加载剩余的 MAX_INITIAL_CARDS 卡片
+            if self._rebuild_index < len(initial):
+                self._schedule_batch_continue(initial)
+
+        # 如果有超出 MAX_INITIAL_CARDS 的卡片，监听滚动条以便按需加载
+        if remaining:
+            self._install_scroll_listener()
+
+    def _schedule_batch_continue(self, convs: list[dict]):
+        """安排下一批卡片创建（异步，让事件循环喘气）"""
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.timeout.connect(lambda: self._continue_batch(convs))
+        self._rebuild_timer.start(_CARD_BATCH_INTERVAL)
+
+    def _continue_batch(self, convs: list[dict]):
+        """继续创建下一批卡片"""
+        if self._rebuild_index >= len(convs):
+            return
+        remaining = convs[self._rebuild_index:]
+        batch = remaining[:_CARD_BATCH_SIZE]
+        self._rebuild_index += len(batch)
+        self._create_card_batch(batch)
+        # 如果还有，继续安排
+        if self._rebuild_index < len(convs):
+            self._schedule_batch_continue(convs)
+
+    def _cancel_batch_rebuild(self):
+        """取消进行中的分批重建"""
+        self._pending_convs = []
+        self._rebuild_index = 0
+        if self._rebuild_timer is not None:
+            self._rebuild_timer.stop()
+            self._rebuild_timer = None
+
+    def _create_card_batch(self, conv_batch: list[dict]):
+        """创建一批卡片（在 stretch 之前插入）"""
+        # stretch 是第 count-1 项，卡片插入在它前面
+        stretch_idx = self._card_layout.count() - 1
+        for conv in conv_batch:
             card = ConversationCard(conv)
             card.conversation_clicked.connect(self._on_card_clicked)
-            self._card_layout.addWidget(card)
+            self._card_layout.insertWidget(stretch_idx, card)
             self._cards.append(card)
+            stretch_idx += 1
 
-        self._card_layout.addStretch()
+    def _install_scroll_listener(self):
+        """监听滚动条，在滚动到底时加载更多"""
+        if not hasattr(self, '_scroll_area') or self._scroll_area is None:
+            return
+        vbar = self._scroll_area.verticalScrollBar()
+        if vbar is None:
+            return
+        try:
+            vbar.valueChanged.disconnect(self._on_scroll_changed)
+        except (TypeError, RuntimeError):
+            pass
+        vbar.valueChanged.connect(self._on_scroll_changed)
+
+    def _on_scroll_changed(self, value: int):
+        """滚动条变化 — 检查是否接近底部"""
+        if not hasattr(self, '_scroll_area') or self._scroll_area is None:
+            return
+        vbar = self._scroll_area.verticalScrollBar()
+        if vbar is None:
+            return
+        if vbar.maximum() - value <= 60:
+            self._load_more_if_needed()
+
+    def _load_more_if_needed(self):
+        """按需加载下一批卡片"""
+        if not self._pending_convs or self._rebuild_index >= len(self._pending_convs):
+            return
+        # 防御：避免重复触发
+        if self._rebuild_timer is not None and self._rebuild_timer.isActive():
+            return
+
+        remaining = self._pending_convs[self._rebuild_index:]
+        if not remaining:
+            return
+        batch = remaining[:_CARD_BATCH_SIZE]
+        self._rebuild_index += len(batch)
+
+        self._create_card_batch(batch)
+
+        # 如果还有更多，继续监听（timer 只用于防重复，不用于调度）
+        if self._rebuild_index < len(self._pending_convs):
+            self._rebuild_timer = QTimer(self)
+            self._rebuild_timer.setSingleShot(True)
+            self._rebuild_timer.timeout.connect(self._clear_load_timer)
+            self._rebuild_timer.start(200)  # 200ms 防重复
+
+    def _clear_load_timer(self):
+        """清除防重复定时器"""
+        self._rebuild_timer = None
 
     def _on_card_clicked(self, shop_id: str, buyer_uid: str):
         """点击卡片"""

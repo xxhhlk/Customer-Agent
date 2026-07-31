@@ -26,6 +26,31 @@ import faulthandler
 import traceback
 import threading
 from pathlib import Path
+
+# Qt 渲染后端配置 —— 必须在导入任何 PyQt6 模块之前设置，否则平台插件已加载、失效。
+# 根因：7-13/7-14/7-15/7-18/7-31 的 ntdll 堆崩溃，崩溃线程为 Qt/D3D 内部线程，
+# WER 报告显示 d3d10warp.dll（WARP 软件光栅化器）曾被加载并卸载。
+# 关键："software" 在 Windows 上仍会走 d3d10warp.dll（WARP），只有 "no" 才能
+# 完全禁用 OpenGL、不加载 WARP，避免 d3d10warp 卸载后函数指针悬空崩溃。
+# 聊天 tab 重绘量大，是触发该崩溃的高频场景。
+os.environ.setdefault("QT_OPENGL", "no")              # 彻底禁用 OpenGL（非 software）
+os.environ.setdefault("QT_QUICK_BACKEND", "software") # QML 用软件后端
+os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")   # Mesa 软件渲染
+
+# —— 预加载 D3D/D2D 关键 DLL 并永久持有引用 ——
+# 根因：Qt6 ModernWindows 风格 → d2d1 → d3d11 → d3d10warp（WARP）。
+# d3d10warp.dll 被某个组件用完即 FreeLibrary，引用计数归零后被卸载，
+# 但 Qt/D3D 内部线程仍持有其函数指针 → 跳到已释放堆地址 → 0xc0000005。
+# 5 个 dump 的崩溃地址末三位均为 0xfc0，证实是同一悬空函数指针。
+# 预加载并永不释放，让引用计数始终 ≥1，阻止卸载。
+_dll_handles = []
+for _dll_name in ("d3d10warp.dll", "d2d1.dll", "d3d11.dll", "d3d9.dll", "DWrite.dll"):
+    try:
+        _h = ctypes.WinDLL(_dll_name)
+        _dll_handles.append(_h)
+    except OSError:
+        pass
+
 from PyQt6.QtCore import Qt, QTimer, QSharedMemory
 from PyQt6.QtWidgets import QApplication
 
@@ -150,16 +175,22 @@ def main():
     """ 应用程序主函数 """
     # —— 看门狗联动：写 pid 文件，供 scripts/watchdog.py 监控存活 ——
     # 正常退出时 atexit 删除 pid（看门狗静默）；崩溃时进程被 OS 杀死、pid 残留
-    # → 看门狗据此区分「正常关闭」与「崩溃」。同时清除上次崩溃通知标记，
+    # → 看门狗据此区分「正常关闭」与「崩溃」。同时清除上次崩溃通知记录，
     #   让本会话若再次崩溃仍可推送（避免标记残留导致漏通知）。
     _root = Path(__file__).resolve().parent
     _pid_file = _root / "temp" / "agent.pid"
-    _crash_notified = _root / "temp" / "agent.crash_notified"
+    _last_notified = _root / "temp" / "agent.last_notified_pid"
+    _legacy_crash_notified = _root / "temp" / "agent.crash_notified"
     try:
         _pid_file.parent.mkdir(parents=True, exist_ok=True)
+        # 先删除可能残留的旧 pid，避免看门狗在 app 启动瞬间仍读到旧 pid 而误报
+        if _pid_file.exists():
+            _pid_file.unlink()
         _pid_file.write_text(str(os.getpid()), encoding="utf-8")
-        if _crash_notified.exists():
-            _crash_notified.unlink()
+        if _last_notified.exists():
+            _last_notified.unlink()
+        if _legacy_crash_notified.exists():
+            _legacy_crash_notified.unlink()
     except Exception:
         pass
 
@@ -175,20 +206,43 @@ def main():
     # 设置 Playwright 浏览器路径
     browsers_path = setup_playwright_browsers_path()
 
-    # Qt 渲染后端配置 — 强制使用软件渲染
-    # 根因：7-13/7-14/7-15/7-18 的 ntdll 堆崩溃，崩溃 RIP 在堆地址（非任何模块），
-    # 崩溃线程不在 faulthandler 的 Python 线程列表中（是 Qt/D3D 内部线程），
-    # WER 报告显示 d3d10warp.dll（WARP 软件光栅化器）曾被加载并卸载。
-    # 推测：Qt 的 D3D 渲染线程在 d3d10warp.dll 卸载后仍引用其代码地址 → 跳到
-    # 已释放堆地址执行 → access violation。
-    # 修复：强制 Qt 使用软件渲染，避免 D3D/WARP 相关的内部线程崩溃。
-    os.environ.setdefault("QT_OPENGL", "software")       # 禁用硬件 OpenGL
-    os.environ.setdefault("QT_QUICK_BACKEND", "software") # QML 用软件后端
-    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")   # Mesa 软件渲染
-
-    # 创建应用
-    app = QApplication(sys.argv)
+    # 创建应用 — 通过 -style 参数在 QApplication 构造时就指定 windowsvista 风格，
+    # 阻止 Qt6 默认加载 qmodernwindowsstyle.dll（该 DLL 的 D2D 渲染线程会破坏堆）。
+    # setStyle() 在构造后调用太晚，DLL 已被加载且内部线程已启动。
+    # 7次 dump 证实：崩溃线程 RIP 始终是堆地址（末三位 0xfc0），
+    # 且 TID=0x22a4 线程栈里有 qmodernwindowsstyle.dll → 崩溃与之直接关联。
+    _qt_args = ["-style", "windowsvista"] + sys.argv
+    app = QApplication(_qt_args)
     app.setApplicationName("Agent-Customer")
+
+    # 强制使用 windowsvista 风格，避免 Qt6 默认的 windows11（ModernWindows）风格。
+    # ModernWindows 风格会加载 qmodernwindowsstyle.dll → d2d1.dll → d3d11.dll →
+    # d3d10warp.dll（WARP 软件光栅化器）。dump 显示 d3d10warp.dll 被加载后卸载，
+    # 崩溃线程 RIP 指向已释放的堆地址，符合 WARP 函数指针悬空特征。
+    # windowsvista 风格使用传统 GDI 绘制，不依赖 D2D/WARP，可彻底规避该崩溃链。
+    try:
+        from PyQt6.QtWidgets import QStyleFactory
+        if "windowsvista" in QStyleFactory.keys():
+            app.setStyle("windowsvista")
+        else:
+            app.setStyle("Fusion")
+    except Exception:
+        pass
+
+    # 禁用 Qt 动画效果，减少聊天 tab 等大量 widget 切换/重绘时的渲染负担，
+    # 降低在 4GB 内存机器上触发 D3D/WARP/ntdll 堆崩溃的概率。
+    try:
+        for effect in (
+            Qt.UIEffect.UI_AnimateMenu,
+            Qt.UIEffect.UI_FadeMenu,
+            Qt.UIEffect.UI_AnimateCombo,
+            Qt.UIEffect.UI_AnimateTooltip,
+            Qt.UIEffect.UI_FadeTooltip,
+            Qt.UIEffect.UI_AnimateToolBox,
+        ):
+            QApplication.setEffectEnabled(effect, False)
+    except Exception:
+        pass
 
     # 全局异常钩子：捕获未处理的 Python 异常，写入日志并打印到 stderr
     def _global_excepthook(exc_type, exc_value, exc_tb):
@@ -245,6 +299,17 @@ def main():
     app.shared_mem = shared_mem  # 保存共享内存引用
 
     # 运行事件循环
+    # 高频心跳：每 2 秒写一行到 app.log，精确记录崩溃前最后活动时间
+    _heartbeat_logger = _get_logger("Heartbeat")
+    _hb_timer = QTimer()
+    _hb_timer.setInterval(2000)
+    _hb_counter = [0]
+    def _do_heartbeat():
+        _hb_counter[0] += 1
+        _heartbeat_logger.info(f"alive #{_hb_counter[0]}")
+    _hb_timer.timeout.connect(_do_heartbeat)
+    _hb_timer.start()
+
     exit_code = app.exec()
     
     # 退出时释放共享内存

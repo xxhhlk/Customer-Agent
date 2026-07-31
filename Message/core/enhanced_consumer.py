@@ -263,27 +263,31 @@ class EnhancedMessageConsumer:
                             # 继续AI处理
                             await self._process_message_with_ai_timeout(merged_wrapper, metadata)
                     else:
-                        # 普通关键词：检查人工回复冷却期
-                        if from_uid and isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
-                            # 冷却期内：人工刚刚回复过，等待人工回复
-                            self.logger.info(
-                                f"命中关键词但买家 {from_uid} 在人工回复冷却期内，等待人工回复"
-                            )
-                            if event_id and isinstance(from_uid, str):
-                                staff_replied = await self._check_staff_reply_with_event(
-                                    merged_wrapper.context,
-                                    from_uid,
-                                    event_id
+                        # 普通关键词：冷却期内等待冷却期结束，同时监听人工回复
+                        if from_uid and isinstance(from_uid, str):
+                            cooldown_remaining = self.staff_reply_manager.get_cooldown_remaining(from_uid)
+                            if cooldown_remaining > 0:
+                                self.logger.info(
+                                    f"命中关键词但买家 {from_uid} 在人工回复冷却期内"
+                                    f"（剩余 {cooldown_remaining:.1f}秒），等待冷却期结束"
                                 )
-                            else:
-                                staff_replied = await self._check_staff_reply(merged_wrapper.context)
-                            if staff_replied:
-                                self.logger.info(f"冷却期内命中关键词，人工客服已回复，跳过自动回复")
-                                # 人工回复了，清空队列中待处理的旧消息
-                                self._clear_pending_user_messages(user_key)
-                                return
-                            self.logger.info(f"冷却期内命中关键词，人工未回复，发送关键词回复")
-                        self.logger.info(f"命中普通关键词，立即发送回复")
+                                if event_id and isinstance(from_uid, str):
+                                    staff_replied = await self.staff_reply_manager.wait_for_staff_reply(
+                                        from_uid,
+                                        event_id,
+                                        timeout=cooldown_remaining,
+                                        auto_cleanup=True
+                                    )
+                                else:
+                                    await asyncio.sleep(cooldown_remaining)
+                                    staff_replied = False
+                                if staff_replied:
+                                    self.logger.info(
+                                        f"冷却期内命中关键词，人工客服已回复，跳过关键词回复"
+                                    )
+                                    return
+                                self.logger.info(f"冷却期结束，人工未回复，发送关键词回复")
+                        self.logger.info(f"命中普通关键词，发送回复")
                         await self._send_keyword_reply(merged_wrapper.context, keyword_result)
                     return
                 else:
@@ -440,11 +444,7 @@ class EnhancedMessageConsumer:
         if not from_uid:
             return False
 
-        # 冷却期内直接返回 True：人工客服刚刚回复过，不需要再等
-        if isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
-            self.logger.info(f"用户 {from_uid} 在人工回复冷却期内，视为客服已回复")
-            return True
-
+        # 冷却期内不再短路返回 True：等待 staff 实际回复，超时则走 AI
         # 夜间时段使用更长的等待时间
         current_hour = time.localtime().tm_hour
         is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
@@ -477,12 +477,10 @@ class EnhancedMessageConsumer:
         staff_wait_config = get_config("staff_reply_wait", {})
         wait_seconds = staff_wait_config.get("wait_seconds", 30)
         
-        # 冷却期内直接返回 True：人工客服刚刚回复过，新消息不需要再等
-        # notify_staff_reply 是一次性通知，已被之前的事件消费；冷却期内客服刚回复过，
-        # 应视为"客服已回复"，而不是只延长等待（会导致超时后误发兜底回复）
-        if self.staff_reply_manager.is_in_cooldown(from_uid):
-            self.logger.info(f"用户 {from_uid} 在人工回复冷却期内，视为客服已回复")
-            return True
+        # 冷却期内不再短路返回 True：
+        # wait_for_staff_reply 会实际等待新的 staff 回复通知，
+        # notify_staff_reply 通知所有等待中的事件，包括冷却期内新创建的。
+        # 如果 staff 真的回了 → return True；超时未回 → 走 AI 兜底。
 
         self.logger.info(f"Waiting for staff reply (max {wait_seconds}s, event_id={event_id})")
 

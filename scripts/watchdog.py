@@ -26,9 +26,10 @@ from pathlib import Path
 # ===== 配置区 =====
 BARK_KEY = os.environ.get("AGENT_BARK_KEY") or "YOUR_BARK_KEY_HERE"
 PID_FILE = Path(__file__).resolve().parent.parent / "temp" / "agent.pid"
-# 崩溃已通知标记：一旦对某次崩溃推送过（无论成败），写入此文件，
-# 之后即便 pid 文件因异常未被删除，也绝不重复推送，避免睡觉时轰炸。
-CRASH_NOTIFIED = Path(__file__).resolve().parent.parent / "temp" / "agent.crash_notified"
+# 记录最后一次已通知的崩溃 PID（按 pid 去重，避免全局标记导致的启动误报/崩溃漏报）
+LAST_NOTIFIED_PID = Path(__file__).resolve().parent.parent / "temp" / "agent.last_notified_pid"
+# 旧的全局标记文件（兼容清理）
+LEGACY_CRASH_NOTIFIED = Path(__file__).resolve().parent.parent / "temp" / "agent.crash_notified"
 CHECK_INTERVAL = 30  # 秒
 
 
@@ -81,7 +82,36 @@ def process_alive(pid: int) -> bool:
         return True
 
 
+def _read_last_notified_pid() -> int:
+    """读取上次已通知的崩溃 PID，文件不存在或读取失败返回 -1。"""
+    if not LAST_NOTIFIED_PID.exists():
+        return -1
+    try:
+        return int(LAST_NOTIFIED_PID.read_text(encoding="utf-8").strip())
+    except Exception:
+        return -1
+
+
+def _write_last_notified_pid(pid: int) -> None:
+    try:
+        LAST_NOTIFIED_PID.write_text(str(pid), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _remove_legacy_marker() -> None:
+    """清理旧版全局 crash_notified 标记，避免其残留干扰新逻辑。"""
+    try:
+        if LEGACY_CRASH_NOTIFIED.exists():
+            LEGACY_CRASH_NOTIFIED.unlink()
+    except Exception:
+        pass
+
+
 def check_once() -> None:
+    # 清理旧版标记（兼容）
+    _remove_legacy_marker()
+
     if not PID_FILE.exists():
         # 主程序未运行 / 已正常退出 → 静默，不推送
         return
@@ -91,25 +121,31 @@ def check_once() -> None:
         return
     if process_alive(pid):
         return
+
     # 进程消失 → 判定崩溃
-    # 双保险：若已对此次崩溃通知过（标记文件存在），直接跳过，绝不重复推送
-    if CRASH_NOTIFIED.exists():
+    # 按 pid 去重：只有本次死掉的 pid 和上次通知过的不同时才推送，
+    # 避免全局标记导致「app 启动时误报旧崩溃」和「真正崩溃时漏报」
+    last_notified = _read_last_notified_pid()
+    if last_notified == pid:
+        # 已经对这个 pid 通知过，静默
         return
+
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] 检测到主程序崩溃：PID={pid} 已消失，推送 Bark 通知...")
-    push_bark("客服进程已崩溃", f"PID {pid} 于 {ts} 消失，疑似 access violation 崩溃")
-    # 无论推送成败，都标记已处理 + 删除 pid：
-    #  - 成功：标记防重复，删除 pid 让后续轮询静默
-    #  - 失败（如临时网络中断）：同样标记+删除，避免每 30s 反复重试轰炸；
-    #    用户醒来看到程序已退出即为兜底，不靠重复推送弥补
-    try:
-        CRASH_NOTIFIED.write_text(str(int(time.time())), encoding="utf-8")
-    except Exception:
-        pass
+    ok = push_bark("客服进程已崩溃", f"PID {pid} 于 {ts} 消失，疑似 access violation 崩溃")
+
+    # 无论推送成败，都记录已通知的 pid + 删除 pid：
+    #  - 成功：记录 pid 防重复，删除 pid 让后续轮询静默
+    #  - 失败（如临时网络中断）：同样记录+删除，避免每 30s 反复重试轰炸；
+    #    用户看到程序已退出即为兜底，不靠重复推送弥补
+    _write_last_notified_pid(pid)
     try:
         PID_FILE.unlink()
     except Exception:
         pass
+
+    if not ok:
+        print(f"[{ts}] 推送失败，已记录 PID={pid}，避免重复轰炸")
 
 
 def main() -> None:

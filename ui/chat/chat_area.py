@@ -12,6 +12,9 @@ from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel, isDarkThem
 from ui.chat.message_bubble import MessageBubble
 from ui.chat.input_area import InputArea
 from ui.chat.forward_dialog import ForwardDialog
+from utils.logger_loguru import get_logger
+
+logger = get_logger("ChatArea")
 
 
 class _MessageLoader(QThread):
@@ -127,6 +130,7 @@ class ChatAreaPanel(QWidget):
 
     def load_messages(self, shop_id: str, buyer_uid: str):
         """加载指定买家在指定店铺的消息（异步后台加载）"""
+        logger.info(f"[ChatArea] load_messages: shop_id={shop_id}, buyer_uid={buyer_uid}")
         # 缓存 shop_id/buyer_uid 用于手动发送
         self._current_shop_id = shop_id
         self._current_buyer_uid = buyer_uid
@@ -155,9 +159,12 @@ class ChatAreaPanel(QWidget):
         self._loader = _MessageLoader(shop_id, buyer_uid, self)
         self._loader.result.connect(lambda sid, buid, msgs: self._on_messages_loaded(sid, buid, msgs, token))
         self._loader.start()
+        logger.info("[ChatArea] load_messages: loader 已启动")
 
     def _on_messages_loaded(self, shop_id: str, buyer_uid: str, messages: list, token: int = 0):
         """后台线程加载完成后，在主线程渲染气泡"""
+        logger.info(f"[ChatArea] _on_messages_loaded: {len(messages)} 条消息")
+
         # 防止过期结果（用户已切换到其他会话）
         if token != self._load_token:
             return
@@ -172,10 +179,12 @@ class ChatAreaPanel(QWidget):
             self.header_detail.setText(f"({buyer_uid})")
 
             # 渲染气泡
+            logger.info("[ChatArea] _on_messages_loaded: 开始渲染气泡")
             for msg in messages:
                 bubble = MessageBubble(msg)
                 self._connect_bubble_signal(bubble)
                 self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
+            logger.info("[ChatArea] _on_messages_loaded: 气泡渲染完成")
 
             self.input_area.set_enabled(True)
         else:
@@ -184,7 +193,9 @@ class ChatAreaPanel(QWidget):
             self.input_area.set_enabled(False)
 
         # 滚动到底部 — 使用带重试的滚动策略
+        logger.info("[ChatArea] _on_messages_loaded: 准备滚动到底部")
         self._schedule_scroll_to_bottom(token)
+        logger.info("[ChatArea] _on_messages_loaded: 完成")
 
     def append_message(self, msg_data: dict):
         """追加新消息（实时）"""

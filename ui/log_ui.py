@@ -809,15 +809,21 @@ class LogUI(QFrame):
         # 直接将过滤条件传递给LogDisplayWidget
         self.log_display.set_filter(filter_dict)
     
-    def _show_info(self, title: str, content: str, level: str = "info"):
+    def _show_info(self, title: str, content: str, level: str = "info") -> None:
         """显示 InfoBar 提示（非阻塞），替代 QMessageBox"""
         duration = 3000 if level in ("warning", "error") else 2000
-        kwargs = dict(title=title, content=content, orient=Qt.Orientation.Horizontal,
-                      isClosable=True, position=InfoBarPosition.TOP, duration=duration, parent=self)
-        if level == "success": InfoBar.success(**kwargs)
-        elif level == "warning": InfoBar.warning(**kwargs)
-        elif level == "error": InfoBar.error(**kwargs)
-        else: InfoBar.info(**kwargs)
+        if level == "success":
+            InfoBar.success(title, content, isClosable=True,
+                            position=InfoBarPosition.TOP, duration=duration, parent=self)
+        elif level == "warning":
+            InfoBar.warning(title, content, isClosable=True,
+                            position=InfoBarPosition.TOP, duration=duration, parent=self)
+        elif level == "error":
+            InfoBar.error(title, content, isClosable=True,
+                          position=InfoBarPosition.TOP, duration=duration, parent=self)
+        else:
+            InfoBar.info(title, content, isClosable=True,
+                         position=InfoBarPosition.TOP, duration=duration, parent=self)
 
     def _ask_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
         """使用 qfluentwidgets MessageBox 显示确认对话框"""

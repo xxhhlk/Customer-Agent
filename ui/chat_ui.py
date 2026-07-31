@@ -62,15 +62,39 @@ class ChatUI(QFrame):
         self._shops_loaded = False  # 店铺列表是否已加载过
         self._persist_workers: list = []  # 持久化 worker 列表（支持并发）
         self._forward_workers: list = []  # 转发 worker 列表（支持并发）
+        logger.info("[ChatUI] __init__ 开始")
         self._init_ui()
+        logger.info("[ChatUI] _init_ui 完成")
         self._apply_theme()
-        # 延迟加载数据，放到事件队列末尾确保窗口先渲染
-        QTimer.singleShot(500, self._initial_load)
+        logger.info("[ChatUI] _apply_theme 完成")
+        # 不在 __init__ 里加载数据！改为 showEvent 触发，
+        # 只有用户真正切到聊天 tab 时才创建卡片。
+        # 之前在 __init__ 里 QTimer.singleShot(500, _initial_load)，
+        # 导致 ChatUI 不可见时就创建了 30 个卡片 widget，
+        # 与后台 PDD 消息循环线程竞争，切 tab 显示时触发堆崩���。
+        self._data_loaded = False
+        logger.info("[ChatUI] __init__ 完成，数据加载延迟到 showEvent")
 
     def _initial_load(self):
-        """首次加载：同时加载店铺列表和会话列表"""
+        """首次加载: 同时加载店铺列表和会话列表"""
+        logger.info("[ChatUI] _initial_load 开始")
         self._load_shops()
+        logger.info("[ChatUI] _load_shops 已启动")
         self._load_conversations(None)
+        logger.info("[ChatUI] _load_conversations 已启动")
+
+    def showEvent(self, event):
+        """窗口显示时首次加载数据 (与知识库 tab 一致的模式)
+
+        之前在 __init__ 里 QTimer.singleShot(500, _initial_load),
+        导致 ChatUI 不可见时就创建了 30 个卡片 widget,
+        与后台 PDD 消息循环线程竞争, 切 tab 显示时触发堆崩溃.
+        改为 showEvent 触发, 只有用户真正切到聊天 tab 时才创建.
+        """
+        super().showEvent(event)
+        if not self._data_loaded:
+            self._data_loaded = True
+            QTimer.singleShot(200, self._initial_load)
 
     def _load_shops(self):
         """后台加载店铺列表（仅在首次或需要刷新时调用）"""
@@ -122,15 +146,18 @@ class ChatUI(QFrame):
 
     def _on_conversations_loaded(self, convs: list[dict]):
         """会话列表加载完成"""
-        # 同步 _current_shop_filter（修复新消息过滤不一致）
+        logger.info(f"[ChatUI] _on_conversations_loaded: {len(convs)} 条会话")
+        # 同步 _current_shop_filter（修复新消息过滤不一���）
         current_filter = self.shop_combo.currentData() if self._shops_loaded else None
         self.conversation_list._current_shop_filter = current_filter
         self.conversation_list._all_data = convs
         self.conversation_list._rebuild_cards(convs)
+        logger.info(f"[ChatUI] _rebuild_cards 完成")
 
     def _on_shop_changed(self, index: int):
         """店铺筛选切换 — 只重新加载会话，不重建店铺列表"""
         shop_id = self.shop_combo.currentData()
+        logger.info(f"[ChatUI] _on_shop_changed: index={index}, shop_id={shop_id}")
         # 同步 filter 状态
         self.conversation_list._current_shop_filter = shop_id
         self.conversation_list._rebuild_cards([])  # 先清空
@@ -203,7 +230,9 @@ class ChatUI(QFrame):
 
     def _on_conversation_selected(self, shop_id: str, buyer_uid: str):
         """选中会话"""
+        logger.info(f"[ChatUI] _on_conversation_selected: shop_id={shop_id}, buyer_uid={buyer_uid}")
         self.chat_area.load_messages(shop_id, buyer_uid)
+        logger.info("[ChatUI] _on_conversation_selected: chat_area.load_messages 返回")
 
     def _on_new_message(self, msg_data: dict):
         """收到新消息"""
