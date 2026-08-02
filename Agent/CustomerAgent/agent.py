@@ -171,7 +171,7 @@ def _patch_agno_async_db():
 
 
 class CustomerAgent(Bot):
-    knowledge_manager: KnowledgeManager
+    knowledge_manager: Optional['KnowledgeManager']
 
     # 类级别锁：防止重连时两个线程同时初始化 Agent / LanceDB / KnowledgeManager
     # 这是崩溃根因修复之一 —— 04:36 那次崩溃中两个线程在 3 秒内并发创建了
@@ -185,19 +185,12 @@ class CustomerAgent(Bot):
 
     def __init__(self, knowledge_manager: Optional['KnowledgeManager'] = None):
         super().__init__()
-        # 使用线程安全的全局单例 KnowledgeManager，避免两个线程同时创建
-        # LanceDB/LanceDbWithProgress 导致 C++ 级 access violation
-        if knowledge_manager is None:
-            with CustomerAgent._km_lock:
-                if CustomerAgent._shared_knowledge_manager is None:
-                    from core.di_container import container
-                    try:
-                        knowledge_manager = container.get(KnowledgeManager)
-                    except ValueError:
-                        knowledge_manager = KnowledgeManager()
-                    CustomerAgent._shared_knowledge_manager = knowledge_manager
-                knowledge_manager = CustomerAgent._shared_knowledge_manager
-        self.knowledge_manager = knowledge_manager  # pyright: ignore[reportAttributeAccessIssue]
+        # KnowledgeManager 延迟到 initialize_async 才创建，避免 lancedb 后台线程
+        # 在程序启动初期就运行（7 个 lancedb C 扩展线程会破坏 ntdll 堆）。
+        # 之前在 __init__ 就创建，导致 lancedb 在后台线程启动后一直运行，
+        # 堆被损坏后点聊天 tab 创建大量 widget 时崩溃（0xfc0）。
+        self._explicit_knowledge_manager = knowledge_manager  # 外部传入的 KM（可为 None）
+        self.knowledge_manager: Optional['KnowledgeManager'] = None  # 延迟初始化
         self._agent: Optional[Agent] = None  # 延迟初始化
         self.logger = get_logger("CustomerAgent")
         self._is_initialized = False
@@ -218,6 +211,21 @@ class CustomerAgent(Bot):
                 return True
 
             try:
+                # 延迟创建 KnowledgeManager（lancedb），到真正需要 AI 回复时才初始化。
+                # 避免程序启动后 lancedb 7 个后台 C 扩展线程持续运行破坏 ntdll 堆。
+                if self.knowledge_manager is None:
+                    if self._explicit_knowledge_manager is not None:
+                        self.knowledge_manager = self._explicit_knowledge_manager
+                    else:
+                        with CustomerAgent._km_lock:
+                            if CustomerAgent._shared_knowledge_manager is None:
+                                from core.di_container import container
+                                try:
+                                    CustomerAgent._shared_knowledge_manager = container.get(KnowledgeManager)
+                                except ValueError:
+                                    CustomerAgent._shared_knowledge_manager = KnowledgeManager()
+                            self.knowledge_manager = CustomerAgent._shared_knowledge_manager
+
                 # 获取配置
                 db_path = get_config("db_path", "./temp/agent.db")
                 model_name = get_config("llm.model_name", "gpt-3.5-turbo")

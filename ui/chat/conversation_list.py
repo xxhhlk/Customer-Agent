@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont
 from qfluentwidgets import (
     StrongBodyLabel, CaptionLabel, BodyLabel, SearchLineEdit,
-    ScrollArea, isDarkTheme,
+    isDarkTheme,
 )
 
 # 分批创建卡片的配置：避免一次创建 80+ 个 CardWidget 导致内存峰值/ntdll 堆崩溃
@@ -244,8 +244,9 @@ class ConversationListPanel(QWidget):
         self.search_edit.setFixedHeight(36)
         layout.addWidget(self.search_edit)
 
-        # 滚动区域
-        self._scroll_area = ScrollArea()
+        # 滚动区域 — 用原生 QScrollArea，不用 qfluentwidgets ScrollArea
+        # (后者有 60fps SmoothScroll QTimer，在堆损坏环境下会加剧崩溃)
+        self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 

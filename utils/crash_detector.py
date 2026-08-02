@@ -474,10 +474,21 @@ def setup_crash_detection(enable_wer: bool = True, heartbeat_interval: float = 5
         heartbeat_interval: 心跳写入间隔（秒）
     """
     # Layer 1: VEH (含 minidump 生成)
-    _install_veh()
+    # 临时禁用 VEH 排查聊天 tab 崩溃：
+    # VEH 回调用 ctypes.WINFUNCTYPE 创建，代码块在堆上。
+    # Qt 内部产生可恢复的 ACCESS_VIOLATION 时 VEH 被调用，
+    # _veh_with_dump 里的 MiniDumpWriteDump 大量操作堆，可能破坏 ntdll 堆。
+    # 聊天 tab 创建卡片时易触发 Qt 内部异常 -> VEH -> 堆损坏 -> 崩在 0xfc0。
+    # 先禁用验证假设。如果禁用后不崩，说明 VEH 是元凶。
+    # _install_veh()
+    try:
+        import logging as _l
+        _l.getLogger(__name__).info("VEH 已临时禁用（排查聊天 tab 崩溃）")
+    except Exception:
+        pass
 
     # Layer 1b: 增强 VEH（带 minidump 生成，比 WER 更可靠）
-    _install_minidump_handler()
+    # _install_minidump_handler()  # 同上临时禁用
 
     # Layer 2: 心跳
     start_heartbeat(heartbeat_interval)

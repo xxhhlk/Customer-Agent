@@ -33,7 +33,7 @@ from pathlib import Path
 # 关键："software" 在 Windows 上仍会走 d3d10warp.dll（WARP），只有 "no" 才能
 # 完全禁用 OpenGL、不加载 WARP，避免 d3d10warp 卸载后函数指针悬空崩溃。
 # 聊天 tab 重绘量大，是触发该崩溃的高频场景。
-os.environ.setdefault("QT_OPENGL", "no")              # 彻底禁用 OpenGL（非 software）
+os.environ.setdefault("QT_OPENGL", "software")      # 软件渲染（8-1 实测 software 不崩，no 反而崩）
 os.environ.setdefault("QT_QUICK_BACKEND", "software") # QML 用软件后端
 os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")   # Mesa 软件渲染
 

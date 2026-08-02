@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QFrame, QScrollArea,
 )
 from PyQt6.QtGui import QFont
-from qfluentwidgets import ScrollArea, StrongBodyLabel, CaptionLabel, isDarkTheme
+from qfluentwidgets import StrongBodyLabel, CaptionLabel, isDarkTheme
 
 from ui.chat.message_bubble import MessageBubble
 from ui.chat.input_area import InputArea
