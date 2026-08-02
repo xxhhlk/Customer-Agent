@@ -867,13 +867,31 @@ class KnowledgeManager:
         """
         获取所有文档用于导出（包括禁用的和所有字段）
 
+        在子进程中直接读 lancedb（不走 IPC，避免死循环）。
+        返回可序列化的 SimpleDocument 列表，通过 IPC 传回主进程。
+
         Returns:
             文档列表，每个文档包含 id, content, metadata 等完整信息
         """
         try:
-            from ui.knowledge.data_loader import KnowledgeDataLoader
-            loader = KnowledgeDataLoader(self)
-            return loader.load_documents()
+            import lancedb
+            import json
+
+            if not self.knowledge or not self.knowledge.vector_db:
+                return []
+
+            db_path = self.knowledge.vector_db.uri
+            table_name = self.knowledge.vector_db.table_name
+            db = lancedb.connect(db_path)
+            table = db.open_table(table_name)
+            df = table.to_pandas()
+
+            from ui.knowledge.models import SimpleDocument
+            docs = []
+            for idx, row in df.iterrows():
+                doc = SimpleDocument.from_lancedb_row(row.to_dict(), int(idx) if isinstance(idx, int) else 0)
+                docs.append(doc)
+            return docs
         except Exception as e:
             logger.error(f"获取所有文档失败: {str(e)}")
             return []

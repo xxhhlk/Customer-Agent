@@ -61,29 +61,23 @@ class KnowledgeDataLoader:
 
     def _load_from_lancedb(self) -> List[SimpleDocument]:
         """
-        直接从 LanceDB 加载数据
+        通过 KnowledgeManager 加载数据（IPC 转发到子进程）
+
+        lancedb 在独立子进程中运行，主进程不直接 import lancedb。
+        调用 knowledge_manager.get_all_documents_for_export() 会通过 IPC
+        转发到子进程执行，返回可序列化的 SimpleDocument 列表。
 
         Returns:
             文档列表
         """
-        import lancedb
-
-        if self.knowledge_manager.knowledge.vector_db is None:
-            logger.warning("向量数据库未初始化")
+        try:
+            # 通过 IPC 调用子进程的 get_all_documents_for_export
+            docs = self.knowledge_manager.get_all_documents_for_export()
+            logger.info(f"通过 IPC 加载了 {len(docs)} 个文档")
+            return docs
+        except Exception as e:
+            logger.warning(f"IPC 加载文档失败: {e}")
             return []
-        
-        db_path = self.knowledge_manager.knowledge.vector_db.uri
-        db = lancedb.connect(db_path)
-        table = db.open_table("customer_knowledge")
-
-        df = table.to_pandas()
-
-        docs = []
-        for idx, row in df.iterrows():
-            doc = SimpleDocument.from_lancedb_row(row.to_dict(), int(idx) if isinstance(idx, int) else 0)
-            docs.append(doc)
-
-        return docs
 
     def _load_from_search_api(self, limit: Optional[int] = None) -> List[SimpleDocument]:
         """

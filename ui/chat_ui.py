@@ -67,13 +67,11 @@ class ChatUI(QFrame):
         logger.info("[ChatUI] _init_ui 完成")
         self._apply_theme()
         logger.info("[ChatUI] _apply_theme 完成")
-        # 不在 __init__ 里加载数据！改为 showEvent 触发，
-        # 只有用户真正切到聊天 tab 时才创建卡片。
-        # 之前在 __init__ 里 QTimer.singleShot(500, _initial_load)，
-        # 导致 ChatUI 不可见时就创建了 30 个卡片 widget，
-        # 与后台 PDD 消息循环线程竞争，切 tab 显示时触发堆崩���。
+        # lancedb 已隔离到独立子进程，主进程堆不会被损坏，
+        # 恢复在 __init__ 里提前加载数据（500ms 延迟让 UI 先渲染）。
         self._data_loaded = False
-        logger.info("[ChatUI] __init__ 完成，数据加载延迟到 showEvent")
+        QTimer.singleShot(500, self._initial_load)
+        logger.info("[ChatUI] __init__ 完成，已安排 500ms 后加载数据")
 
     def _initial_load(self):
         """首次加载: 同时加载店铺列表和会话列表"""
@@ -84,17 +82,8 @@ class ChatUI(QFrame):
         logger.info("[ChatUI] _load_conversations 已启动")
 
     def showEvent(self, event):
-        """窗口显示时首次加载数据 (与知识库 tab 一致的模式)
-
-        之前在 __init__ 里 QTimer.singleShot(500, _initial_load),
-        导致 ChatUI 不可见时就创建了 30 个卡片 widget,
-        与后台 PDD 消息循环线程竞争, 切 tab 显示时触发堆崩溃.
-        改为 showEvent 触发, 只有用户真正切到聊天 tab 时才创建.
-        """
+        """窗口显示事件（数据已在 __init__ 里安排加载）"""
         super().showEvent(event)
-        if not self._data_loaded:
-            self._data_loaded = True
-            QTimer.singleShot(200, self._initial_load)
 
     def _load_shops(self):
         """后台加载店铺列表（仅在首次或需要刷新时调用）"""

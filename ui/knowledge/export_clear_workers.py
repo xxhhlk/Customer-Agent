@@ -332,47 +332,15 @@ class ClearAllWorker(QThread):
             return ""
 
     def _clear_vector_db(self) -> None:
-        """清空向量数据库中的所有记录"""
-        import lancedb
-
+        """通过 IPC 清空向量数据库（lancedb 在独立子进程中运行）"""
         km = self.knowledge_manager
 
-        if not km.knowledge.vector_db:
-            logger.warning("向量数据库未初始化，跳过")
-            return
-
-        db_path = km.knowledge.vector_db.uri
-        table_name = km.knowledge.vector_db.table_name
-
-        # 连接到 LanceDB 并删除表中所有数据
-        db = lancedb.connect(db_path)
-
-        # 检查表是否存在
-        existing_tables = db.table_names()
-        if table_name not in existing_tables:
-            logger.info(f"表 {table_name} 不存在，无需清空")
-            return
-
-        table = db.open_table(table_name)
-
-        # 删除所有记录 — 使用 LanceDB 的 drop_table 然后重新创建
-        # 这比逐条删除更高效且更彻底
-        db.drop_table(table_name)
-        logger.info(f"已删除表: {table_name}")
-
-        # 重新创建空表（使用原始 vector_db 的配置）
-        # 通过重新初始化 knowledge_manager 的 vector_db 来重建表
-        # 重新打开连接
-        km.knowledge.vector_db.table = None  # 重置表连接
-
-        # 触发表的懒加载重建（下次访问时会自动创建）
         try:
-            _ = km.knowledge.vector_db.table
-        except Exception:
-            # 如果懒加载失败，尝试手动创建
-            logger.info("尝试手动重建表...")
-
-        logger.info("向量数据库已清空")
+            # 通过 IPC 调用子进程的 clear_all_knowledge
+            deleted_count = km.clear_all_knowledge()
+            logger.info(f"通过 IPC 清空知识库，删除 {deleted_count} 条记录")
+        except Exception as e:
+            logger.error(f"IPC 清空知识库失败: {e}")
 
     def _clear_contents_db(self) -> None:
         """清空内容数据库中的所有记录"""

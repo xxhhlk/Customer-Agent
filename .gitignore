@@ -133,6 +133,7 @@ chroma_db/
 backup/
 *.backup
 .bak/
+uv.lock.bak
 
 # 配置文件 (包含敏感信息)
 config.json

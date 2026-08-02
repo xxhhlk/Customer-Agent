@@ -185,13 +185,11 @@ class CustomerAgent(Bot):
 
     def __init__(self, knowledge_manager: Optional['KnowledgeManager'] = None):
         super().__init__()
-        # KnowledgeManager 延迟到 initialize_async 才创建，避免 lancedb 后台线程
-        # 在程序启动初期就运行（7 个 lancedb C 扩展线程会破坏 ntdll 堆）。
-        # 之前在 __init__ 就创建，导致 lancedb 在后台线程启动后一直运行，
-        # 堆被损坏后点聊天 tab 创建大量 widget 时崩溃（0xfc0）。
-        self._explicit_knowledge_manager = knowledge_manager  # 外部传入的 KM（可为 None）
-        self.knowledge_manager: Optional['KnowledgeManager'] = None  # 延迟初始化
-        self._agent: Optional[Agent] = None  # 延迟初始化
+        # lancedb 已隔离到独立子进程，主进程堆不会被损坏。
+        # 可以提前启动子进程并初始化，不必等到收到消息才创建。
+        self._explicit_knowledge_manager = knowledge_manager
+        self.knowledge_manager: Optional['KnowledgeManager'] = None
+        self._agent: Optional[Agent] = None
         self.logger = get_logger("CustomerAgent")
         self._is_initialized = False
 
@@ -211,19 +209,17 @@ class CustomerAgent(Bot):
                 return True
 
             try:
-                # 延迟创建 KnowledgeManager（lancedb），到真正需要 AI 回复时才初始化。
-                # 避免程序启动后 lancedb 7 个后台 C 扩展线程持续运行破坏 ntdll 堆。
+                # 延迟创建 KnowledgeManager 代理（lancedb 子进程），到真正需要 AI 回复时才初始化。
+                # lancedb 的 C 扩展在独立子进程中运行，其后台线程破坏的堆只影响子进程，
+                # 主进程堆保持干净，避免点聊天 tab 时堆崩溃（0xfc0）。
                 if self.knowledge_manager is None:
                     if self._explicit_knowledge_manager is not None:
                         self.knowledge_manager = self._explicit_knowledge_manager
                     else:
                         with CustomerAgent._km_lock:
                             if CustomerAgent._shared_knowledge_manager is None:
-                                from core.di_container import container
-                                try:
-                                    CustomerAgent._shared_knowledge_manager = container.get(KnowledgeManager)
-                                except ValueError:
-                                    CustomerAgent._shared_knowledge_manager = KnowledgeManager()
+                                from Agent.CustomerAgent.lancedb_proxy import get_knowledge_manager_proxy
+                                CustomerAgent._shared_knowledge_manager = get_knowledge_manager_proxy()
                             self.knowledge_manager = CustomerAgent._shared_knowledge_manager
 
                 # 获取配置

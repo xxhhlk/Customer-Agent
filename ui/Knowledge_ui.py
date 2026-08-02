@@ -855,16 +855,61 @@ class KnowledgeUI(QWidget):
         self.total_label = total_label
 
     def _ensure_knowledge_manager(self) -> None:
-        """按需创建知识库管理器"""
+        """按需创建知识库管理器（IPC 代理，lancedb 在独立子进程运行）"""
         if self.knowledge_manager is None:
             try:
-                # 延迟导入，避免启动时加载 Agno/LanceDB/CulturalManager 等重型模块
-                from Agent.CustomerAgent.agent_knowledge import KnowledgeManager
-                self.knowledge_manager = KnowledgeManager()
-                logger.info("✅ 知识库管理器初始化成功")
+                from Agent.CustomerAgent.lancedb_proxy import get_knowledge_manager_proxy
+                self.knowledge_manager = get_knowledge_manager_proxy()
+                logger.info("✅ 知识库管理器代理初始化成功（lancedb 子进程模式）")
             except Exception as e:
                 logger.error(f"❌ 知识库管理器初始化失败: {e}")
                 self.knowledge_manager = None
+
+    def _start_km_in_background(self) -> None:
+        """后台线程启动 lancedb 子进程，避免阻塞主线程
+
+        子进程启动需要 5-10 秒（加载 lancedb/agno/pandas 等），
+        在主线程同步等待会导致 UI 卡顿。改为后台线程启动，
+        完成后通过信号回到主线程加载数据。
+        """
+        from PyQt6.QtCore import QThread, pyqtSignal
+
+        class _KMStarter(QThread):
+            done = pyqtSignal(bool)
+            def __init__(self, parent):
+                super().__init__(parent)
+                self._parent = parent
+            def run(self):
+                try:
+                    from Agent.CustomerAgent.lancedb_proxy import get_knowledge_manager_proxy
+                    km = get_knowledge_manager_proxy()
+                    self._parent.knowledge_manager = km
+                    self.done.emit(True)
+                except Exception as e:
+                    logger.error(f"❌ 后台启动 lancedb 子进程失败: {e}")
+                    self.done.emit(False)
+
+        self._km_starter = _KMStarter(self)
+        self._km_starter.done.connect(self._on_km_started)
+        self._km_starter.start()
+
+    def _on_km_started(self, success: bool) -> None:
+        """lancedb 子进程后台启动完成回调"""
+        if success and self.knowledge_manager is not None:
+            logger.info("✅ lancedb 子进程后台启动完成，开始加载数据")
+            # 启动数据加载
+            self._load_worker = LoadDataWorker(self.knowledge_manager)
+            self._load_worker.finished.connect(self._on_data_loaded)
+            self._load_worker.failed.connect(self._on_load_failed)
+            self._load_worker.start()
+        else:
+            logger.error("❌ lancedb 子进程启动失败")
+            self._hide_loading_indicator()
+            no_data_label = QLabel("知识库初始化失败，请重试")
+            no_data_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            no_data_label.setStyleSheet("font-size: 14px; padding: 40px; color: red;")
+            self.gridLayout.addWidget(no_data_label, 0, 0)
+            self._layout_initialized = True
 
     def eventFilter(self, obj, event):
         """事件过滤器：支持搜索框按 Enter 键搜索"""
@@ -953,19 +998,15 @@ class KnowledgeUI(QWidget):
 
         # 获取知识库数据
         try:
-            self._ensure_knowledge_manager()
-            if self.knowledge_manager is None:
-                no_data_label = QLabel("知识库未初始化，打开该页时将自动加载")
-                no_data_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                no_data_label.setStyleSheet("font-size: 14px; padding: 40px;")
-                self.gridLayout.addWidget(no_data_label, 0, 0)
-                self._layout_initialized = True
-                return
-
-            # 显示加载指示器
+            # 先展示加载骨架（不阻塞主线程）
             self._show_loading_indicator()
 
-            # 启动后台加载
+            if self.knowledge_manager is None:
+                # 后台启动 lancedb 子进程（避免阻塞主线程 5-10 秒）
+                self._start_km_in_background()
+                return
+
+            # knowledge_manager 已就绪，启动后台数据加载
             self._load_worker = LoadDataWorker(self.knowledge_manager)
             self._load_worker.finished.connect(self._on_data_loaded)
             self._load_worker.failed.connect(self._on_load_failed)
@@ -1021,27 +1062,19 @@ class KnowledgeUI(QWidget):
         try:
             self.docs = []
 
-            # 尝试直接从LanceDB获取数据
+            # 通过 IPC 调用子进程加载文档（lancedb 在独立子进程中运行）
             try:
-                import lancedb
-                if self.knowledge_manager.knowledge.vector_db is None:
-                    logger.warning("向量数据库未初始化")
-                    return
-                db_path = self.knowledge_manager.knowledge.vector_db.uri
-                db = lancedb.connect(db_path)
-                table = db.open_table("customer_knowledge")
-
-                # 获取所有数据
-                df = table.to_pandas()
-
-                # 转换为SimpleDocument列表
-                for idx, row in df.iterrows():
-                    doc = SimpleDocument.from_lancedb_row(row.to_dict(), int(idx) if isinstance(idx, int) else 0)
-                    self.docs.append(doc)
-
+                docs = self.knowledge_manager.get_all_documents_for_export()
+                if docs:
+                    self.docs = docs
+                    logger.info(f"通过 IPC 获取到 {len(self.docs)} 条记录")
+                else:
+                    # 回退到搜索 API
+                    results = self.knowledge_manager.search_knowledge("", limit=1000)
+                    self.docs = [SimpleDocument.from_agno_doc(doc) for doc in results]
+                    logger.info(f"通过搜索API获取到 {len(self.docs)} 条记录")
             except Exception as lancedb_err:
-                logger.warning(f"从LanceDB直接获取数据失败: {lancedb_err}")
-
+                logger.warning(f"IPC 获取数据失败: {lancedb_err}")
                 # 回退到使用Agno的API
                 try:
                     results = self.knowledge_manager.search_knowledge("", limit=1000)

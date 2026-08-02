@@ -42,80 +42,40 @@ class _KnowledgeSearchWorker(QThread):
             self.results_ready.emit([])
 
     def _search_lancedb(self) -> List[Dict[str, str]]:
-        """直接从 LanceDB 读取数据并过滤"""
+        """通过 IPC 从子进程读取知识库数据并过滤
+
+        lancedb 在独立子进程中运行，主进程不直接 import lancedb。
+        """
         import json
         from pathlib import Path
 
-        # 定位 vector_db 路径
-        # slash_popup.py 在 ui/chat/ 下，向上 3 层是项目根目录
-        project_root = Path(__file__).resolve().parent.parent.parent
-        vector_path = project_root / "data" / "vector_db"
-        table_name = "customer_knowledge"
-
-        # 如果 __file__ 路径不可靠，用 cwd 作为 fallback
-        if not vector_path.exists():
-            vector_path = Path.cwd() / "data" / "vector_db"
-
-        # 尝试用 lance 库读取
         try:
-            import lance
-            dataset = lance.dataset(str(vector_path / f"{table_name}.lance"))
-            if dataset.count_rows() == 0:
-                logger.warning("LanceDB customer_knowledge 表为空，无知识库数据")
-                return []
-            table = dataset.to_table()
-        except ImportError:
-            # 回退到 lancedb
-            try:
-                import lancedb
-                db = lancedb.connect(str(vector_path))
-                tbl = db.open_table(table_name)
-                df = tbl.to_pandas()
-                if len(df) == 0:
-                    logger.warning("LanceDB customer_knowledge 表为空")
-                    return []
-            except Exception as e:
-                logger.error(f"无法连接 LanceDB: {e}")
+            # 通过 IPC 调用子进程获取所有文档
+            from Agent.CustomerAgent.lancedb_proxy import get_ipc_client
+            client = get_ipc_client()
+            if not client.is_started:
+                client.start()
+            docs = client.call("get_all_documents_for_export")
+
+            if not docs:
+                logger.warning("知识库为空或 IPC 加载失败")
                 return []
 
-            # 从 DataFrame 提取数据
-            return self._filter_from_dataframe(df)
-
-        # 从 Arrow Table 提取数据
-        results: List[Dict[str, str]] = []
-        col_names = table.column_names
-
-        for i in range(table.num_rows):
-            row_data: Dict[str, Any] = {}
-            for col_name in col_names:
-                if col_name == "vector":
+            # 转换为搜索结果格式
+            results: List[Dict[str, str]] = []
+            for doc in docs:
+                title = doc.name or ""
+                content = doc.content or ""
+                if not content:
                     continue
-                try:
-                    row_data[col_name] = table.column(col_name)[i].as_py()
-                except Exception:
-                    row_data[col_name] = ""
+                results.append({"title": title, "content": content})
 
-            # 解析 payload
-            payload_str = row_data.get("payload", "")
-            title = ""
-            content = ""
+            # 过滤
+            return self._filter_results(results)
 
-            if payload_str:
-                try:
-                    payload = json.loads(payload_str)
-                    content = payload.get("content", "")
-                    meta = payload.get("meta_data", {})
-                    title = meta.get("title", "") or payload.get("name", "")
-                except (json.JSONDecodeError, TypeError):
-                    content = str(payload_str)
-
-            if not content:
-                continue
-
-            results.append({"title": title, "content": content})
-
-        # 过滤
-        return self._filter_results(results)
+        except Exception as e:
+            logger.error(f"IPC 搜索知识库失败: {e}")
+            return []
 
     def _filter_from_dataframe(self, df) -> List[Dict[str, str]]:
         """从 pandas DataFrame 提取并过滤数据"""
