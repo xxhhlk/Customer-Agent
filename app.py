@@ -299,14 +299,15 @@ def main():
     app.shared_mem = shared_mem  # 保存共享内存引用
 
     # 运行事件循环
-    # 高频心跳：每 2 秒写一行到 app.log，精确记录崩溃前最后活动时间
+    # 心跳：每 2 秒自增计数，用于崩溃时间点定位（不再写 INFO 日志刷屏；
+    # 如需排查可将 Heartbeat logger 级别调为 DEBUG 查看 alive 记录）
     _heartbeat_logger = _get_logger("Heartbeat")
     _hb_timer = QTimer()
     _hb_timer.setInterval(2000)
     _hb_counter = [0]
     def _do_heartbeat():
         _hb_counter[0] += 1
-        _heartbeat_logger.info(f"alive #{_hb_counter[0]}")
+        _heartbeat_logger.debug(f"alive #{_hb_counter[0]}")
     _hb_timer.timeout.connect(_do_heartbeat)
     _hb_timer.start()
 

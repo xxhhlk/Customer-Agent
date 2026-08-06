@@ -294,7 +294,6 @@ class CustomerAgent(Bot):
 
                     # 等待人工客服回复，与普通消息一致
                     from Message.handlers.staff_reply_event import staff_reply_event_manager
-                    from config import get_config
 
                     staff_wait_config = get_config("staff_reply_wait", {})
                     enable_staff_wait = staff_wait_config.get("enable", True)
@@ -390,7 +389,7 @@ class CustomerAgent(Bot):
             self.logger.info("[async_reply] arun 调用完成")
             return Reply(ReplyType.TEXT, response.content)
         except Exception as e:
-            self.logger.error(f"CustomerAgent异步回复失败: {e}")
+            self.logger.error(f"CustomerAgent异步回复失败: {e}", exc_info=True)
             # 异常兜底：优先使用设置中配置的兜底回复话术（rate_limit.fallback_reply，
             # 即设置面板里的“兜底回复”），随机抽一条；未配置或列表为空时回退到默认文案，
             # 避免发送空消息。
