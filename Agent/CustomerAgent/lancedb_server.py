@@ -16,6 +16,7 @@ import sys
 import os
 import traceback
 import threading
+import asyncio
 
 # 确保项目根目录在 path 中
 _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -81,6 +82,12 @@ def _server_main(conn):
 
             try:
                 result = target(*args, **kwargs)
+                # KnowledgeManager 部分方法是 async def（如 update_document_content/
+                # add_text_content/add_content_from_file），同步调用会返回未 await 的
+                # 协程对象，无法被 multiprocessing.connection pickle（报 cannot pickle
+                # 'coroutine' object）。在此检测并运行协程，取真实返回值。
+                if asyncio.iscoroutine(result):
+                    result = asyncio.run(result)
                 conn.send((req_id, "ok", result))
             except Exception as e:
                 conn.send((req_id, "error", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
