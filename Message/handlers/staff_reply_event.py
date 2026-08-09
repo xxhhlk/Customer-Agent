@@ -271,6 +271,12 @@ class StaffReplyEventManager:
                 logger.warning(f"事件 {event_id} 不存在，可能已经被清理")
                 return False
 
+            # 标记事件活跃：正在被等待的事件不应被 cleanup_expired 当作孤儿清理。
+            # 夜间防抖可达 300s+ 且随新消息无限重置，若事件在此间被清理，
+            # 人工回复的 notify_staff_reply 会落空（无日志、流程不取消）。
+            # 每次真正进入等待都刷新 timestamp，cleanup 只清理流程结束后的残留。
+            event_info["timestamp"] = time.time()
+
             # 惰性初始化事件对象（确保绑定到当前正在运行的 event loop）
             # 必须用 get_running_loop() 而非 get_event_loop()：
             #   - get_event_loop() 在没有运行中的循环时会创建/返回默认循环（旧式 API）

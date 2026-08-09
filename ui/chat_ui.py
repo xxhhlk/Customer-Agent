@@ -237,35 +237,43 @@ class ChatUI(QFrame):
         self.chat_area.append_message(msg_data)
 
     def _send_manual_reply(self, shop_id: str, user_id: str, text: str, buyer_uid: str):
-        """发送手动回复"""
+        """发送手动回复
+
+        整个发送链路（send_text + notify + 持久化）在 QThread 后台执行，
+        避免同步 send_text 网络请求阻塞主线程（实测曾导致主线程卡顿 16.7s）。
+        """
         try:
-            from Channel.pinduoduo.utils.API.send_message import SendMessage
-            sender = SendMessage(str(shop_id), str(user_id))
-            result = sender.send_text(str(buyer_uid), text)
+            from PyQt6.QtCore import QThread
 
-            if isinstance(result, dict) and result.get("success"):
-                # 通知客服回复事件管理器：手动回复等同于人工客服回复，
-                # 需要取消正在等待的AI处理流程
-                try:
-                    from Message.handlers.staff_reply_event import staff_reply_event_manager
-                    staff_reply_event_manager.notify_staff_reply(buyer_uid)
-                except Exception:
-                    pass
+            class _ManualReplyWorker(QThread):
+                done = pyqtSignal(dict)  # 持久化完成的消息 dict
 
-                # 在后台线程持久化，避免阻塞主线程
-                from PyQt6.QtCore import QThread
+                def __init__(self, sid, uid, buid, txt):
+                    super().__init__()
+                    self._sid = sid
+                    self._uid = uid
+                    self._buid = buid
+                    self._txt = txt
 
-                class _PersistWorker(QThread):
-                    done = pyqtSignal(dict)
+                def run(self):
+                    try:
+                        from Channel.pinduoduo.utils.API.send_message import SendMessage
+                        sender = SendMessage(str(self._sid), str(self._uid))
+                        result = sender.send_text(str(self._buid), self._txt)
 
-                    def __init__(self, sid, uid, buid, txt):
-                        super().__init__()
-                        self._sid = sid
-                        self._uid = uid
-                        self._buid = buid
-                        self._txt = txt
+                        if not (isinstance(result, dict) and result.get("success")):
+                            logger.warning(f"发送手动回复失败: {result}")
+                            return
 
-                    def run(self):
+                        # 通知客服回复事件管理器：手动回复等同于人工客服回复，
+                        # 需要取消正在等待的AI处理流程
+                        try:
+                            from Message.handlers.staff_reply_event import staff_reply_event_manager
+                            staff_reply_event_manager.notify_staff_reply(self._buid)
+                        except Exception:
+                            pass
+
+                        # 持久化
                         try:
                             from services.message_persistence import message_persistence_service
                             msg_dict = message_persistence_service.save_manual_reply(
@@ -276,28 +284,31 @@ class ChatUI(QFrame):
                                 self.done.emit(msg_dict)
                         except Exception:
                             pass
+                    except Exception as e:
+                        logger.error(f"发送手动回复异常: {e}")
 
-                worker = _PersistWorker(shop_id, user_id, buyer_uid, text)
+            worker = _ManualReplyWorker(shop_id, user_id, buyer_uid, text)
 
-                def _on_persist_done(msg_dict: dict):
+            def _on_persist_done(msg_dict: dict):
+                try:
                     from services.message_persistence import message_persistence_service
                     message_persistence_service.notify_new_message(msg_dict)
+                except Exception:
+                    pass
 
-                worker.done.connect(_on_persist_done)
-                worker.start()
-                # 保持引用防止 GC（使用列表支持并发 worker）
-                self._persist_workers.append(worker)
-                # 清理已完成的 worker
-                def _cleanup_persist(_w=worker):
-                    try:
-                        if _w in self._persist_workers:
-                            self._persist_workers.remove(_w)
-                        _w.deleteLater()
-                    except Exception:
-                        pass
-                worker.done.connect(lambda *_: _cleanup_persist())
-            else:
-                logger.warning(f"发送手动回复失败: {result}")
+            worker.done.connect(_on_persist_done)
+            worker.start()
+            # 保持引用防止 GC（使用列表支持并发 worker）
+            self._persist_workers.append(worker)
+            # 清理已完成的 worker
+            def _cleanup_persist(_w=worker):
+                try:
+                    if _w in self._persist_workers:
+                        self._persist_workers.remove(_w)
+                    _w.deleteLater()
+                except Exception:
+                    pass
+            worker.done.connect(lambda *_: _cleanup_persist())
         except Exception as e:
             logger.error(f"发送手动回复异常: {e}")
 

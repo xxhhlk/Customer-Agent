@@ -39,6 +39,25 @@ class AIReplyHandler(BaseHandler):
             ContextType.EMOTION
         }
 
+        # 加载限流配置（消费者层 is_rate_limited 检查依赖此配置）
+        # 注：config.json 的限流参数只在这里生效；此前 configure 只写在
+        # 从未被实例化的 EnhancedAIReplyHandler 里，导致配置永远不生效。
+        self._load_rate_limit_config()
+
+    def _load_rate_limit_config(self):
+        """从 config 加载限流配置到全局限流器"""
+        try:
+            from config import config
+            rc = config.get_rate_limit_config()
+            from Message.handlers.rate_limiter import coze_rate_limiter
+            coze_rate_limiter.configure(
+                window_size=rc['window_hours'] * 3600,
+                max_requests=rc['max_requests']
+            )
+            logger.info(f"限流配置已加载: {rc}")
+        except Exception as e:
+            logger.warning(f"加载限流配置失败: {e}，使用默认配置")
+
     def can_handle(self, context: Context) -> bool:
         """检查是否可以处理该消息"""
         # 支持多种消息类型
