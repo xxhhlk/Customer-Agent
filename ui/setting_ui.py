@@ -1071,6 +1071,18 @@ class SettingUI(QFrame):
             # 使用config模块保存配置
             config.update(new_config, save=True)
 
+            # 热更新全局限流器：保存后立即生效，无需重启/重连
+            try:
+                rc = config.get_rate_limit_config()
+                from Message.handlers.rate_limiter import coze_rate_limiter
+                coze_rate_limiter.configure(
+                    window_size=rc['window_hours'] * 3600,
+                    max_requests=rc['max_requests']
+                )
+                self.logger.info(f"限流器已热更新: {rc}")
+            except Exception as e:
+                self.logger.warning(f"限流器热更新失败: {e}，重启后生效")
+
             self.logger.info("配置保存成功")
 
             # 显示成功消息
