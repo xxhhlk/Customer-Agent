@@ -3,7 +3,7 @@
 
 import re
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from utils.logger_loguru import get_logger
 
 
@@ -145,3 +145,28 @@ class MatcherFactory:
 
 # 全局工厂实例
 matcher_factory = MatcherFactory()
+
+
+def find_matches(patterns: List[str], message: str, match_type: str = 'partial') -> List[str]:
+    """返回 message 中命中的全部 pattern（而非 bool）
+
+    用于“发送前禁用词检查”：需要知道具体命中了哪些词，才能反馈给 AI 重生成。
+
+    Args:
+        patterns: 关键词/禁用词列表
+        message: 待检查的文本（如 AI 回复）
+        match_type: 匹配类型，默认 partial（子串、大小写不敏感）
+
+    Returns:
+        命中的 pattern 列表（保持原始大小写，便于反馈给 AI）
+    """
+    if not patterns or not message:
+        return []
+    matcher = matcher_factory.get_matcher(match_type)
+    hits: List[str] = []
+    for p in patterns:
+        if not p:
+            continue
+        if matcher.match(p, message):
+            hits.append(p)
+    return hits

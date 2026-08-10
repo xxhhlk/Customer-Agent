@@ -96,6 +96,10 @@ class ConfigModel(BaseModel):
         default_factory=RateLimitConfig,
         description="限流配置"
     )
+    banned_words: List[str] = Field(
+        default_factory=list,
+        description="禁用词列表（发送前硬拦截，命中则让AI重新生成合规回复）"
+    )
     db_path: str = Field(default="", description="数据库路径")
 
 
@@ -126,6 +130,7 @@ config_base = {
         "max_requests": 10,
         "fallback_reply": []
     },
+    "banned_words": [],
     "staff_reply_wait": {
         "enable": True,
         "wait_seconds": 30

@@ -609,6 +609,69 @@ class RateLimitCard(CardWidget):
         self.fallback_reply_edit.setPlainText(text)
 
 
+class BannedWordsCard(CardWidget):
+    """禁用词配置卡片 - AI 回复发送前的硬拦截词表"""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self) -> None:
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("禁用词拦截")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 禁用词列表（每行一个）
+        self.banned_words_edit = TextEdit()
+        self.banned_words_edit.setPlaceholderText(
+            "每行输入一个禁用词，AI 回复中若包含这些词将被拦截并要求重新生成"
+        )
+        self.banned_words_edit.setFixedHeight(120)
+        form_layout.addRow("禁用词:", self.banned_words_edit)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "AI 生成回复后、发送前会检查是否包含以上禁用词。\n"
+            "命中则把具体词反馈给 AI 重新生成合规回复，最多重试 2 次；\n"
+            "仍命中则改发兜底话术。子串匹配、大小写不敏感。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置：每行一个词，过滤空行"""
+        text = self.banned_words_edit.toPlainText().strip()
+        words = [line.strip() for line in text.split('\n') if line.strip()]
+        return {"banned_words": words}
+
+    def setConfig(self, config: dict):
+        """设置配置：兼容 list 与单字符串两种格式"""
+        banned = config.get("banned_words", [])
+        if isinstance(banned, str):
+            text = banned
+        elif isinstance(banned, list):
+            text = '\n'.join(banned)
+        else:
+            text = ""
+        self.banned_words_edit.setPlainText(text)
+
+
 class SettingUI(QFrame):
     """设置界面"""
 
@@ -670,7 +733,8 @@ class SettingUI(QFrame):
             self.prompt_config_card,
             self.business_hours_card,
             self.human_reply_wait_card,
-            self.auto_start_card
+            self.auto_start_card,
+            self.banned_words_card
         ]
         
         for card in cards:
@@ -806,6 +870,7 @@ class SettingUI(QFrame):
         self.human_reply_wait_card = HumanReplyWaitCard()
         self.auto_start_card = AutoStartCard()
         self.rate_limit_card = RateLimitCard()
+        self.banned_words_card = BannedWordsCard()
 
         # 添加到布局
         content_layout.addWidget(self.llm_config_card)
@@ -816,6 +881,7 @@ class SettingUI(QFrame):
         content_layout.addWidget(self.human_reply_wait_card)
         content_layout.addWidget(self.auto_start_card)
         content_layout.addWidget(self.rate_limit_card)
+        content_layout.addWidget(self.banned_words_card)
         content_layout.addStretch()
 
         # 设置容器样式
@@ -892,7 +958,8 @@ class SettingUI(QFrame):
                     "window_hours": config.get("rate_limit.window_hours", 4),
                     "max_requests": config.get("rate_limit.max_requests", 10),
                     "fallback_reply": config.get("rate_limit.fallback_reply", [])
-                }
+                },
+                "banned_words": config.get("banned_words", [])
             }
 
             # 验证并设置配置
@@ -971,7 +1038,8 @@ class SettingUI(QFrame):
             }),
             "business_hours": config_data.get("business_hours", {"start": "08:00", "end": "23:00"}),
             "staff_reply_wait": config_data.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
-            "rate_limit": config_data.get("rate_limit", {"window_hours": 4, "max_requests": 10, "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]})
+            "rate_limit": config_data.get("rate_limit", {"window_hours": 4, "max_requests": 10, "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]}),
+            "banned_words": config_data.get("banned_words", [])
         }
 
         # 验证business_hours格式
@@ -1024,6 +1092,7 @@ class SettingUI(QFrame):
         auto_start = config_data.get("auto_start_on_launch", False)
         self.auto_start_card.setConfig({"auto_start_on_launch": auto_start})
         self.rate_limit_card.setConfig(validated_config)
+        self.banned_words_card.setConfig(validated_config)
     
     def onSaveConfig(self):
         """保存配置到config模块"""
@@ -1037,6 +1106,7 @@ class SettingUI(QFrame):
             staff_reply_wait_config = self.human_reply_wait_card.getConfig()
             auto_start_config = self.auto_start_card.getConfig()
             rate_limit_config = self.rate_limit_card.getConfig()
+            banned_words_config = self.banned_words_card.getConfig()
 
             # 合并配置为新的结构
             new_config = {
@@ -1048,6 +1118,7 @@ class SettingUI(QFrame):
                 "staff_reply_wait": staff_reply_wait_config.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
                 "auto_start_on_launch": auto_start_config.get("auto_start_on_launch", False),
                 **rate_limit_config,
+                "banned_words": banned_words_config.get("banned_words", []),
                 # 保持与旧配置的兼容性
                 "db_path": config.get("db_path", "")
             }

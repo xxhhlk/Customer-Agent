@@ -3,11 +3,12 @@ AI回复处理器
 专注的AI处理，移除复杂预处理和发送逻辑
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 import asyncio
 from bridge.context import Context, ContextType
 from .base import BaseHandler
 from .preprocessor import MessagePreprocessor
+from .keyword_matcher import find_matches
 from Agent.bot import Bot
 from utils.logger_loguru import get_logger
 
@@ -40,8 +41,6 @@ class AIReplyHandler(BaseHandler):
         }
 
         # 加载限流配置（消费者层 is_rate_limited 检查依赖此配置）
-        # 注：config.json 的限流参数只在这里生效；此前 configure 只写在
-        # 从未被实例化的 EnhancedAIReplyHandler 里，导致配置永远不生效。
         self._load_rate_limit_config()
 
     def _load_rate_limit_config(self):
@@ -74,6 +73,17 @@ class AIReplyHandler(BaseHandler):
             reply = await self._get_ai_reply(processed_content, context)
             if not reply:
                 self.logger.warning("AI回复生成失败，使用备用回复")
+                return await self._handle_fallback(context, metadata)
+
+            # 2.5 发送前禁用词检查：命中则把具体禁用词反馈给 AI 重生成，最多重试 2 次；
+            #      仍命中则走兜底回复，绝不把含禁用词的回复发出去。
+            reply, hit_fallback = await self._check_banned_words(
+                processed_content, reply, context, metadata
+            )
+            if hit_fallback:
+                return await self._handle_fallback(context, metadata)
+            if not reply:
+                # 重生成链路上 AI 全部失败，走兜底（理论上 _check_banned_words 已处理）
                 return await self._handle_fallback(context, metadata)
 
             # 3. 发送前检查：任务是否已被取消（人工客服已介入）
@@ -193,3 +203,39 @@ class AIReplyHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"备用回复处理失败: {e}")
             return True  # 即使失败也返回True，避免重复处理
+
+    async def _check_banned_words(
+        self, query: str, reply: str, context: Context, metadata: Dict[str, Any]
+    ) -> Tuple[Optional[str], bool]:
+        """发送前禁用词检查。
+
+        命中禁用词时，把具体命中的词拼进约束提示，让 AI 基于上一版（agno session
+        历史已含上一版回复）重新生成合规回复，最多重试 ``max_retry`` 次。
+        重试耗尽仍命中，返回 ``(None, True)`` 表示应走兜底回复。
+        """
+        from config import config as _cfg
+
+        banned = _cfg.get("banned_words", []) or []
+        if not banned:
+            return reply, False
+
+        max_retry = 2
+        current = reply
+        for _ in range(max_retry + 1):
+            hits = find_matches(banned, current)
+            if not hits:
+                return current, False
+            constraint = (
+                f"{query}" + chr(10) + f"[系统约束] 你上一条回复包含以下禁用词：{hits}。"
+                f"这些词严禁发送给客户。请重新生成一份不含这些词的合规回复，"
+                f"保持原意、话术风格与简洁度。"
+            )
+            regen = await self._get_ai_reply(constraint, context)
+            if not regen:
+                break
+            current = regen
+
+        if find_matches(banned, current):
+            self.logger.warning(f"禁用词重试{max_retry}次仍命中，走兜底回复: {find_matches(banned, current)}")
+            return None, True
+        return current, False
