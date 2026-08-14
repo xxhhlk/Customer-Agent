@@ -971,14 +971,28 @@ class KnowledgeUI(QWidget):
                 self._resize_timer.start(self.RESIZE_DEBOUNCE_DELAY)
 
     def clear_grid_layout(self) -> None:
-        """清空网格布局中的所有控件"""
+        """清空网格布局中的所有控件
+
+        清理时必须：
+        1. 停止淡出动画并清除 QGraphicsOpacityEffect（残留 effect 会导致
+           卡片绘制错位/重叠，刷新后消失正是因为重建了无 effect 的新卡片）
+        2. deleteLater 销毁被移除的 widget（避免幽灵控件泄漏）
+        3. activate() 立即重算布局几何（避免 stale 布局导致卡片错位）
+        """
         while self.gridLayout.count():
             item = self.gridLayout.takeAt(0)
             if item is None:
                 continue
             w = item.widget()
-            if w is not None:
+            if w is None:
+                continue
+            if isinstance(w, KnowledgeCard):
+                w._abort_fade_and_destroy()
+            else:
                 w.setParent(None)
+                w.deleteLater()
+        # 强制立即重算布局几何
+        self.gridLayout.activate()
 
     def populate_cards(self) -> None:
         """
@@ -1007,6 +1021,10 @@ class KnowledgeUI(QWidget):
                 return
 
             # knowledge_manager 已就绪，启动后台数据加载
+            # 防并发：若已有加载任务在运行，跳过本次（避免重复渲染/竞态）
+            if getattr(self, '_load_worker', None) and self._load_worker.isRunning():
+                logger.debug("数据加载任务已在运行，跳过重复加载")
+                return
             self._load_worker = LoadDataWorker(self.knowledge_manager)
             self._load_worker.finished.connect(self._on_data_loaded)
             self._load_worker.failed.connect(self._on_load_failed)
@@ -1426,6 +1444,10 @@ class KnowledgeUI(QWidget):
                 self._show_loading_indicator()
 
             # 启动后台加载
+            # 防并发：若已有加载任务在运行，跳过本次（避免重复渲染/竞态）
+            if getattr(self, '_load_worker', None) and self._load_worker.isRunning():
+                logger.debug("后台刷新任务已在运行，跳过重复刷新")
+                return
             self._load_worker = LoadDataWorker(self.knowledge_manager)
             self._load_worker.finished.connect(self._on_refresh_completed)
             self._load_worker.failed.connect(self._on_refresh_failed)

@@ -378,7 +378,7 @@ class KnowledgeCard(ElevatedCardWidget):
             self._fade_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
 
             # 动画完成后移除卡片
-            self._fade_animation.finished.connect(self._remove_from_layout)
+            self._fade_animation.finished.connect(self._on_fade_finished)
 
             # 启动动画
             self._fade_animation.start()
@@ -391,6 +391,18 @@ class KnowledgeCard(ElevatedCardWidget):
             logger.warning(f"淡出动画失败，直接移除: {e}")
             self._remove_from_layout()
 
+    def _on_fade_finished(self) -> None:
+        """淡出动画结束回调：先清除图形效果，再移除卡片
+
+        若不清除 QGraphicsOpacityEffect，Qt6 软件渲染下 effect 的
+        离屏合成缓存可能与网格布局几何错位，导致卡片绘制重叠。
+        """
+        try:
+            self.setGraphicsEffect(None)
+        except RuntimeError:
+            pass
+        self._remove_from_layout()
+
     def _remove_from_layout(self) -> None:
         """从布局中移除卡片"""
         try:
@@ -402,6 +414,27 @@ class KnowledgeCard(ElevatedCardWidget):
                 self.deleteLater()
         except Exception as e:
             logger.warning(f"从布局移除失败: {e}")
+
+    def _abort_fade_and_destroy(self) -> None:
+        """
+        中断淡出动画并销毁卡片
+
+        页面重建（刷新/翻页/搜索/删除失败恢复）清理网格布局时调用。
+        必须停止动画并清除 QGraphicsOpacityEffect，否则残留的
+        graphics effect 会让卡片绘制错位，与相邻卡片视觉重叠。
+        """
+        try:
+            if hasattr(self, '_fade_animation') and self._fade_animation is not None:
+                self._fade_animation.stop()
+                self._fade_animation = None
+        except RuntimeError:
+            pass
+        try:
+            self.setGraphicsEffect(None)
+        except RuntimeError:
+            pass
+        self.setParent(None)
+        self.deleteLater()
 
     def _execute_delete_background(self, parent_ui: QWidget, doc_id: str, doc_title: str) -> None:
         """
