@@ -37,8 +37,12 @@ class _TargetLoader(QThread):
                 nickname = (
                     c.get("buyer_nickname")
                     or c.get("nickname")
-                    or uid
+                    or ""
                 )
+                # 过滤角色名（历史脏数据可能把 "客服"/"AI客服" 当买家昵称）
+                if nickname in ("客服", "AI客服", "mall_cs", "user"):
+                    nickname = ""
+                nickname = nickname or uid
                 shop_name = c.get("shop_name", "")
                 msg_count = c.get("msg_count", 0)
                 result.append((uid, nickname, shop_name, msg_count))

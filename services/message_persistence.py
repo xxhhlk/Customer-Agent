@@ -162,11 +162,13 @@ class MessagePersistenceService:
 
             nickname = str(kwargs.nickname) if kwargs.nickname else ""
             # 对于客服消息 (outbound)，nickname 通常为空，从数据库查找该会话的买家昵称
+            # 注意：找不到时存空串而非 "客服"，否则当第一条消息是客服发出时，
+            # 会把 "客服" 误存为该会话的买家昵称（聊天标题/会话列表/转发列表会错误显示）
             if not nickname:
                 if direction == "outbound":
                     # 客服消息：查找同一会话买家消息的昵称
                     buyer_nick = self._get_buyer_nickname(shop_id, buyer_uid)
-                    nickname = buyer_nick or "客服"
+                    nickname = buyer_nick or ""
                 else:
                     # 买家消息：也没有昵称时用 from_uid 兜底
                     nickname = from_uid
@@ -376,7 +378,10 @@ class MessagePersistenceService:
             self._seen_msg_ids.add(msg_id)
 
             timestamp = datetime.now()
-            nickname = "客服" if reply_source in ("manual", "keyword", "fallback") else "AI客服"
+            # 出站消息不存发送者昵称：该字段会被聊天标题/会话列表当作"买家昵称"消费，
+            # 误存 "客服"/"AI客服" 会导致界面把角色名当买家昵称显示；
+            # 发送者身份由 direction + reply_source（气泡来源标签）表达，无需 nickname。
+            nickname = ""
             from_role = "mall_cs"
             to_role = "user"
 
@@ -478,7 +483,7 @@ class MessagePersistenceService:
                         FROM chat_message_records
                         WHERE direction = 'inbound'
                           AND nickname IS NOT NULL AND nickname != ''
-                          AND nickname != 'user' AND nickname != 'mall_cs'
+                          AND nickname NOT IN ('user', 'mall_cs', '客服', 'AI客服')
                     ) sub
                     WHERE rn = 1
                 ),
@@ -522,11 +527,15 @@ class MessagePersistenceService:
                     last_time = ts.isoformat()
                 else:
                     last_time = ""
+                # 兜底昵称过滤角色名（历史脏数据可能把 "客服"/"AI客服" 存进记录）
+                nick = row.nickname or ""
+                if nick in ("客服", "AI客服", "mall_cs", "user"):
+                    nick = ""
                 result.append({
                     "shop_id": row.shop_id,
                     "shop_name": row.shop_name_reliable or row.shop_name or row.shop_id,
                     "buyer_uid": row.buyer_uid,
-                    "nickname": row.buyer_nickname or row.nickname or row.buyer_uid,
+                    "nickname": row.buyer_nickname or nick or row.buyer_uid,
                     "last_content": row.content or "",
                     "last_time": last_time,
                     "last_direction": row.direction,

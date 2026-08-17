@@ -174,8 +174,12 @@ class ChatAreaPanel(QWidget):
         if messages:
             # 从首条消息提取 user_id
             self._current_user_id = messages[0].get("user_id", "")
-            nickname = messages[0].get("nickname", buyer_uid)
-            self.header_title.setText(nickname)
+            # 标题应显示买家昵称：首条消息可能是客服发出的（outbound），
+            # 其 nickname 为空或历史脏数据 "客服"/"AI客服"，需过滤后兜底 buyer_uid
+            nickname = messages[0].get("nickname") or ""
+            if nickname in ("客服", "AI客服", "mall_cs", "user"):
+                nickname = ""
+            self.header_title.setText(nickname or buyer_uid)
             self.header_detail.setText(f"({buyer_uid})")
 
             # 渲染气泡
