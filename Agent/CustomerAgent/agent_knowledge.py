@@ -319,15 +319,36 @@ class KnowledgeManager:
 
         return imported_count
 
-    async def _add_batch_content(self, batch: list[tuple[str, str, int]]) -> int:
+    @staticmethod
+    def _build_embed_text(title: Optional[str], content: str) -> str:
+        """
+        构造参与向量计算的文本：标题 + 正文。
+
+        标题参与向量能提升「用标题关键词检索」的召回率；
+        存储的 content 仍是原始内容，不受影响。
+        """
+        title = (title or "").strip()
+        if title:
+            return f"{title}\n{content}"
+        return content
+
+    async def _add_batch_content(
+        self,
+        batch: list[tuple[str, str, int]],
+        source: str = 'csv_import',
+        doc_type: str = 'csv',
+    ) -> int:
         """
         批量添加内容到知识库
 
         将一批 (title, content) 一次性 embed + 一次性 table.add，
         替代原来逐条调用 add_content_async 的方式。
+        向量计算时标题参与（_build_embed_text），存储的 content 保持原始。
 
         Args:
             batch: [(title, content, row_num), ...] 列表
+            source: metadata 来源标记（csv_import/manual_input/manual_edit）
+            doc_type: contents_db 的 type 字段
 
         Returns:
             成功写入的条数
@@ -353,7 +374,7 @@ class KnowledgeManager:
                     name=title,
                     meta_data={
                         'title': title,
-                        'source': 'csv_import',
+                        'source': source,
                         'filename': f"{title}.txt"
                     }
                 )
@@ -364,7 +385,8 @@ class KnowledgeManager:
             #    火山引擎 API 内部仍是逐个请求，但收集到一起后一次 table.add
             embedder = vector_db.embedder
             if embedder and hasattr(embedder, 'async_get_embeddings_batch_and_usage'):
-                doc_contents = [doc.content for doc in documents]
+                # 标题参与向量计算：embed 输入 = "标题\n正文"
+                doc_contents = [self._build_embed_text(doc.name, doc.content) for doc in documents]
                 embeddings, usages = await embedder.async_get_embeddings_batch_and_usage(doc_contents)
                 for j, doc in enumerate(documents):
                     if j < len(embeddings) and embeddings[j]:
@@ -374,10 +396,11 @@ class KnowledgeManager:
                         logger.warning(f"批量嵌入第 {j} 条失败，跳过")
                         doc.embedding = []
             else:
-                # 降级：逐个嵌入
+                # 降级：逐个嵌入（标题同样参与，与批量路径口径一致）
                 for doc in documents:
                     if not doc.embedding:
-                        await doc.async_embed(embedder=embedder)
+                        embed_text = self._build_embed_text(doc.name, doc.content)
+                        doc.embedding, doc.usage = await embedder.async_get_embedding_and_usage(embed_text)
 
             # 3. 过滤掉嵌入失败的文档
             valid_docs = [doc for doc in documents if doc.embedding]
@@ -436,7 +459,7 @@ class KnowledgeManager:
                             name=doc.name or "",
                             description="",
                             metadata=doc.meta_data,
-                            type="csv",
+                            type=doc_type,
                             size=len(doc.content.encode("utf-8")) if doc.content else 0,
                             linked_to=self.knowledge.name or "",
                             access_count=0,
@@ -609,19 +632,19 @@ class KnowledgeManager:
 
             logger.info(f"正在添加文本内容: {title}")
 
-            # 直接存储原始内容，metadata 中已有 title
-            await self.knowledge.add_content_async(
-                text_content=content,
-                metadata={
-                    'title': title,
-                    'source': 'manual_input',
-                    'filename': f"{title}.txt"
-                },
-                skip_if_exists=False
+            # 与 CSV 导入共用批量写入路径，保证标题参与向量计算的口径一致
+            # （agno 原生 add_content_async 的 upsert 会重新 embed 纯 content，标题不参与）
+            count = await self._add_batch_content(
+                [(title, content, 0)],
+                source='manual_input',
+                doc_type='manual',
             )
-
-            logger.info(f"成功添加文本内容: {title}")
-            return True
+            success = count > 0
+            if success:
+                logger.info(f"成功添加文本内容: {title}")
+            else:
+                logger.warning(f"添加文本内容失败: {title}")
+            return success
 
         except Exception as e:
             logger.error(f"添加文本内容失败 {title}: {str(e)}")
@@ -680,6 +703,14 @@ class KnowledgeManager:
                 )
                 # 设置 content_id（用于 payload 中的字段，agno 搜索时用）
                 doc.content_id = new_doc_id
+
+                # 预置 embedding（标题参与向量计算，与 CSV 导入口径一致）。
+                # LanceDbWithProgress.insert 检测到 doc.embedding 已有值会跳过重新 embed。
+                if self.knowledge.vector_db is not None:
+                    embedder = self.knowledge.vector_db.embedder
+                    if embedder:
+                        embed_text = self._build_embed_text(title, content)
+                        doc.embedding, doc.usage = await embedder.async_get_embedding_and_usage(embed_text)
 
                 # 调用 vector_db.insert 插入（会触发我们重写的 insert 方法）
                 if self.knowledge.vector_db is not None:

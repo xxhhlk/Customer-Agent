@@ -318,7 +318,6 @@ class CustomerAgent(Bot):
                     if not fallback_replies:
                         fallback_replies = ["亲，感谢您的咨询！客服正在为您处理，请稍等片刻。"]
 
-                    import random
                     reply_text = random.choice(fallback_replies)
                     return Reply(ReplyType.TEXT, reply_text)
         except Exception as e:
