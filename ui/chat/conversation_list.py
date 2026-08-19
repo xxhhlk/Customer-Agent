@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont
 from qfluentwidgets import (
-    StrongBodyLabel, CaptionLabel, BodyLabel, SearchLineEdit,
+    CaptionLabel, SearchLineEdit,
     isDarkTheme,
 )
 
@@ -35,6 +35,41 @@ class _ConversationLoader(QThread):
         except Exception:
             convs = []
         self.result.emit(convs)
+
+
+class ElideLabel(QLabel):
+    """宽度不足时自动省略号（…）的标签，用于会话列表缩窄场景
+
+    QLabel 默认 minimumSizeHint 是完整文本宽度，布局空间不足时会挤压其他
+    控件（时间标签被挤出）。本类配合 Ignored 水平策略可收缩到任意宽度，
+    并在 resizeEvent 中按当前宽度重新省略，保证长文本以省略号截断而非溢出。
+    """
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+
+    def setText(self, text: str):
+        self._full_text = text if text is not None else ""
+        self._update_elided()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elided()
+
+    def _update_elided(self):
+        if not self._full_text:
+            if self.text():
+                super().setText("")
+            return
+        w = self.width()
+        if w <= 0:
+            return
+        elided = self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideRight, w
+        )
+        if elided != self.text():
+            super().setText(elided)
 
 
 class ConversationCard(QFrame):
@@ -91,37 +126,47 @@ class ConversationCard(QFrame):
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
 
-        name_label = StrongBodyLabel(nickname)
+        # 昵称：可收缩 + 省略号（缩窄时优先让位，不能挤掉时间标签）
+        name_label = ElideLabel(nickname)
+        name_label.setFont(QFont("Microsoft YaHei", 13, QFont.Weight.DemiBold))
         name_label.setMaximumWidth(110)
+        name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._name_label = name_label
-        name_row.addWidget(name_label)
+        name_row.addWidget(name_label, 1)
 
-        # 店铺标签
+        # 店铺标签：可收缩 + 省略号
         shop_name = self.conv_data.get("shop_name", "")
-        shop_label = CaptionLabel(f"·{shop_name}" if shop_name else "")
+        shop_label = ElideLabel(f"·{shop_name}" if shop_name else "")
+        shop_label.setFont(QFont("Microsoft YaHei", 9))
         shop_label.setStyleSheet("color: #888;")
+        shop_label.setMaximumWidth(120)
+        shop_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._shop_label = shop_label
         name_row.addWidget(shop_label)
 
         name_row.addStretch()
 
         # 时间（微信风格：今天 HH:MM / 昨天 / 星期X / M月d日 / yyyy/M/d）
+        # Fixed 策略：始终完整显示，不参与压缩，缩窄时昵称/店铺先让位
         last_time = self.conv_data.get("last_time", "")
         dt = parse_dt(last_time)
         time_short = format_list_time(dt) if dt is not None else ""
         time_label = CaptionLabel(time_short)
         time_label.setStyleSheet("color: #999;")
+        time_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._time_label = time_label
         name_row.addWidget(time_label)
 
         info_layout.addLayout(name_row)
 
-        # 消息预览
+        # 消息预览：可收缩 + 省略号
         preview = self.conv_data.get("last_content", "")
         if len(preview) > 30:
             preview = preview[:28] + "..."
-        preview_label = CaptionLabel(preview)
+        preview_label = ElideLabel(preview)
+        preview_label.setFont(QFont("Microsoft YaHei", 9))
         preview_label.setStyleSheet("color: #999;")
+        preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._preview_label = preview_label
         info_layout.addWidget(preview_label)
 
