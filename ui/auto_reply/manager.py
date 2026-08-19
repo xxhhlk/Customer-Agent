@@ -22,9 +22,9 @@ class _StopAllWorker(QThread):
         for thread in self._threads:
             try:
                 if thread.isRunning():
-                    if not thread.wait(5000):
+                    if not thread.wait(3000):
                         timeout_names.append(thread.objectName() or str(thread))
-                        self.progress.emit(f"线程未在5秒内结束: {thread.objectName()}")
+                        self.progress.emit(f"线程未在3秒内结束: {thread.objectName()}")
                     else:
                         self.progress.emit(f"线程已正常结束: {thread.objectName()}")
             except Exception as e:
@@ -205,9 +205,10 @@ class AutoReplyManager(QObject):
         self._stop_worker.start()
 
         if blocking:
-            # 程序退出等场景需要同步等待
-            if not self._stop_worker.wait(10000):
-                self.logger.warning("stop_all 阻塞等待超时（10秒）")
+            # 程序退出等场景需要同步等待；上限 3 秒即放行，
+            # 避免多个线程串行超时把 closeEvent 拖到十几秒（进程退出时 OS 会清理残留连接）
+            if not self._stop_worker.wait(3000):
+                self.logger.warning("stop_all 阻塞等待超时（3秒）")
 
     def _on_stop_all_finished(self):
         """所有线程已正常结束"""

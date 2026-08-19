@@ -539,7 +539,9 @@ class MainWindow(FluentWindow):
 
     def closeEvent(self, a0: Optional["QCloseEvent"]) -> None:
         """ 重写窗口关闭事件，确保后台线程安全退出 """
-        
+        _t0 = time.perf_counter()
+        self.logger.info("closeEvent 开始：执行退出清理")
+
         # 停止主题监听器（Windows上darkdetect.listener是阻塞的，quit无效，需terminate）
         try:
             if hasattr(self, 'theme_listener') and self.theme_listener:
@@ -551,34 +553,41 @@ class MainWindow(FluentWindow):
                     self.theme_listener.wait(500)
         except Exception:
             pass
-        
+        self.logger.info(f"  [closeEvent] theme_listener 清理耗时: {time.perf_counter()-_t0:.3f}s")
+
         # 清理自动回复界面资源（内部会调用auto_reply_manager.stop_all()）
         try:
             if self.monitor_view:
                 self.monitor_view.cleanup()
         except Exception:
             pass
-        
+        self.logger.info(f"  [closeEvent] monitor_view.cleanup 耗时: {time.perf_counter()-_t0:.3f}s")
+
         # 清理知识库界面资源（停止所有Worker线程）
         try:
             if self.knowledge_view:
                 self.knowledge_view.cleanup()
         except Exception:
             pass
-        
+        self.logger.info(f"  [closeEvent] knowledge_view.cleanup 耗时: {time.perf_counter()-_t0:.3f}s")
+
         # 清理聊天记录界面资源（断开消息信号）
         try:
             if self.chat_view:
                 self.chat_view.cleanup()
         except Exception:
             pass
-        
+        self.logger.info(f"  [closeEvent] chat_view.cleanup 耗时: {time.perf_counter()-_t0:.3f}s")
+
         # 清理账号管理界面资源（停止LoginThread等线程）
         try:
             if self.user_manager_view:
                 self.user_manager_view.cleanup()
         except Exception:
             pass
+        self.logger.info(f"  [closeEvent] user_manager_view.cleanup 耗时: {time.perf_counter()-_t0:.3f}s")
+
+        self.logger.info(f"closeEvent 清理完成，总耗时: {time.perf_counter()-_t0:.3f}s")
 
         if a0 is not None:
             super().closeEvent(a0)

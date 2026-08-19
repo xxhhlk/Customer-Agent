@@ -305,7 +305,7 @@ class AutoReplyCard(CardWidget):
         try:
             if hasattr(self, 'logo_loader_thread') and self.logo_loader_thread and self.logo_loader_thread.isRunning():
                 self.logo_loader_thread.requestInterruption()
-                self.logo_loader_thread.wait(3000)
+                self.logo_loader_thread.wait(1000)
         except Exception as e:
             get_logger().error(f"清理账号卡片资源失败: {e}")
 
