@@ -73,6 +73,21 @@ class LLMConfigCard(CardWidget):
         )
         form_layout.addRow("深度思考:", self.thinking_combo)
 
+        # 思考强度（reasoning_effort）
+        self.effort_combo = ComboBox()
+        self.effort_combo.addItems(["自动", "关闭思考", "低", "中", "高", "最高"])
+        self.effort_combo.setCurrentIndex(0)  # 默认自动
+        self.effort_combo.setToolTip(
+            "思考强度（reasoning_effort）配置：\n"
+            "• 自动：不传该参数，由模型使用默认思考强度\n"
+            "• 关闭思考：直接回答，速度最快\n"
+            "• 低 / 中 / 高：调节思维链长度，平衡效果与速度\n"
+            "• 最高：最强推理，适合高难度问题，耗时最长\n"
+            "注意：仅支持该参数的模型生效（doubao-seed 2.x/1.8、deepseek-v4、glm-5-2 等），\n"
+            "不支持的模型会自动忽略此设置，不影响正常回复。"
+        )
+        form_layout.addRow("思考强度:", self.effort_combo)
+
         layout.addLayout(form_layout)
 
         # 说明文本
@@ -89,13 +104,18 @@ class LLMConfigCard(CardWidget):
         thinking_map = {0: "disabled", 1: "auto", 2: "enabled"}
         thinking_type = thinking_map.get(self.thinking_combo.currentIndex(), "disabled")
 
+        # 映射下拉框索引到 reasoning_effort（自动 -> 空字符串，不传该参数）
+        effort_map = {0: "", 1: "minimal", 2: "low", 3: "medium", 4: "high", 5: "max"}
+        reasoning_effort = effort_map.get(self.effort_combo.currentIndex(), "")
+
         return {
             "api_base": self.api_base_edit.text().strip() or "https://ark.cn-beijing.volces.com/api/v3",
             "api_key": self.api_key_edit.text().strip(),
             "model_name": self.model_name_edit.text().strip(),
             "thinking": {
                 "type": thinking_type
-            }
+            },
+            "reasoning_effort": reasoning_effort
         }
 
     def setConfig(self, config: dict):
@@ -109,6 +129,11 @@ class LLMConfigCard(CardWidget):
         thinking_type = thinking_config.get("type", "disabled")
         thinking_map = {"disabled": 0, "auto": 1, "enabled": 2}
         self.thinking_combo.setCurrentIndex(thinking_map.get(thinking_type, 0))
+
+        # 设置思考强度
+        reasoning_effort = config.get("reasoning_effort", "")
+        effort_map = {"": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4, "max": 5}
+        self.effort_combo.setCurrentIndex(effort_map.get(reasoning_effort, 0))
 
 
 class EmbedderConfigCard(CardWidget):

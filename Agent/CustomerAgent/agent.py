@@ -170,6 +170,40 @@ def _patch_agno_async_db():
     AgentSession.upsert_run = _patched_upsert_run
 
 
+# ---------------------------------------------------------------------------
+# reasoning_effort（思考强度）模型兼容判断
+#
+# 火山方舟 Chat API 的 reasoning_effort 字段并非所有模型都支持：
+# 支持的模型（doubao-seed 2.x / 1.8、deepseek-v4、glm-5-2、doubao-seed-1-6-251015 等）
+# 接受全部 7 档取值（none/minimal/low/medium/high/xhigh/max），服务端自动映射；
+# 不支持的模型（如 doubao-seed-1-6-flash-*、doubao-seed-1-6-vision-*、glm-4-7 等）
+# 传入未知字段可能报错。因此只在确认支持的模型上透传该参数，其余模型自动忽略，
+# 保证"各种模型都能正常回复"。
+# ---------------------------------------------------------------------------
+_REASONING_EFFORT_MODEL_PREFIXES = (
+    "doubao-seed-2-0-",   # 2.0 全系（lite/mini/pro/code-preview 各版本）均支持
+    "doubao-seed-2-1-",   # 2.1 全系（pro/turbo）均支持
+    "doubao-seed-1-8-",   # 1.8 全系支持，后续版本大概率继续支持
+    "deepseek-v4-",       # v4 全系（pro/flash 各版本）均支持
+)
+_REASONING_EFFORT_MODEL_EXACT = {
+    "doubao-seed-evolving",
+    "doubao-seed-1-6-251015",   # 注意：doubao-seed-1-6-250615 / -flash-* / -vision-* 不支持，必须精确匹配
+    "doubao-seed-character-260628",
+    "glm-5-2-260617",           # glm-4-7 不支持，不能按 glm- 前缀匹配
+}
+
+
+def _model_supports_reasoning_effort(model_name: str) -> bool:
+    """判断模型是否支持 reasoning_effort（思考强度）参数，不支持的模型不传该字段"""
+    if not model_name:
+        return False
+    name = model_name.strip().lower()
+    if name in _REASONING_EFFORT_MODEL_EXACT:
+        return True
+    return any(name.startswith(prefix) for prefix in _REASONING_EFFORT_MODEL_PREFIXES)
+
+
 class CustomerAgent(Bot):
     knowledge_manager: Optional['KnowledgeManager']
 
@@ -231,15 +265,20 @@ class CustomerAgent(Bot):
                 instructions = get_config("prompt.instructions", [])
                 additional_context = get_config("prompt.additional_context", "")
                 thinking_config = get_config("llm.thinking", None)
+                reasoning_effort = get_config("llm.reasoning_effort", "") or ""
 
                 # 验证必要配置
                 if not api_key:
                     raise ValueError("LLM API密钥未配置")
 
-                # 构建 extra_body 参数（用于火山引擎 thinking 配置）
-                extra_body = None
+                # 构建 extra_body 参数（火山引擎 thinking / reasoning_effort 配置）
+                # 思考强度仅对支持的模型透传，避免不支持的模型因未知参数报错
+                extra_body = {}
                 if thinking_config:
-                    extra_body = {"thinking": thinking_config}
+                    extra_body["thinking"] = thinking_config
+                if reasoning_effort and _model_supports_reasoning_effort(model_name):
+                    extra_body["reasoning_effort"] = reasoning_effort
+                extra_body = extra_body or None
 
                 # 创建Agent实例
                 self._agent = Agent(

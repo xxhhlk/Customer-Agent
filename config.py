@@ -113,7 +113,8 @@ config_base = {
     "llm": {
         "model_name": "",
         "api_key": "",
-        "api_base": ""
+        "api_base": "",
+        "reasoning_effort": ""
     },
     "embedder": {
         "model_name": "",
