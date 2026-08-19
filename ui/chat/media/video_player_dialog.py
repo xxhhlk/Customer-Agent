@@ -2,8 +2,8 @@
 视频播放器对话框
 
 - 先下载视频到本地 temp/media_cache/ 再播放
-- 使用 StandardMediaPlayBar（固定底栏）+ QVideoWidget（画面渲染）
-- 支持另存为
+- 使用 StandardMediaPlayBar（固定底栏）+ QGraphicsVideoItem（画面渲染，支持旋转）
+- 支持旋转 (左旋/右旋)、另存为
 - ESC 关闭
 - 下载进度提示
 """
@@ -13,10 +13,10 @@ import os
 from typing import Optional
 
 import requests
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRectF
+from PyQt6.QtGui import QKeyEvent, QColor, QPainter
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget
+from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -25,6 +25,8 @@ from PyQt6.QtWidgets import (
     QLabel,
     QFileDialog,
     QProgressBar,
+    QGraphicsView,
+    QGraphicsScene,
 )
 from qfluentwidgets import isDarkTheme
 from qfluentwidgets.multimedia import StandardMediaPlayBar
@@ -93,6 +95,7 @@ class VideoPlayerDialog(QDialog):
         self._url = url
         self._local_path: Optional[str] = None
         self._download_worker: Optional[VideoDownloadWorker] = None
+        self._rotation = 0  # 0/90/180/270
 
         self._init_ui()
         self._start_download()
@@ -123,17 +126,22 @@ class VideoPlayerDialog(QDialog):
         self._status_container.addLayout(self._status_layout)
         layout.addLayout(self._status_container)
 
-        # 视频画面区域（下载完成后才显示）
-        self._video_widget = QVideoWidget(self)
-        self._video_widget.hide()
-        layout.addWidget(self._video_widget, 1)  # stretch=1，占满剩余空间
+        # 视频画面区域（下载完成后才显示）— QGraphicsView 承载 QGraphicsVideoItem，支持旋转
+        self._view = QGraphicsView(self)
+        self._view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        self._scene = QGraphicsScene(self)
+        self._view.setScene(self._scene)
+        self._video_item = QGraphicsVideoItem()
+        self._scene.addItem(self._video_item)
+        self._view.hide()
+        layout.addWidget(self._view, 1)  # stretch=1，占满剩余空间
 
         # 固定底栏：播放控制条
         self._play_bar = StandardMediaPlayBar(self)
         self._play_bar.hide()
         layout.addWidget(self._play_bar, 0)  # stretch=0，固定高度
 
-        # 底部工具栏（URL + 另存为 + 关闭）
+        # 底部工具栏（URL + 旋转 + 另存为 + 关闭）
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(8, 4, 8, 6)
         toolbar.setSpacing(6)
@@ -142,6 +150,16 @@ class VideoPlayerDialog(QDialog):
         self._url_label.setMaximumWidth(400)
         toolbar.addWidget(self._url_label)
         toolbar.addStretch()
+
+        self._rotate_left_btn = QPushButton("左旋")
+        self._rotate_left_btn.setEnabled(False)
+        self._rotate_left_btn.clicked.connect(lambda: self._rotate(-90))
+        toolbar.addWidget(self._rotate_left_btn)
+
+        self._rotate_right_btn = QPushButton("右旋")
+        self._rotate_right_btn.setEnabled(False)
+        self._rotate_right_btn.clicked.connect(lambda: self._rotate(90))
+        toolbar.addWidget(self._rotate_right_btn)
 
         btn_save = QPushButton("另存为...")
         btn_save.clicked.connect(self._save_as)
@@ -189,26 +207,46 @@ class VideoPlayerDialog(QDialog):
         self._progress_bar.hide()
 
         # 显示视频画面和播放控制条
-        self._video_widget.show()
+        self._view.show()
         self._play_bar.show()
         self._play_local(local_path)
 
     def _play_local(self, local_path: str):
         """播放本地视频文件"""
         url = QUrl.fromLocalFile(local_path)
-        # 使用 play_bar 内置的 MediaPlayer，绑定视频输出到 QVideoWidget
-        self._play_bar.player.setVideoOutput(self._video_widget)
+        # 使用 play_bar 内置的 MediaPlayer，绑定视频输出到 QGraphicsVideoItem
+        self._play_bar.player.setVideoOutput(self._video_item)
         self._play_bar.player.setSource(url)
         self._play_bar.play()
+        self._on_playback_started()
 
     def _play_url(self, url: str):
         """直接用网络 URL 播放"""
-        self._video_widget.show()
+        self._view.show()
         self._play_bar.show()
         qurl = QUrl(url)
-        self._play_bar.player.setVideoOutput(self._video_widget)
+        self._play_bar.player.setVideoOutput(self._video_item)
         self._play_bar.player.setSource(qurl)
         self._play_bar.play()
+        self._on_playback_started()
+
+    def _on_playback_started(self):
+        """播放开始时启用旋转按钮并适配窗口"""
+        self._rotate_left_btn.setEnabled(True)
+        self._rotate_right_btn.setEnabled(True)
+        self._fit_video()
+
+    def _rotate(self, delta: int):
+        """旋转视频（-90 左旋 / +90 右旋），旋转后自动适配窗口"""
+        self._rotation = (self._rotation + delta) % 360
+        self._video_item.setRotation(self._rotation)
+        self._fit_video()
+
+    def _fit_video(self):
+        """将视频适配到视图，考虑旋转后的包围盒"""
+        rect = self._scene.itemsBoundingRect()
+        if rect.isValid() and not rect.isEmpty():
+            self._view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _save_as(self):
         """另存视频到用户指定路径"""
@@ -279,3 +317,4 @@ class VideoPlayerDialog(QDialog):
         bg = "#1e1e1e" if dark else "#f5f5f5"
         fg = "#e0e0e0" if dark else "#333333"
         self.setStyleSheet(f"background-color: {bg}; color: {fg};")
+        self._view.setBackgroundBrush(QColor(bg))

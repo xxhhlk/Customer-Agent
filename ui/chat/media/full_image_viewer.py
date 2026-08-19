@@ -4,7 +4,8 @@
 功能:
 - 滚轮缩放 (Ctrl+滚轮)
 - 鼠标拖拽
-- 工具栏: 放大/缩小/适应窗口/实际大小/另存为/关闭
+- 旋转 (左旋/右旋)
+- 工具栏: 放大/缩小/适应窗口/实际大小/左旋/右旋/另存为/关闭
 - 异步加载原图
 - ESC 关闭
 """
@@ -34,6 +35,7 @@ class FullImageViewer(QDialog):
         self._pixmap: QPixmap = QPixmap()
         self._pixmap_item: QGraphicsPixmapItem | None = None
         self._zoom = 1.0
+        self._rotation = 0  # 0/90/180/270
 
         self._init_ui()
         self._load_full_image()
@@ -70,6 +72,14 @@ class FullImageViewer(QDialog):
         btn_actual = QPushButton("实际大小")
         btn_actual.clicked.connect(self._actual_size)
         toolbar.addWidget(btn_actual)
+
+        btn_rotate_left = QPushButton("左旋")
+        btn_rotate_left.clicked.connect(lambda: self._rotate(-90))
+        toolbar.addWidget(btn_rotate_left)
+
+        btn_rotate_right = QPushButton("右旋")
+        btn_rotate_right.clicked.connect(lambda: self._rotate(90))
+        toolbar.addWidget(btn_rotate_right)
 
         btn_save = QPushButton("另存为...")
         btn_save.clicked.connect(self._save_as)
@@ -118,9 +128,7 @@ class FullImageViewer(QDialog):
         self._scene.addItem(self._pixmap_item)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
 
-        self._status_label.setText(
-            f"{pixmap.width()}x{pixmap.height()} | {self._url[-40:]}"
-        )
+        self._update_status()
         self._fit_to_window()
 
     def _on_load_failed(self, url: str):
@@ -150,10 +158,33 @@ class FullImageViewer(QDialog):
         self._zoom /= 1.2
         self._view.scale(1 / 1.2, 1 / 1.2)
 
+    def _rotate(self, delta: int):
+        """旋转图片（-90 左旋 / +90 右旋），旋转后自动适配窗口"""
+        if not self._pixmap_item:
+            return
+        self._rotation = (self._rotation + delta) % 360
+        self._pixmap_item.setRotation(self._rotation)
+        # 旋转后包围盒变化，更新场景范围再适配窗口
+        self._scene.setSceneRect(self._scene.itemsBoundingRect())
+        self._fit_to_window()
+        self._update_status()
+
+    def _update_status(self):
+        """刷新状态栏（含旋转角度）"""
+        if self._pixmap.isNull():
+            return
+        rot_text = f" | 旋转 {self._rotation}°" if self._rotation else ""
+        self._status_label.setText(
+            f"{self._pixmap.width()}x{self._pixmap.height()}{rot_text} | {self._url[-40:]}"
+        )
+
     def _fit_to_window(self):
         if not self._pixmap or self._pixmap.isNull():
             return
-        self._view.fitInView(QRectF(self._pixmap.rect()), Qt.AspectRatioMode.KeepAspectRatio)
+        # 用 itemsBoundingRect（含旋转后的变换范围）
+        self._view.fitInView(
+            self._scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio
+        )
         self._zoom = 1.0
 
     def _actual_size(self):
