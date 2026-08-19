@@ -12,6 +12,8 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
+from utils.time_format import format_list_time, parse_dt
+
 # 分批创建卡片的配置：避免一次创建 80+ 个 CardWidget 导致内存峰值/ntdll 堆崩溃
 _CARD_BATCH_SIZE = 15      # 每批创建的卡片数
 _CARD_BATCH_INTERVAL = 30  # 批次间隔 ms（给事件循环喘息时间）
@@ -103,25 +105,10 @@ class ConversationCard(QFrame):
 
         name_row.addStretch()
 
-        # 时间
+        # 时间（微信风格：今天 HH:MM / 昨天 / 星期X / M月d日 / yyyy/M/d）
         last_time = self.conv_data.get("last_time", "")
-        time_short = ""
-        if last_time:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(last_time)
-                now = datetime.now()
-                diff = now - dt
-                if diff.days == 0:
-                    time_short = dt.strftime("%H:%M")
-                elif diff.days == 1:
-                    time_short = "昨天"
-                elif diff.days < 7:
-                    time_short = dt.strftime("周%a").replace("Mon", "一").replace("Tue", "二").replace("Wed", "三").replace("Thu", "四").replace("Fri", "五").replace("Sat", "六").replace("Sun", "日")
-                else:
-                    time_short = dt.strftime("%m-%d")
-            except (ValueError, TypeError):
-                time_short = ""
+        dt = parse_dt(last_time)
+        time_short = format_list_time(dt) if dt is not None else ""
         time_label = CaptionLabel(time_short)
         time_label.setStyleSheet("color: #999;")
         self._time_label = time_label
@@ -169,7 +156,8 @@ class ConversationCard(QFrame):
         if len(content) > 30:
             content = content[:28] + "..."
         self._preview_label.setText(content)
-        self._time_label.setText(conv_data.get("last_time", "")[-8:-3] or "")
+        dt = parse_dt(conv_data.get("last_time", ""))
+        self._time_label.setText(format_list_time(dt) if dt is not None else "")
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:
@@ -306,12 +294,9 @@ class ConversationListPanel(QWidget):
                 if not current_name or current_name in ("mall_cs", "user", "?"):
                     existing_card._name_label.setText(nickname)
             if timestamp:
-                try:
-                    from datetime import datetime
-                    dt = datetime.fromisoformat(timestamp)
-                    existing_card._time_label.setText(dt.strftime("%H:%M"))
-                except (ValueError, TypeError):
-                    pass
+                dt = parse_dt(timestamp)
+                if dt is not None:
+                    existing_card._time_label.setText(format_list_time(dt))
             # 将该卡片移到列表顶部
             idx = self._card_layout.indexOf(existing_card)
             if idx > 0:

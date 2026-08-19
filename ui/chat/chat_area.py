@@ -2,6 +2,7 @@
 聊天区域面板 - 消息气泡区 + 输入区
 """
 
+from datetime import datetime
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent, QThread
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QFrame, QScrollArea,
@@ -13,8 +14,28 @@ from ui.chat.message_bubble import MessageBubble
 from ui.chat.input_area import InputArea
 from ui.chat.forward_dialog import ForwardDialog
 from utils.logger_loguru import get_logger
+from utils.time_format import format_day_label, format_time_label, needs_time_separator, parse_dt
 
 logger = get_logger("ChatArea")
+
+
+class TimeSeparator(QLabel):
+    """居中时间/日期分隔标签（微信风格）：跨天插日期，同天间隔超阈值插时间"""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        dark = isDarkTheme()
+        bg = "rgba(255,255,255,0.14)" if dark else "rgba(0,0,0,0.06)"
+        fg = "#b0b0b0" if dark else "#8f8f8f"
+        self.setStyleSheet(f"""
+            color: {fg};
+            background-color: {bg};
+            border-radius: 7px;
+            padding: 2px 10px;
+            font-size: 11px;
+        """)
 
 
 class _MessageLoader(QThread):
@@ -56,6 +77,7 @@ class ChatAreaPanel(QWidget):
         self._load_token: int = 0  # 每次加载递增，用于区分过期回调
         self._user_scrolled_up: bool = False  # 用户是否手动向上滚动（浏览历史）
         self._scroll_fallback_timer: QTimer | None = None  # 兜底定时器（1.5s后强制滚动）
+        self._last_msg_time: datetime | None = None  # 上一条消息时间，用于插入时间/日期分隔标签
 
         self._init_ui()
         self._apply_theme()
@@ -141,6 +163,7 @@ class ChatAreaPanel(QWidget):
         # 切换会话时重置滚动状态
         self._user_scrolled_up = False
         self._cancel_scroll_retry()
+        self._last_msg_time = None  # 重置时间分隔状态
 
         # 清空旧消息
         self._clear_messages()
@@ -185,6 +208,7 @@ class ChatAreaPanel(QWidget):
             # 渲染气泡
             logger.info("[ChatArea] _on_messages_loaded: 开始渲染气泡")
             for msg in messages:
+                self._add_time_separator_if_needed(msg)
                 bubble = MessageBubble(msg)
                 self._connect_bubble_signal(bubble)
                 self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
@@ -211,6 +235,7 @@ class ChatAreaPanel(QWidget):
         if shop_id != self._current_shop_id or buyer_uid != self._current_buyer_uid:
             return
 
+        self._add_time_separator_if_needed(msg_data)
         bubble = MessageBubble(msg_data)
         self._connect_bubble_signal(bubble)
         self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
@@ -218,6 +243,24 @@ class ChatAreaPanel(QWidget):
         # 智能滚动：用户在浏览历史时不强制拉回，否则滚到底部
         if not self._user_scrolled_up:
             self._schedule_scroll_to_bottom(self._load_token)
+
+    def _add_time_separator_if_needed(self, msg_data: dict):
+        """微信风格时间分隔：首条/跨天插日期标签，同一天间隔超阈值插时间标签"""
+        dt = parse_dt(msg_data.get("timestamp", ""))
+        if dt is None:
+            return
+        prev_dt = self._last_msg_time
+        self._last_msg_time = dt
+        if not needs_time_separator(prev_dt, dt):
+            return
+        if prev_dt is None or prev_dt.date() != dt.date():
+            text = format_day_label(dt)
+        else:
+            text = format_time_label(dt)
+        sep = TimeSeparator(text)
+        self._msg_layout.insertWidget(
+            self._msg_layout.count() - 1, sep, alignment=Qt.AlignmentFlag.AlignHCenter
+        )
 
     def _clear_messages(self):
         """清空消息气泡"""
