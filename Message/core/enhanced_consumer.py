@@ -658,9 +658,11 @@ class EnhancedMessageConsumer:
                     )
 
                     if ai_task in done:
-                        # 【新增】pass_to_ai 场景：AI 完成时同样检查人工是否已介入
-                        if from_uid != "unknown" and self.staff_reply_manager.is_in_cooldown(from_uid):
-                            self.logger.info(f"pass_to_ai AI完成但人工已介入，丢弃结果: {from_uid}")
+                        # 【修复】pass_to_ai 场景：AI 完成时改为检查本轮等待事件是否被人工回复
+                        # 原 is_in_cooldown 是用户级全局冷却（最后人工回复时间戳），会把上一条消息的
+                        # 人工回复误判为本条消息已介入，导致 AI 在冷却期末端完成时被误杀丢弃
+                        if staff_reply_task.done() and not staff_reply_task.cancelled() and staff_reply_task.result():
+                            self.logger.info(f"pass_to_ai AI完成但人工已回复，丢弃结果: {from_uid}")
                             staff_reply_task.cancel()
                             try:
                                 await staff_reply_task
@@ -717,9 +719,12 @@ class EnhancedMessageConsumer:
 
                 if ai_task in done:
                     # AI完成
-                    # 【新增】AI 完成时先检查人工是否已介入（冷却期内说明人工刚回复过）
-                    if from_uid and self.staff_reply_manager.is_in_cooldown(from_uid):
-                        self.logger.info(f"AI完成时人工已介入，丢弃AI结果和队列消息: {from_uid}")
+                    # 【修复】AI 完成时改为检查本轮等待事件是否被人工回复
+                    # 原 is_in_cooldown 是用户级全局冷却，会把上一条消息的人工回复误判为本条消息
+                    # 已介入：如 AI 生成耗时恰跨过上一条人工回复的 60s 冷却期末端（剩 0.5s），
+                    # 结果被误杀丢弃、队列消息一并丢失，买家收不到回复（2026-08-21 生产事故）
+                    if staff_reply_task.done() and not staff_reply_task.cancelled() and staff_reply_task.result():
+                        self.logger.info(f"AI完成时人工已回复，丢弃AI结果和队列消息: {from_uid}")
                         queue_task.cancel()
                         try:
                             await queue_task
@@ -736,9 +741,9 @@ class EnhancedMessageConsumer:
                         try:
                             pending_msg = queue_task.result()
                             if pending_msg is not None:
-                                # 【新增】放回前再次检查冷却期
-                                if from_uid and self.staff_reply_manager.is_in_cooldown(from_uid):
-                                    self.logger.info(f"人工已介入，丢弃待处理队列消息: {from_uid}")
+                                # 【修复】放回前改为检查本轮等待事件是否被人工回复（同上，避免用户级冷却误杀）
+                                if staff_reply_task.done() and not staff_reply_task.cancelled() and staff_reply_task.result():
+                                    self.logger.info(f"人工已回复，丢弃待处理队列消息: {from_uid}")
                                     staff_reply_task.cancel()
                                     try:
                                         await staff_reply_task
