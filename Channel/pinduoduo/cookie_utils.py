@@ -93,28 +93,68 @@ def check_cookies_valid(
 
 
 class ReloginGuard:
-    """按账户的并发重登互斥锁 + 冷却期，防止多个请求同时触发重登"""
+    """按账户的并发重登互斥锁 + 冷却期，防止多个请求同时触发重登
+
+    同时维护每个账户的连续失败计数：自动重登连续失败达到上限后
+    （默认 3 次，可由 config.json 的 relogin.max_auto_failures 配置），
+    停止自动重登并等待人工处理（try_acquire 直接拒绝）。
+    """
 
     def __init__(self, cooldown_seconds: float = 60.0):
         self._lock = threading.Lock()
         self._account_locks: Dict[str, threading.Lock] = {}
         self._last_relogin: Dict[str, float] = {}
+        self._failures: Dict[str, int] = {}
         self._cooldown = cooldown_seconds
 
     @staticmethod
     def _make_key(channel_name: str, shop_id: str, user_id: str) -> str:
         return f"{channel_name}:{shop_id}:{user_id}"
 
+    def _max_failures(self) -> int:
+        """连续失败上限（动态读配置，支持热更新）"""
+        try:
+            from config import config as _config
+            return int(_config.get("relogin.max_auto_failures", 3))
+        except Exception:
+            return 3
+
+    def failure_count(self, channel_name: str, shop_id: str, user_id: str) -> int:
+        """当前连续失败次数"""
+        key = self._make_key(channel_name, shop_id, user_id)
+        with self._lock:
+            return self._failures.get(key, 0)
+
+    def reset(self, channel_name: str, shop_id: str, user_id: str):
+        """清零连续失败计数（人工处理/重启账号后调用，恢复自动重登机会）"""
+        key = self._make_key(channel_name, shop_id, user_id)
+        with self._lock:
+            self._failures.pop(key, None)
+
+    def reset_all(self):
+        """清零所有账户的失败计数"""
+        with self._lock:
+            self._failures.clear()
+
     def try_acquire(self, channel_name: str, shop_id: str, user_id: str) -> bool:
         """
         尝试获取重登权。
 
         若其他线程正在重登，或冷却期内刚完成重登，返回 False。
+        若连续失败已达上限（等待人工处理），返回 False，不再自动重登。
         否则获取锁并返回 True。
         """
         key = self._make_key(channel_name, shop_id, user_id)
 
         with self._lock:
+            # 连续失败达上限 → 转入等待人工处理，不再自动重登
+            if self._failures.get(key, 0) >= self._max_failures():
+                logger.warning(
+                    f"自动重登连续失败 {self._failures[key]} 次，已达上限，"
+                    f"停止自动重登等待人工处理: {key}"
+                )
+                return False
+
             last_time = self._last_relogin.get(key, 0)
             if time.time() - last_time < self._cooldown:
                 return False
@@ -126,11 +166,21 @@ class ReloginGuard:
         return acct_lock.acquire(blocking=False)
 
     def release(self, channel_name: str, shop_id: str, user_id: str, success: bool = False):
-        """释放锁，成功时记录时间戳用于冷却期"""
+        """释放锁；成功时记录时间戳用于冷却期并清零失败计数，失败时累加失败计数"""
         key = self._make_key(channel_name, shop_id, user_id)
 
         with self._lock:
             acct_lock = self._account_locks.get(key)
+            if success:
+                self._failures.pop(key, None)
+            else:
+                new_count = self._failures.get(key, 0) + 1
+                self._failures[key] = new_count
+                if new_count >= self._max_failures():
+                    logger.error(
+                        f"自动重登连续失败 {new_count} 次，"
+                        f"已达上限，转入等待人工处理: {key}"
+                    )
 
         if acct_lock:
             try:

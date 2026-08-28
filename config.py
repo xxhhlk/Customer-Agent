@@ -62,6 +62,10 @@ class RateLimitConfig(BaseModel):
     max_requests: int = Field(default=100, description="窗口内最大请求数")
     fallback_reply: List[str] = Field(default_factory=list, description="兜底回复列表")
 
+class ReloginConfig(BaseModel):
+    """自动重登配置模型"""
+    max_auto_failures: int = Field(default=3, description="自动重登连续失败上限，超过后停止自动重登等待人工处理", ge=1, le=20)
+
 class PromptConfig(BaseModel):
     """提示词配置模型"""
     description: str = Field(default="", description="角色描述")
@@ -95,6 +99,10 @@ class ConfigModel(BaseModel):
     rate_limit: RateLimitConfig = Field(
         default_factory=RateLimitConfig,
         description="限流配置"
+    )
+    relogin: ReloginConfig = Field(
+        default_factory=ReloginConfig,
+        description="自动重登配置"
     )
     banned_words: List[str] = Field(
         default_factory=list,
@@ -130,6 +138,9 @@ config_base = {
         "window_hours": 4,
         "max_requests": 10,
         "fallback_reply": []
+    },
+    "relogin": {
+        "max_auto_failures": 3
     },
     "banned_words": [],
     "staff_reply_wait": {

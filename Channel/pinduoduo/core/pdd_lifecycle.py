@@ -240,7 +240,7 @@ class LifecycleMixin:
                 if self.heartbeat_config.enable_cookie_health_check:
                     connection_key = f"{shop_id}_{user_id}"
                     health_task = asyncio.create_task(
-                        self._cookie_health_loop(shop_id, user_id, username)
+                        self._cookie_health_loop(shop_id, user_id, username, on_failure)
                     )
                     self._health_tasks[connection_key] = health_task
                     self.logger.debug(f"Cookie 健康检查已启动: {shop_id}-{username}")
@@ -447,12 +447,17 @@ class LifecycleMixin:
                 del self._heartbeat_tasks[connection_key]
             self.logger.debug(f"心跳循环已结束: {shop_id}-{username}")
 
-    async def _cookie_health_loop(self, shop_id: str, user_id: str, username: str):
-        """Cookie 健康检查循环，定期验证 cookie 有效性并主动刷新"""
-        from Channel.pinduoduo.cookie_utils import check_cookies_valid, perform_relogin
+    async def _cookie_health_loop(self, shop_id: str, user_id: str, username: str, on_failure=None):
+        """Cookie 健康检查循环，定期验证 cookie 有效性并主动刷新
+
+        自动重登连续失败达上限后停止自动重登（relogin_guard 拦截），
+        置 ERROR 状态并回调 on_failure 通知 UI 等待人工处理（仅首次触发一次）。
+        """
+        from Channel.pinduoduo.cookie_utils import check_cookies_valid, perform_relogin, relogin_guard
         from Channel.pinduoduo.cookie_cache import cookie_cache
 
         connection_key = f"{shop_id}_{user_id}"
+        notified_manual = False  # 防止达上限后每轮重复通知
 
         try:
             while not (self._stop_event and self._stop_event.is_set()) and not self._threading_stop_event.is_set():
@@ -503,8 +508,28 @@ class LifecycleMixin:
                         )
                         if success:
                             self.logger.info(f"主动重登成功: {shop_id}-{username}")
+                            notified_manual = False  # 重登成功，后续再失败可重新通知
                         else:
                             self.logger.error(f"主动重登失败: {shop_id}-{username}")
+                            # 自动重登连续失败达上限 → 停止自动重登，等待人工处理
+                            max_failures = relogin_guard._max_failures()
+                            failures = relogin_guard.failure_count("pinduoduo", shop_id, user_id)
+                            if failures >= max_failures and not notified_manual:
+                                notified_manual = True
+                                error_msg = (
+                                    f"登录过期，自动重登连续失败 {failures} 次，"
+                                    f"等待人工处理: {username}"
+                                )
+                                self.logger.error(error_msg)
+                                self.status_manager.update_status(
+                                    shop_id, user_id, username,
+                                    ConnectionState.ERROR, error_msg
+                                )
+                                if on_failure:
+                                    try:
+                                        on_failure(error_msg)
+                                    except Exception as e:
+                                        self.logger.warning(f"通知连接失败回调异常: {e}")
                 else:
                     self.logger.info(f"Cookie 健康检查通过: {shop_id}-{username}")
 

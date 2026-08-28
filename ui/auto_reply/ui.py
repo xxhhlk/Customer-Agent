@@ -405,9 +405,18 @@ class AutoReplyUI(QFrame):
     def _start_all_after_precheck(self):
         """cookie 预检完成后，启动所有符合条件的账号"""
         try:
+            # 预检中被判定为"自动重登达上限、等待人工处理"的账号跳过启动
+            blocked = getattr(self._precheck_thread, 'blocked_accounts', []) or []
+            blocked_keys = {
+                f"{acc.get('channel_name')}_{acc.get('shop_id')}_{acc.get('username')}"
+                for acc in blocked
+            }
+
             eligible_accounts = [
                 acc_data for acc_data in self.accounts_data
-                if acc_data.get("status") == 1 and not auto_reply_manager.is_running(acc_data)
+                if acc_data.get("status") == 1
+                and not auto_reply_manager.is_running(acc_data)
+                and f"{acc_data.get('channel_name')}_{acc_data.get('shop_id')}_{acc_data.get('username')}" not in blocked_keys
             ]
 
             started_count = 0
@@ -421,6 +430,22 @@ class AutoReplyUI(QFrame):
             self.updateStats()
 
             self.logger.info(f"启动时自动回复：已为 {started_count} 个账号启动自动回复")
+
+            # 提示等待人工处理的账号
+            if blocked:
+                names = "、".join(
+                    acc.get("username", "unknown") for acc in blocked
+                )
+                self.logger.error(f"以下账号自动重登失败达上限，等待人工处理: {names}")
+                InfoBar.error(
+                    title="登录过期，等待人工处理",
+                    content=f"以下账号自动重登连续失败，已跳过自动回复，请人工处理后重新登录：{names}",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=8000,
+                    parent=self,
+                )
 
         except Exception as e:
             self.logger.error(f"启动时自动回复失败: {str(e)}")
@@ -929,10 +954,14 @@ class CookiePrecheckThread(QThread):
         self.accounts = accounts
         self.logger = get_logger("CookiePrecheckThread")
         self.setObjectName("CookiePrecheckThread")
+        # 自动重登达上限、等待人工处理的账号（预检后不自动启动）
+        self.blocked_accounts: list = []
 
     def _precheck_single(self, account_data: dict):
         """预检单个账号的 cookie（供线程池调用）"""
-        from Channel.pinduoduo.cookie_utils import check_cookies_valid, perform_relogin
+        from Channel.pinduoduo.cookie_utils import (
+            check_cookies_valid, perform_relogin, relogin_guard,
+        )
         from Channel.pinduoduo.cookie_cache import cookie_cache
         from database.db_manager import db_manager
         import json
@@ -980,7 +1009,15 @@ class CookiePrecheckThread(QThread):
                 if success:
                     self.logger.info(f"冷启动预检: 账号 {username} 重登成功")
                 else:
-                    self.logger.error(f"冷启动预检: 账号 {username} 重登失败，仍将尝试启动")
+                    # 自动重登连续失败达上限 → 等待人工处理，不自动启动该账号
+                    if relogin_guard.failure_count("pinduoduo", shop_id, user_id) >= relogin_guard._max_failures():
+                        self.blocked_accounts.append(account_data)
+                        self.logger.error(
+                            f"冷启动预检: 账号 {username} 自动重登失败已达上限，"
+                            f"跳过启动，等待人工处理"
+                        )
+                    else:
+                        self.logger.error(f"冷启动预检: 账号 {username} 重登失败，仍将尝试启动")
         else:
             self.logger.debug(f"冷启动预检: 账号 {username} cookie 有效")
 

@@ -545,6 +545,67 @@ class AutoStartCard(CardWidget):
         self.auto_start_switch.setChecked(config.get("auto_start_on_launch", False))
 
 
+class AutoReloginCard(CardWidget):
+    """自动重登配置卡片 - cookie 过期自动重登失败上限"""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self) -> None:
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("自动重登设置")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 连续失败上限
+        self.max_failures_spin = SpinBox()
+        self.max_failures_spin.setRange(1, 20)
+        self.max_failures_spin.setValue(3)
+        self.max_failures_spin.setSuffix(" 次")
+        form_layout.addRow("失败上限:", self.max_failures_spin)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "账号登录态过期时自动重登（弹出浏览器等待处理）。\n"
+            "连续失败达到上限后，停止自动重登并提示等待人工处理，\n"
+            "重新启动账号自动回复后可再次获得自动重登机会。"
+        )
+        description_label.setStyleSheet("padding: 8px 0;")
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        return {
+            "relogin": {
+                "max_auto_failures": self.max_failures_spin.value()
+            }
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        relogin_config = config.get("relogin", {}) if isinstance(config, dict) else {}
+        max_failures = relogin_config.get("max_auto_failures", 3)
+        try:
+            self.max_failures_spin.setValue(int(max_failures))
+        except (TypeError, ValueError):
+            self.max_failures_spin.setValue(3)
+
+
 class RateLimitCard(CardWidget):
     """限流配置卡片 - AI 请求频率限制与兜底回复"""
 
@@ -894,6 +955,7 @@ class SettingUI(QFrame):
         self.business_hours_card = BusinessHoursCard()
         self.human_reply_wait_card = HumanReplyWaitCard()
         self.auto_start_card = AutoStartCard()
+        self.relogin_card = AutoReloginCard()
         self.rate_limit_card = RateLimitCard()
         self.banned_words_card = BannedWordsCard()
 
@@ -905,6 +967,7 @@ class SettingUI(QFrame):
         content_layout.addWidget(self.business_hours_card)
         content_layout.addWidget(self.human_reply_wait_card)
         content_layout.addWidget(self.auto_start_card)
+        content_layout.addWidget(self.relogin_card)
         content_layout.addWidget(self.rate_limit_card)
         content_layout.addWidget(self.banned_words_card)
         content_layout.addStretch()
@@ -1032,6 +1095,9 @@ class SettingUI(QFrame):
                 "window_hours": 4,
                 "max_requests": 10,
                 "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]
+            },
+            "relogin": {
+                "max_auto_failures": 3
             }
         }
 
@@ -1119,6 +1185,14 @@ class SettingUI(QFrame):
         # 处理自动启动配置
         auto_start = config_data.get("auto_start_on_launch", False)
         self.auto_start_card.setConfig({"auto_start_on_launch": auto_start})
+
+        # 处理自动重登配置
+        relogin_config = validated_config.get("relogin", {"max_auto_failures": 3})
+        if not isinstance(relogin_config, dict):
+            relogin_config = {"max_auto_failures": 3}
+            validated_config["relogin"] = relogin_config
+        self.relogin_card.setConfig({"relogin": relogin_config})
+
         self.rate_limit_card.setConfig(validated_config)
         self.banned_words_card.setConfig(validated_config)
     
@@ -1133,6 +1207,7 @@ class SettingUI(QFrame):
             business_config = self.business_hours_card.getConfig()
             staff_reply_wait_config = self.human_reply_wait_card.getConfig()
             auto_start_config = self.auto_start_card.getConfig()
+            relogin_config = self.relogin_card.getConfig()
             rate_limit_config = self.rate_limit_card.getConfig()
             banned_words_config = self.banned_words_card.getConfig()
 
@@ -1145,6 +1220,7 @@ class SettingUI(QFrame):
                 "business_hours": business_config.get("businessHours", {"start": "08:00", "end": "23:00"}),
                 "staff_reply_wait": staff_reply_wait_config.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
                 "auto_start_on_launch": auto_start_config.get("auto_start_on_launch", False),
+                **relogin_config,
                 **rate_limit_config,
                 "banned_words": banned_words_config.get("banned_words", []),
                 # 保持与旧配置的兼容性

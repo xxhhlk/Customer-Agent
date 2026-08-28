@@ -58,6 +58,17 @@ class AutoReplyManager(QObject):
                 self.logger.warning(f"账号 {account_data['username']} 自动回复已在运行")
                 return False
 
+            # 人工重新启动账号时，清零自动重登失败计数，恢复自动重登机会
+            try:
+                from Channel.pinduoduo.cookie_utils import relogin_guard
+                relogin_guard.reset(
+                    account_data.get('channel_name', 'pinduoduo'),
+                    account_data['shop_id'],
+                    account_data['user_id'],
+                )
+            except Exception as e:
+                self.logger.debug(f"重置自动重登失败计数异常: {e}")
+
             # 创建并启动自动回复线程
             thread = AutoReplyThread(account_data)
             self.running_accounts[account_key] = thread
