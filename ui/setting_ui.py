@@ -953,7 +953,8 @@ class SettingUI(QFrame):
                     "api_base": config.get("llm.api_base", "https://ark.cn-beijing.volces.com/api/v3"),
                     "api_key": config.get("llm.api_key", ""),
                     "model_name": config.get("llm.model_name", "doubao-seed-1-6-flash-250828"),
-                    "thinking": config.get("llm.thinking", {"type": "disabled"})
+                    "thinking": config.get("llm.thinking", {"type": "disabled"}),
+                    "reasoning_effort": config.get("llm.reasoning_effort", "")
                 },
                 "embedder": {
                     "api_base": config.get("embedder.api_base", "https://ark.cn-beijing.volces.com/api/v3"),
@@ -1003,7 +1004,8 @@ class SettingUI(QFrame):
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
                 "api_key": "",
                 "model_name": "doubao-seed-1-6-flash-250828",
-                "thinking": {"type": "disabled"}
+                "thinking": {"type": "disabled"},
+                "reasoning_effort": ""
             },
             "embedder": {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -1044,7 +1046,8 @@ class SettingUI(QFrame):
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
                 "api_key": "",
                 "model_name": "doubao-seed-1-6-flash-250828",
-                "thinking": {"type": "disabled"}
+                "thinking": {"type": "disabled"},
+                "reasoning_effort": ""
             }),
             "embedder": config_data.get("embedder", {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
