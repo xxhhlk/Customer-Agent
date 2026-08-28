@@ -202,6 +202,97 @@ class AutoReplyThread(QThread):
         return super().wait(msecs)
 
 
+class ReloginBeforeActionThread(QThread):
+    """操作前 Cookie 预检 + 重登线程
+
+    用户主动操作（上线/下线/开始回复）前先验证 cookie，
+    过期则弹浏览器自动重登（人工重登入口：先 reset 失败计数恢复机会）。
+
+    只做非 GUI 工作（HTTP 验证 / Playwright），通过信号回主线程。
+    """
+
+    relogin_success = pyqtSignal(dict)      # 预检通过（cookie 有效或重登成功）
+    relogin_failed = pyqtSignal(dict, str)  # 预检/重登失败
+
+    def __init__(self, account_data: dict):
+        super().__init__()
+        self.account_data = account_data
+        self.logger = get_logger("ReloginBeforeActionThread")
+        self.setObjectName("ReloginBeforeActionThread")
+
+    def run(self):
+        from Channel.pinduoduo.cookie_utils import (
+            check_cookies_valid, perform_relogin, relogin_guard,
+        )
+        from Channel.pinduoduo.cookie_cache import cookie_cache
+        from database.db_manager import db_manager
+        import json
+
+        shop_id = self.account_data.get("shop_id")
+        user_id = self.account_data.get("user_id")
+        username = self.account_data.get("username", "unknown")
+
+        if not shop_id or not user_id:
+            self.relogin_failed.emit(self.account_data, "账号数据不完整，无法预检")
+            return
+
+        # 人工主动操作视为人工处理：清零失败计数，恢复自动重登机会
+        try:
+            relogin_guard.reset("pinduoduo", shop_id, user_id)
+        except Exception:
+            pass
+
+        # 从缓存或 DB 获取 cookie
+        cookies = cookie_cache.get("pinduoduo", shop_id, user_id)
+        if not cookies:
+            account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+            if account_info:
+                cookies_data = account_info.get('cookies')
+                if isinstance(cookies_data, str):
+                    try:
+                        cookies = json.loads(cookies_data)
+                    except json.JSONDecodeError:
+                        cookies = None
+                elif isinstance(cookies_data, dict):
+                    cookies = cookies_data
+
+        if not cookies:
+            self.relogin_failed.emit(self.account_data, "账号无 cookie，请先登录")
+            return
+
+        # 轻量级 HTTP 验证
+        is_valid = check_cookies_valid(
+            "pinduoduo", shop_id, user_id, cookies, timeout=15.0
+        )
+        if is_valid:
+            self.relogin_success.emit(self.account_data)
+            return
+
+        # cookie 过期 → 弹浏览器自动重登
+        self.logger.warning(
+            f"操作前预检: 账号 {username} cookie 已过期，触发自动重登（弹出浏览器）"
+        )
+        account_info = db_manager.get_account("pinduoduo", shop_id, user_id)
+        password = account_info.get('password', '') if account_info else ''
+        try:
+            success = perform_relogin(
+                "pinduoduo", shop_id, user_id, username, password, False,
+            )
+        except Exception as e:
+            self.logger.error(f"操作前重登异常: {username}, {e}")
+            self.relogin_failed.emit(self.account_data, f"重登异常: {e}")
+            return
+
+        if success:
+            self.logger.info(f"操作前重登成功: {username}")
+            self.relogin_success.emit(self.account_data)
+        else:
+            self.relogin_failed.emit(
+                self.account_data,
+                "登录过期，自动重登失败，请检查账号密码/验证码后重试",
+            )
+
+
 class SetStatusThread(QThread):
     """设置账号状态的线程"""
 
@@ -263,4 +354,4 @@ class SetStatusThread(QThread):
             self.status_set_failed.emit(self.account_data, str(e))
 
 
-__all__ = ['LogoLoaderThread', 'AutoReplyThread', 'SetStatusThread']
+__all__ = ['LogoLoaderThread', 'AutoReplyThread', 'SetStatusThread', 'ReloginBeforeActionThread']

@@ -11,7 +11,7 @@ from database.db_manager import db_manager
 from config import config
 from .card import AutoReplyCard
 from .manager import auto_reply_manager
-from .threads import SetStatusThread
+from .threads import SetStatusThread, ReloginBeforeActionThread
 
 
 class _StopAutoReplyWorker(QThread):
@@ -38,6 +38,7 @@ class AutoReplyUI(QFrame):
         self._loaded_once = False
         self._is_cold_starting = False  # 冷启动标志，控制失败时不弹窗
         self._offline_stop_workers: list[_StopAutoReplyWorker] = []  # 离线后异步停止自动回复的 worker 引用
+        self._relogin_precheck_threads: list = []  # 操作前预检线程引用列表（防 GC）
         self.setupUI()
         QTimer.singleShot(300, self._maybeLoadOnShow)
 
@@ -66,6 +67,16 @@ class AutoReplyUI(QFrame):
             if hasattr(self, 'status_thread') and self.status_thread and self.status_thread.isRunning():
                 self.status_thread.requestInterruption()
                 self.status_thread.wait(3000)
+
+            # 停止操作前预检线程（若仍在运行）
+            for precheck_thread in list(getattr(self, '_relogin_precheck_threads', []) or []):
+                try:
+                    if precheck_thread.isRunning():
+                        precheck_thread.requestInterruption()
+                        precheck_thread.wait(3000)
+                except Exception:
+                    pass
+            self._relogin_precheck_threads = []
 
             # 停止所有自动回复线程（退出时阻塞等待，确保线程结束）
             auto_reply_manager.stop_all(blocking=True)
@@ -608,18 +619,13 @@ class AutoReplyUI(QFrame):
             self.logger.error(f"更新卡片状态失败: {str(e)}")
 
     def onAccountOnline(self, account_data: dict):
-        """账号上线回调"""
+        """账号上线回调（先预检 cookie，过期则弹浏览器重登）"""
         try:
             account_card = self.findAccountCard(account_data)
             if account_card:
                 account_card.setButtonLoading("online", True)
 
-            self.status_thread = SetStatusThread(account_data, 1)
-
-            self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
-            self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
-
-            self.status_thread.start()
+            self._run_with_relogin_precheck(account_data, "online")
 
         except Exception as e:
             self.logger.error(f"启动上线操作失败: {str(e)}")
@@ -634,13 +640,107 @@ class AutoReplyUI(QFrame):
             )
 
     def onAccountOffline(self, account_data: dict):
-        """账号离线回调"""
+        """账号离线回调（先预检 cookie，过期则弹浏览器重登）"""
         try:
             account_card = self.findAccountCard(account_data)
             if account_card:
                 account_card.setButtonLoading("offline", True)
 
-            self.status_thread = SetStatusThread(account_data, 3)
+            self._run_with_relogin_precheck(account_data, "offline")
+
+        except Exception as e:
+            self.logger.error(f"启动离线操作失败: {str(e)}")
+            InfoBar.error(
+                title="错误",
+                content=f"启动离线操作失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+
+    def _run_with_relogin_precheck(self, account_data: dict, action: str):
+        """执行用户操作前先预检 cookie
+
+        作为人工重登入口：cookie 过期时弹浏览器重登，
+        成功后才执行原操作（online=上线 / offline=下线 / reply=开始回复），
+        失败则提示人工处理。
+        """
+        def _finish_precheck_thread(thread):
+            """预检结束后从引用列表移除线程"""
+            try:
+                if thread in self._relogin_precheck_threads:
+                    self._relogin_precheck_threads.remove(thread)
+            except Exception:
+                pass
+
+        def on_precheck_success(_acc):
+            try:
+                # 重登成功后刷新 UI 持有的 cookies，供后续线程使用
+                try:
+                    from Channel.pinduoduo.cookie_cache import cookie_cache
+                    fresh = cookie_cache.get(
+                        "pinduoduo", account_data["shop_id"], account_data["user_id"]
+                    )
+                    if fresh:
+                        account_data["cookies"] = fresh
+                except Exception:
+                    pass
+
+                if action == "online":
+                    self._set_account_status(account_data, 1)
+                elif action == "offline":
+                    self._set_account_status(account_data, 3)
+                else:
+                    self._do_start_auto_reply(account_data)
+            except Exception as e:
+                self.logger.error(f"预检成功后执行操作失败: {str(e)}")
+
+        def on_precheck_failed(acc, error):
+            try:
+                account_card = self.findAccountCard(acc)
+                if account_card:
+                    account_card.setButtonLoading("online", False)
+                    account_card.setButtonLoading("offline", False)
+                    if action == "reply":
+                        account_card.auto_reply_btn.setText("开始回复")
+                        account_card.auto_reply_btn.setEnabled(True)
+
+                self.logger.error(
+                    f"账号 '{acc.get('username', 'unknown')}' 操作前重登失败: {error}"
+                )
+                InfoBar.error(
+                    title="登录过期",
+                    content=f"账号 '{acc.get('username', 'unknown')}' 登录已过期，"
+                            f"自动重登失败：{error}",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=5000,
+                    parent=self,
+                )
+            except Exception as e:
+                self.logger.error(f"处理重登失败回调异常: {str(e)}")
+
+        thread = ReloginBeforeActionThread(account_data)
+        thread.relogin_success.connect(
+            on_precheck_success, Qt.ConnectionType.QueuedConnection  # type: ignore[call-arg]
+        )
+        thread.relogin_failed.connect(
+            on_precheck_failed, Qt.ConnectionType.QueuedConnection  # type: ignore[call-arg]
+        )
+        thread.finished.connect(
+            lambda: _finish_precheck_thread(thread),
+            Qt.ConnectionType.QueuedConnection  # type: ignore[call-arg]
+        )
+        self._relogin_precheck_threads.append(thread)
+        thread.start()
+
+    def _set_account_status(self, account_data: dict, target_status: int):
+        """cookie 预检通过后执行上线(1)/下线(3)"""
+        try:
+            self.status_thread = SetStatusThread(account_data, target_status)
 
             self.status_thread.status_set_success.connect(self.onStatusSetSuccess, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
             self.status_thread.status_set_failed.connect(self.onStatusSetFailed, Qt.ConnectionType.QueuedConnection)  # type: ignore[call-arg]
@@ -648,10 +748,10 @@ class AutoReplyUI(QFrame):
             self.status_thread.start()
 
         except Exception as e:
-            self.logger.error(f"启动离线操作失败: {str(e)}")
+            self.logger.error(f"启动状态设置操作失败: {str(e)}")
             InfoBar.error(
                 title="错误",
-                content=f"启动离线操作失败：{str(e)}",
+                content=f"启动状态设置操作失败：{str(e)}",
                 orient=Qt.Orientation.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP,
@@ -770,7 +870,7 @@ class AutoReplyUI(QFrame):
             )
 
     def _start_auto_reply(self, account_data: dict, account_card):
-        """启动自动回复"""
+        """启动自动回复（先预检 cookie，过期则弹浏览器重登）"""
         try:
             if account_data.get("status") != 1:
                 InfoBar.warning(
@@ -787,15 +887,38 @@ class AutoReplyUI(QFrame):
             account_card.auto_reply_btn.setText("启动中...")
             account_card.auto_reply_btn.setEnabled(False)
 
+            self._run_with_relogin_precheck(account_data, "reply")
+
+        except Exception as e:
+            self.logger.error(f"启动自动回复失败: {str(e)}")
+            account_card.auto_reply_btn.setText("开始回复")
+            account_card.auto_reply_btn.setEnabled(True)
+            InfoBar.error(
+                title="错误",
+                content=f"启动自动回复失败：{str(e)}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+
+    def _do_start_auto_reply(self, account_data: dict):
+        """cookie 预检通过后真正启动自动回复"""
+        try:
             success = auto_reply_manager.start_auto_reply(account_data)
 
             if success:
-                account_card.setAutoReplyStatus(True)
+                account_card = self.findAccountCard(account_data)
+                if account_card:
+                    account_card.setAutoReplyStatus(True)
                 self.logger.info(f"账号 '{account_data['username']}' 自动回复启动成功")
                 self._connect_auto_reply_signals(account_data)
             else:
-                account_card.auto_reply_btn.setText("开始回复")
-                account_card.auto_reply_btn.setEnabled(True)
+                account_card = self.findAccountCard(account_data)
+                if account_card:
+                    account_card.auto_reply_btn.setText("开始回复")
+                    account_card.auto_reply_btn.setEnabled(True)
                 InfoBar.warning(
                     title="失败",
                     content=f"启动账号 '{account_data['username']}' 自动回复失败！",
@@ -808,8 +931,10 @@ class AutoReplyUI(QFrame):
 
         except Exception as e:
             self.logger.error(f"启动自动回复失败: {str(e)}")
-            account_card.auto_reply_btn.setText("开始回复")
-            account_card.auto_reply_btn.setEnabled(True)
+            account_card = self.findAccountCard(account_data)
+            if account_card:
+                account_card.auto_reply_btn.setText("开始回复")
+                account_card.auto_reply_btn.setEnabled(True)
             InfoBar.error(
                 title="错误",
                 content=f"启动自动回复失败：{str(e)}",
