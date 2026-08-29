@@ -210,8 +210,12 @@ def main():
     # 使 requests / httpx / openai(agno) 等 trust_env 客户端统一走 SOCKS5 代理
     # （websockets 与 Playwright 不读环境变量，由各自的调用点显式传参）
     try:
-        from utils.proxy_config import apply_proxy_env
+        from utils.proxy_config import apply_proxy_env, start_proxy_health_monitor
         apply_proxy_env()
+        # 代理健康检查：定时探活，不可用自动回退直连（未启用或 check_interval=0 关闭）
+        _proxy_enabled = _app_config.get("proxy.enabled", False)
+        _proxy_interval = _app_config.get("proxy.check_interval", 60) if _proxy_enabled else 0
+        start_proxy_health_monitor(_proxy_interval)
     except Exception as e:
         _get_logger("App").warning(f"设置网络代理失败: {e}")
 

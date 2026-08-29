@@ -792,12 +792,21 @@ class ProxyConfigCard(CardWidget):
         self.remote_dns_switch.setChecked(True)
         form_layout.addRow("代理端解析域名:", self.remote_dns_switch)
 
+        # 健康检查间隔
+        self.check_interval_spin = SpinBox()
+        self.check_interval_spin.setRange(0, 3600)
+        self.check_interval_spin.setValue(60)
+        self.check_interval_spin.setSuffix(" 秒")
+        form_layout.addRow("健康检查间隔:", self.check_interval_spin)
+
         layout.addLayout(form_layout)
 
         # 说明文本
         description_label = CaptionLabel(
             "启用后所有网络请求（AI 接口、拼多多消息、图片下载等）经 SOCKS5 代理。\n"
             "代理端解析域名：由代理服务端解析域名，本地不发 DNS 查询（socks5h）；关闭则本地解析。\n"
+            "健康检查：按设定间隔经代理探测拼多多首页，连续失败自动回退直连，恢复后自动切回代理"
+            "（0 秒表示关闭自动检查）。\n"
             "注意：AI 接口与拼多多 WebSocket 需重启或重连后生效；浏览器登录窗口不受开关影响，"
             "Chromium 的 SOCKS5 始终由代理服务端解析域名。\n"
             "测试连接：使用当前表单填写的地址（无需先保存），经代理访问拼多多首页验证可用性。"
@@ -871,7 +880,8 @@ class ProxyConfigCard(CardWidget):
             "proxy": {
                 "enabled": self.enable_switch.isChecked(),
                 "server": self.server_edit.text().strip(),
-                "remote_dns": self.remote_dns_switch.isChecked()
+                "remote_dns": self.remote_dns_switch.isChecked(),
+                "check_interval": self.check_interval_spin.value()
             }
         }
 
@@ -881,6 +891,7 @@ class ProxyConfigCard(CardWidget):
         self.enable_switch.setChecked(proxy.get("enabled", False))
         self.server_edit.setText(proxy.get("server", "127.0.0.1:1080"))
         self.remote_dns_switch.setChecked(proxy.get("remote_dns", True))
+        self.check_interval_spin.setValue(proxy.get("check_interval", 60))
 
 
 class BannedWordsCard(CardWidget):
@@ -1245,7 +1256,8 @@ class SettingUI(QFrame):
                 "proxy": {
                     "enabled": config.get("proxy.enabled", False),
                     "server": config.get("proxy.server", "127.0.0.1:1080"),
-                    "remote_dns": config.get("proxy.remote_dns", True)
+                    "remote_dns": config.get("proxy.remote_dns", True),
+                    "check_interval": config.get("proxy.check_interval", 60)
                 }
             }
 
@@ -1335,7 +1347,8 @@ class SettingUI(QFrame):
             "proxy": config_data.get("proxy", {
                 "enabled": False,
                 "server": "127.0.0.1:1080",
-                "remote_dns": True
+                "remote_dns": True,
+                "check_interval": 60
             })
         }
 
@@ -1467,8 +1480,12 @@ class SettingUI(QFrame):
             # 热更新网络代理环境变量：保存后立即生效
             # （requests 即时生效；httpx/openai 长驻客户端与 websockets/playwright 需重启或重连）
             try:
-                from utils.proxy_config import apply_proxy_env
+                from utils.proxy_config import apply_proxy_env, start_proxy_health_monitor
                 apply_proxy_env()
+                # 按新配置重启健康检查（未启用代理或 check_interval=0 关闭自动检查）
+                _proxy_cfg = self.proxy_card.getConfig().get("proxy", {})
+                _proxy_interval = _proxy_cfg.get("check_interval", 60) if _proxy_cfg.get("enabled", False) else 0
+                start_proxy_health_monitor(_proxy_interval)
                 self.logger.info(f"网络代理已热更新: {self.proxy_card.getConfig()}")
             except Exception as e:
                 self.logger.warning(f"网络代理热更新失败: {e}，重启后生效")

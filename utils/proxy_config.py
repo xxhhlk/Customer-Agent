@@ -7,6 +7,14 @@ SOCKS5 代理统一配置入口
 - remote_dns: bool   是否由代理服务端解析域名（remote DNS）
                      True  -> 使用 socks5h:// 前缀（域名交给代理端解析，本地不发 DNS 查询）
                      False -> 使用 socks5:// 前缀（本地解析域名后连接代理）
+- check_interval: int  代理健康检查间隔（秒），0 表示不自动检查（默认 60）
+
+代理健康监控：
+- 后台守护线程按 check_interval 经代理探测业务域名；连续 2 次失败判定代理不可用，
+  1 次成功即恢复。状态变化时自动 apply_proxy_env()（不可用清除 env / 恢复重设）。
+- 不可用期间：requests 系 get_proxies() 返回空（直连）、websockets 跳过代理握手、
+  Playwright 不传 proxy —— 均回退直连；恢复后自动切回代理。
+- 注意：httpx/openai 长驻客户端在创建时读取 env，健康翻转对其不生效（需重启/重建）。
 
 覆盖范围：
 - requests（PDD API / 图片下载等）：各调用点显式传 get_proxies()（按 remote_dns 精确控制 socks5h/socks5）
@@ -22,6 +30,8 @@ SOCKS5 代理统一配置入口
 import asyncio
 import os
 import socket
+import threading
+import time
 from typing import Dict, Optional
 
 # playwright 的 ProxySettings TypedDict（launch 的 proxy 参数类型）
@@ -29,6 +39,136 @@ from playwright._impl._api_structures import ProxySettings
 
 # 标准环境变量名（小写变体也常见，但统一用大写）
 _ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+
+# 健康检查探活目标：业务核心域名，响应码 < 500 即视为代理通路可用
+_PROBE_URL = "https://mms.pinduoduo.com/"
+_PROBE_TIMEOUT = 5.0
+# 连续失败达到该次数才判定代理不可用（避免偶发抖动误伤）
+_FAIL_THRESHOLD = 2
+
+# ---------------------------------------------------------------------------
+# 代理健康状态（线程安全）
+# ---------------------------------------------------------------------------
+_health_lock = threading.RLock()
+_proxy_health_ok = True            # 当前是否认为代理可用（未启用代理时恒为 True）
+_consecutive_failures = 0          # 连续探活失败次数
+_check_interval = 60.0             # 探活间隔（秒），0 表示不检查
+_stop_event = threading.Event()
+_monitor_thread: Optional[threading.Thread] = None
+
+
+def is_proxy_healthy() -> bool:
+    """代理健康状态：不可用（探活连续失败）返回 False；未启用代理恒为 True。"""
+    with _health_lock:
+        if not _get_enabled():
+            return True
+        return _proxy_health_ok
+
+
+def _get_enabled() -> bool:
+    from config import config
+    return bool(config.get("proxy.enabled", False)) and bool(
+        (config.get("proxy.server", "") or "").strip()
+    )
+
+
+def probe_proxy(timeout: float = _PROBE_TIMEOUT) -> bool:
+    """同步探活：经代理访问业务域名，返回代理是否可用（不受健康状态影响，始终走代理）。"""
+    url = get_proxy_url()
+    if not url:
+        return True  # 未启用代理，视为"可用"（无需回退）
+    try:
+        import requests
+        resp = requests.get(
+            _PROBE_URL,
+            proxies={"http": url, "https": url},
+            timeout=timeout,
+        )
+        return resp.status_code < 500
+    except Exception:
+        return False
+
+
+def set_proxy_health(ok: bool, reason: str = "") -> None:
+    """更新代理健康状态；状态翻转时应用/清除环境变量并记录日志。"""
+    global _proxy_health_ok, _consecutive_failures
+    with _health_lock:
+        if ok:
+            _consecutive_failures = 0
+        changed = _proxy_health_ok != ok
+        _proxy_health_ok = ok
+
+    if changed:
+        # 状态翻转：同步 env（httpx 系新 client 生效），并记录日志
+        apply_proxy_env()
+        try:
+            from utils.logger_loguru import get_logger
+            get_logger("ProxyHealth").warning(
+                f"代理状态变化 -> {'可用' if ok else '不可用，已回退直连'}"
+                + (f"（{reason}）" if reason else "")
+            )
+        except Exception:
+            pass
+
+
+def _health_loop() -> None:
+    """后台探活循环：连续失败达阈值判不可用，1 次成功即恢复。"""
+    global _consecutive_failures
+    while not _stop_event.is_set():
+        interval = _check_interval
+        if interval <= 0:
+            return
+        if _stop_event.wait(interval):
+            return
+        ok = probe_proxy()
+        with _health_lock:
+            if ok:
+                _consecutive_failures = 0
+            else:
+                _consecutive_failures += 1
+        if not ok and _consecutive_failures >= _FAIL_THRESHOLD:
+            set_proxy_health(False, reason=f"连续 {_consecutive_failures} 次探活失败")
+        elif ok:
+            set_proxy_health(True)
+
+
+def start_proxy_health_monitor(interval: float) -> None:
+    """启动代理健康检查后台线程（幂等）。
+
+    Args:
+        interval: 探活间隔（秒）；<=0 表示不自动检查
+    """
+    global _check_interval, _monitor_thread
+    with _health_lock:
+        _check_interval = float(interval)
+        if interval <= 0:
+            # 关闭检查：停掉已有线程
+            _stop_event.set()
+            _monitor_thread = None
+            # 关闭检查时恢复初始健康状态，避免旧状态残留影响请求
+            _proxy_health_ok = True
+            _consecutive_failures = 0
+            return
+        if _monitor_thread is not None and _monitor_thread.is_alive():
+            _stop_event.set()
+            _monitor_thread.join(timeout=2)
+        _stop_event.clear()
+        _proxy_health_ok = True
+        _consecutive_failures = 0
+        _monitor_thread = threading.Thread(
+            target=_health_loop, name="ProxyHealthMonitor", daemon=True
+        )
+        _monitor_thread.start()
+
+
+def stop_proxy_health_monitor() -> None:
+    """停止代理健康检查后台线程（幂等）。"""
+    global _monitor_thread
+    with _health_lock:
+        if _monitor_thread is not None and _monitor_thread.is_alive():
+            _stop_event.set()
+            _monitor_thread.join(timeout=2)
+        _monitor_thread = None
 
 
 def get_proxy_url() -> Optional[str]:
@@ -54,11 +194,13 @@ def get_proxy_url() -> Optional[str]:
 
 
 def get_proxies() -> Dict[str, str]:
-    """返回 requests 使用的 proxies 字典（未启用时为空 dict）。
+    """返回 requests 使用的 proxies 字典（未启用或代理不可用时为空 dict，即直连）。
 
     remote_dns=True -> socks5h://（代理端解析）；False -> socks5://（本地解析）。
     requests + PySocks 同时支持两种前缀。
     """
+    if not is_proxy_healthy():
+        return {}
     url = get_proxy_url()
     if not url:
         return {}
@@ -75,8 +217,15 @@ def apply_proxy_env() -> None:
     - httpx/openai 客户端在创建时读取环境变量，已存在的长驻客户端（如 AI Agent）
       需重建/重启后才生效。
     - requests 系不走这里（各调用点显式传 get_proxies()，精确控制 remote_dns）。
+    - 代理判定不可用时（健康监控回退直连）同样清除环境变量。
     """
     from config import config
+
+    if not is_proxy_healthy():
+        # 代理不可用：清除 env 回退直连（httpx 系新 client 直连）
+        for key in _ENV_KEYS:
+            os.environ.pop(key, None)
+        return
 
     enabled = config.get("proxy.enabled", False)
     server = (config.get("proxy.server", "") or "").strip()
@@ -109,8 +258,10 @@ async def open_socks5_connection(host: str, port: int, timeout: float = 30.0) ->
         timeout: 握手总超时（秒）
 
     Returns:
-        已通过 SOCKS5 握手的原生 socket，或 None（未启用代理）
+        已通过 SOCKS5 握手的原生 socket，或 None（未启用代理 / 代理判定不可用走直连）
     """
+    if not is_proxy_healthy():
+        return None
     url = get_proxy_url()
     if not url:
         return None
@@ -200,7 +351,10 @@ def get_playwright_proxy() -> Optional[ProxySettings]:
 
     Playwright 仅接受 socks5:// scheme；Chromium 的 SOCKS5 代理始终由
     代理服务端解析域名，故 remote_dns 开关对浏览器不生效（总是远端解析）。
+    代理判定不可用（回退直连）时返回 None。
     """
+    if not is_proxy_healthy():
+        return None
     url = get_proxy_url()
     if not url:
         return None

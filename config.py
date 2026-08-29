@@ -71,6 +71,7 @@ class ProxyConfig(BaseModel):
     enabled: bool = Field(default=False, description="是否启用代理")
     server: str = Field(default="127.0.0.1:1080", description="SOCKS5代理地址(host:port，可省略协议前缀)")
     remote_dns: bool = Field(default=True, description="是否由代理服务端解析域名(remote DNS)，开启则请求以 socks5h 前缀发出")
+    check_interval: int = Field(default=60, description="代理健康检查间隔(秒)，0=不自动检查，不可用时自动回退直连", ge=0, le=86400)
 
 class PromptConfig(BaseModel):
     """提示词配置模型"""
@@ -155,7 +156,8 @@ config_base = {
     "proxy": {
         "enabled": False,
         "server": "127.0.0.1:1080",
-        "remote_dns": True
+        "remote_dns": True,
+        "check_interval": 60
     },
     "banned_words": [],
     "staff_reply_wait": {
