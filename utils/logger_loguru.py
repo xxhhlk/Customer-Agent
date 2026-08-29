@@ -16,7 +16,7 @@ from pathlib import Path
 from loguru import logger
 
 # 导入日志管理工具
-from utils.log_manager import delete_old_files
+from utils.log_manager import delete_old_files, _parse_size
 
 # 可选的PyQt6依赖
 try:
@@ -58,9 +58,24 @@ DEFAULT_LOG_FILE = "logs/app.log"
 MAX_LOG_SIZE = os.environ.get("LOG_MAX_SIZE", "50 MB")
 LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", "7"))
 
-# 启动时清理过期日志（loguru 会负责轮转保留，这里只删除超过保留期的旧文件/zip）
+# 日志轮转：按天 + 按大小双条件（loguru 的 rotation 参数只接受单一条件，用 callable 组合）
+_ROTATION_MAX_BYTES = _parse_size(MAX_LOG_SIZE) or (50 * 1024 * 1024)
+_rotation_state = {"date": datetime.now().date()}
+
+def _rotation_condition(message, file) -> bool:
+    """跨天后的首条日志，或当前文件超过大小上限时，触发轮转"""
+    today = datetime.now().date()
+    if today != _rotation_state["date"]:
+        _rotation_state["date"] = today
+        return True
+    try:
+        return file.stat().st_size >= _ROTATION_MAX_BYTES
+    except OSError:
+        return False
+
+# 启动时清理过期日志（轮转产物的 zip 交给 loguru retention 按保留期管理，不再无条件删除）
 log_dir = Path(DEFAULT_LOG_FILE).parent
-delete_old_files(log_dir, retention_days=LOG_RETENTION_DAYS, delete_zip=True)
+delete_old_files(log_dir, retention_days=LOG_RETENTION_DAYS, delete_zip=False)
 
 # 确保日志目录存在
 os.makedirs(os.path.dirname(DEFAULT_LOG_FILE), exist_ok=True)
@@ -86,12 +101,12 @@ if not is_frozen:
         diagnose=not is_frozen
     )
 
-# 添加文件处理器（按大小轮转，保留 7 天）
+# 添加文件处理器（按天 + 按大小轮转，保留 7 天，轮转产物压缩为 zip）
 logger.add(
     DEFAULT_LOG_FILE,
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
     level=log_level.upper(),
-    rotation=MAX_LOG_SIZE,
+    rotation=_rotation_condition,
     retention=f"{LOG_RETENTION_DAYS} days",
     compression="zip",
     encoding="utf-8",
