@@ -2,8 +2,9 @@
 
 import json
 import os
+import time
 from typing import Optional
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer, QThread
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QVBoxLayout, QWidget, QLabel,
                             QFormLayout, QGroupBox)
 from PyQt6.QtWidgets import QDialog
@@ -695,12 +696,58 @@ class RateLimitCard(CardWidget):
         self.fallback_reply_edit.setPlainText(text)
 
 
+class ProxyTestThread(QThread):
+    """后台测试 SOCKS5 代理连通性（requests 走代理访问拼多多域名，不阻塞 UI）"""
+
+    # (耗时ms, 状态码或说明) 成功
+    finished_ok = pyqtSignal(float, int)
+    # (错误信息) 失败
+    finished_err = pyqtSignal(str)
+
+    # 测试目标：业务核心域名，响应码 < 500 即视为代理通路可用
+    _TEST_URL = "https://mms.pinduoduo.com/"
+    _TIMEOUT = 8
+
+    def __init__(self, proxy_url: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.proxy_url = proxy_url
+        self.setObjectName("ProxyTestThread")
+
+    def run(self):
+        """后台线程：同步 requests 走代理，通过信号回传结果"""
+        try:
+            import requests
+            start = time.perf_counter()
+            resp = requests.get(
+                self._TEST_URL,
+                proxies={"http": self.proxy_url, "https": self.proxy_url},
+                timeout=self._TIMEOUT,
+            )
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            if resp.status_code < 500:
+                self.finished_ok.emit(elapsed_ms, resp.status_code)
+            else:
+                self.finished_err.emit(f"目标站点返回 HTTP {resp.status_code}")
+        except Exception as e:
+            self.finished_err.emit(str(e))
+
+
 class ProxyConfigCard(CardWidget):
     """SOCKS5 网络代理配置卡片"""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._test_thread: Optional[ProxyTestThread] = None
         self.setupUI()
+
+    @staticmethod
+    def build_proxy_url(server: str, remote_dns: bool) -> str:
+        """按表单值构造完整代理 URL（socks5h=远端解析 / socks5=本地解析）"""
+        server = (server or "").strip()
+        if "://" in server:
+            server = server.split("://", 1)[1]
+        scheme = "socks5h" if remote_dns else "socks5"
+        return f"{scheme}://{server}"
 
     def setupUI(self) -> None:
         """设置UI"""
@@ -710,10 +757,17 @@ class ProxyConfigCard(CardWidget):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(16)
 
-        # 卡片标题
+        # 卡片标题行（标题 + 测试按钮）
+        title_row = QHBoxLayout()
         title_label = StrongBodyLabel("网络代理（SOCKS5）")
         title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
-        layout.addWidget(title_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch()
+        self.test_btn = PushButton(FIF.SYNC, "测试连接")
+        self.test_btn.setToolTip("使用当前填写的代理地址发起一次测试请求，验证代理是否可用")
+        self.test_btn.clicked.connect(self._on_test_proxy)
+        title_row.addWidget(self.test_btn)
+        layout.addLayout(title_row)
 
         # 表单布局
         form_layout = QFormLayout()
@@ -745,11 +799,71 @@ class ProxyConfigCard(CardWidget):
             "启用后所有网络请求（AI 接口、拼多多消息、图片下载等）经 SOCKS5 代理。\n"
             "代理端解析域名：由代理服务端解析域名，本地不发 DNS 查询（socks5h）；关闭则本地解析。\n"
             "注意：AI 接口与拼多多 WebSocket 需重启或重连后生效；浏览器登录窗口不受开关影响，"
-            "Chromium 的 SOCKS5 始终由代理服务端解析域名。"
+            "Chromium 的 SOCKS5 始终由代理服务端解析域名。\n"
+            "测试连接：使用当前表单填写的地址（无需先保存），经代理访问拼多多首页验证可用性。"
         )
         description_label.setStyleSheet("color: #666; padding: 8px 0;")
         description_label.setWordWrap(True)
         layout.addWidget(description_label)
+
+    def _on_test_proxy(self):
+        """点击测试连接：校验表单值 → 后台线程实测代理通路"""
+        if self._test_thread is not None and self._test_thread.isRunning():
+            return
+
+        server = self.server_edit.text().strip()
+        if not server:
+            InfoBar.warning(
+                title="代理地址为空",
+                content="请先填写代理地址，例如 127.0.0.1:1080",
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
+        proxy_url = self.build_proxy_url(server, self.remote_dns_switch.isChecked())
+
+        # 禁用按钮，显示测试中
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("测试中...")
+
+        self._test_thread = ProxyTestThread(proxy_url, parent=self)
+        self._test_thread.finished_ok.connect(self._on_test_ok)
+        self._test_thread.finished_err.connect(self._on_test_err)
+        self._test_thread.finished.connect(self._on_test_done)
+        self._test_thread.start()
+
+    def _on_test_ok(self, elapsed_ms: float, status_code: int):
+        """测试成功（代理通路可用）"""
+        InfoBar.success(
+            title="代理连接成功",
+            content=f"经代理访问拼多多首页成功（HTTP {status_code}），耗时 {elapsed_ms} ms",
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+            parent=self,
+        )
+
+    def _on_test_err(self, error_msg: str):
+        """测试失败"""
+        InfoBar.error(
+            title="代理连接失败",
+            content=f"无法通过该代理访问目标站点：{error_msg}",
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=8000,
+            parent=self,
+        )
+
+    def _on_test_done(self):
+        """测试结束，恢复按钮"""
+        try:
+            self.test_btn.setEnabled(True)
+            self.test_btn.setText("测试连接")
+        except RuntimeError:
+            pass  # 窗口已销毁
 
     def getConfig(self) -> dict:
         """获取配置"""
