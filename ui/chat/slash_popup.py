@@ -125,13 +125,16 @@ class _KnowledgeSearchWorker(QThread):
         if not words:
             words = [query]
 
+        # 统一转小写，实现不区分大小写匹配
+        words_lower = [w.lower() for w in words]
+
         # 对每个结果检查是否包含所有分词
         filtered = []
         for item in results:
             title = item.get("title", "")
             content = item.get("content", "")
-            combined = title + " " + content
-            if all(w in combined for w in words):
+            combined = (title + " " + content).lower()
+            if all(w in combined for w in words_lower):
                 filtered.append(item)
 
         # 如果过滤后结果太少，放宽条件：任一匹配
@@ -139,8 +142,8 @@ class _KnowledgeSearchWorker(QThread):
             for item in results:
                 title = item.get("title", "")
                 content = item.get("content", "")
-                combined = title + " " + content
-                if any(w in combined for w in words) and item not in filtered:
+                combined = (title + " " + content).lower()
+                if any(w in combined for w in words_lower) and item not in filtered:
                     filtered.append(item)
 
         return filtered[: self._limit]
