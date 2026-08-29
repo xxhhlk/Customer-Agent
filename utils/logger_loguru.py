@@ -62,15 +62,17 @@ LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", "7"))
 _ROTATION_MAX_BYTES = _parse_size(MAX_LOG_SIZE) or (5 * 1024 * 1024)
 _rotation_state = {"date": datetime.now().date()}
 
-def _rotation_condition(message, file) -> bool:
+def _rotation_condition(message, file_obj) -> bool:
     """跨天后的首条日志，或当前文件超过大小上限时，触发轮转"""
     today = datetime.now().date()
     if today != _rotation_state["date"]:
         _rotation_state["date"] = today
         return True
     try:
-        return file.stat().st_size >= _ROTATION_MAX_BYTES
-    except OSError:
+        # loguru 传入的是已打开的文件对象（TextIOWrapper），不是 Path，
+        # 用 fstat 对文件描述符取大小，轮转重命名期间也始终指向当前文件
+        return os.fstat(file_obj.fileno()).st_size >= _ROTATION_MAX_BYTES
+    except (OSError, AttributeError, ValueError):
         return False
 
 # 启动时清理过期日志（轮转产物的 zip 交给 loguru retention 按保留期管理，不再无条件删除）
