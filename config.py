@@ -66,6 +66,12 @@ class ReloginConfig(BaseModel):
     """自动重登配置模型"""
     max_auto_failures: int = Field(default=3, description="自动重登连续失败上限，超过后停止自动重登等待人工处理", ge=1, le=20)
 
+class ProxyConfig(BaseModel):
+    """SOCKS5 代理配置模型"""
+    enabled: bool = Field(default=False, description="是否启用代理")
+    server: str = Field(default="127.0.0.1:1080", description="SOCKS5代理地址(host:port，可省略协议前缀)")
+    remote_dns: bool = Field(default=True, description="是否由代理服务端解析域名(remote DNS)，开启则请求以 socks5h 前缀发出")
+
 class PromptConfig(BaseModel):
     """提示词配置模型"""
     description: str = Field(default="", description="角色描述")
@@ -104,6 +110,10 @@ class ConfigModel(BaseModel):
         default_factory=ReloginConfig,
         description="自动重登配置"
     )
+    proxy: ProxyConfig = Field(
+        default_factory=ProxyConfig,
+        description="SOCKS5代理配置"
+    )
     banned_words: List[str] = Field(
         default_factory=list,
         description="禁用词列表（发送前硬拦截，命中则让AI重新生成合规回复）"
@@ -141,6 +151,11 @@ config_base = {
     },
     "relogin": {
         "max_auto_failures": 3
+    },
+    "proxy": {
+        "enabled": False,
+        "server": "127.0.0.1:1080",
+        "remote_dns": True
     },
     "banned_words": [],
     "staff_reply_wait": {

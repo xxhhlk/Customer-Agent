@@ -59,12 +59,14 @@ def check_cookies_valid(
     payload = {'version': '3'}
 
     try:
+        from utils.proxy_config import get_proxies
         response = requests.post(
             url,
             json=payload,
             headers=_VALIDATION_HEADERS,
             cookies=cookies,
             timeout=timeout,
+            proxies=get_proxies(),
         )
 
         if response.status_code == 200:

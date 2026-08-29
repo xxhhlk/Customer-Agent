@@ -206,6 +206,15 @@ def main():
     # 设置 Playwright 浏览器路径
     browsers_path = setup_playwright_browsers_path()
 
+    # 网络代理：根据 config.json 的 proxy 配置设置进程级环境变量，
+    # 使 requests / httpx / openai(agno) 等 trust_env 客户端统一走 SOCKS5 代理
+    # （websockets 与 Playwright 不读环境变量，由各自的调用点显式传参）
+    try:
+        from utils.proxy_config import apply_proxy_env
+        apply_proxy_env()
+    except Exception as e:
+        _get_logger("App").warning(f"设置网络代理失败: {e}")
+
     # 创建应用 — 通过 -style 参数在 QApplication 构造时就指定 windowsvista 风格，
     # 阻止 Qt6 默认加载 qmodernwindowsstyle.dll（该 DLL 的 D2D 渲染线程会破坏堆）。
     # setStyle() 在构造后调用太晚，DLL 已被加载且内部线程已启动。

@@ -54,10 +54,13 @@ class PDDLogin():
             user_data_dir = str(app_dir / "user_data" / self.name)
             self.logger.debug(f"使用用户数据目录: {user_data_dir}")
 
-            # 使用持久化上下文，自动处理用户数据目录
+            # 使用持久化上下文，自动处理用户数据目录。
+            # proxy=None 表示不代理；启用时走 SOCKS5（Chromium 的 SOCKS5 始终由代理服务端解析域名）
+            from utils.proxy_config import get_playwright_proxy
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir,
                 headless=headless,
+                proxy=get_playwright_proxy(),
                 args=[
                     '--disable-gpu',
                     '--no-sandbox',
@@ -134,9 +137,11 @@ class PDDLogin():
                 return False
 
             # 使用持久化上下文，自动加载用户数据
+            from utils.proxy_config import get_playwright_proxy
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir,
                 headless=False,  # 所有浏览器操作均使用有头模式，方便用户观察
+                proxy=get_playwright_proxy(),
                 args=[
                     '--disable-gpu',
                     '--no-sandbox',

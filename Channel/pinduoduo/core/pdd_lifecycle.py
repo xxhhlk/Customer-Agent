@@ -201,13 +201,33 @@ class LifecycleMixin:
             self.logger.debug(f"正在连接到拼多多WebSocket: {shop_id}-{username}")
 
             self.logger.info(f"init: 开始 WebSocket 连接: {shop_id}-{username}")
-            async with websockets.connect(
-                full_url,
+
+            # SOCKS5 代理：websockets 不读环境变量且已移除内置 SOCKS 支持，
+            # 由 open_socks5_connection 完成握手后把 socket 交给 websockets.connect(sock=...)
+            # （每次连接读取最新配置，remote_dns 开关完全生效）
+            from typing import Any as _Any
+            ws_kwargs: dict[str, _Any] = dict(
                 ping_interval=60,
                 ping_timeout=30,
                 max_size=10**7,
                 compression=None,
                 close_timeout=10
+            )
+            try:
+                from utils.proxy_config import open_socks5_connection
+                from urllib.parse import urlparse
+                _ws_uri = urlparse(full_url)
+                _sock = await open_socks5_connection(
+                    _ws_uri.hostname or "", _ws_uri.port or 443
+                )
+                if _sock is not None:
+                    ws_kwargs["sock"] = _sock
+            except Exception as e:
+                self.logger.warning(f"SOCKS5 代理连接失败，回退直连: {e}")
+
+            async with websockets.connect(
+                full_url,
+                **ws_kwargs
             ) as websocket:
                 self.ws = websocket
                 self.resource_manager.register_websocket(

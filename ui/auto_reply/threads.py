@@ -27,7 +27,8 @@ class LogoLoaderThread(QThread):
     def run(self):
         """后台线程：只下载图片数据，不做任何 GUI 操作"""
         try:
-            response = requests.get(self.url, timeout=10)
+            from utils.proxy_config import get_proxies
+            response = requests.get(self.url, timeout=10, proxies=get_proxies())
             response.raise_for_status()
             # 只传递 bytes，不在后台线程创建 QPixmap
             self.logo_loaded.emit(response.content)

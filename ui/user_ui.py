@@ -37,7 +37,8 @@ class LogoLoaderThread(QThread):
     def run(self):
         """后台线程：只下载图片数据，不做任何 GUI 操作"""
         try:
-            response = requests.get(self.url, timeout=10)
+            from utils.proxy_config import get_proxies
+            response = requests.get(self.url, timeout=10, proxies=get_proxies())
             response.raise_for_status()
             self.logo_loaded.emit(response.content)
         except Exception as e:
@@ -120,10 +121,13 @@ class OpenShopThread(QThread):
             
             logger.info(f"使用用户数据目录打开店铺: {user_data_dir}")
             
-            # 使用持久化上下文启动浏览器（非无头模式，显示界面）
+            # 使用持久化上下文启动浏览器（非无头模式，显示界面）。
+            # proxy=None 表示不代理；启用时走 SOCKS5
+            from utils.proxy_config import get_playwright_proxy
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir,
                 headless=False,  # 显示浏览器界面
+                proxy=get_playwright_proxy(),
                 args=[
                     '--disable-gpu',
                     '--no-sandbox',

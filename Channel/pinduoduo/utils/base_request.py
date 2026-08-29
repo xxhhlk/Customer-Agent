@@ -492,12 +492,14 @@ class BaseRequest:
         self._log_request("GET", url, params=params)
         
         def _make_request():
+            from utils.proxy_config import get_proxies
             return requests.get(
                 url, 
                 params=params,
                 headers=merged_headers,
                 cookies=self.cookies,
                 timeout=timeout,
+                proxies=get_proxies(),
                 **kwargs
             )
         
@@ -525,6 +527,7 @@ class BaseRequest:
         self._log_request("POST", url, data=data, json=json_data)
         
         def _make_request():
+            from utils.proxy_config import get_proxies
             return requests.post(
                 url,
                 data=data,
@@ -532,6 +535,7 @@ class BaseRequest:
                 headers=merged_headers,
                 cookies=self.cookies,
                 timeout=timeout,
+                proxies=get_proxies(),
                 **kwargs
             )
         

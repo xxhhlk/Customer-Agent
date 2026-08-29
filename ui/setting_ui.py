@@ -695,6 +695,80 @@ class RateLimitCard(CardWidget):
         self.fallback_reply_edit.setPlainText(text)
 
 
+class ProxyConfigCard(CardWidget):
+    """SOCKS5 网络代理配置卡片"""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setupUI()
+
+    def setupUI(self) -> None:
+        """设置UI"""
+        from qfluentwidgets import SwitchButton
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题
+        title_label = StrongBodyLabel("网络代理（SOCKS5）")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 启用开关
+        self.enable_switch = SwitchButton("启用")
+        self.enable_switch.setChecked(False)
+        form_layout.addRow("启用代理:", self.enable_switch)
+
+        # 代理地址
+        self.server_edit = LineEdit()
+        self.server_edit.setPlaceholderText("127.0.0.1:1080（可省略 socks5:// 前缀）")
+        self.server_edit.setText("127.0.0.1:1080")
+        form_layout.addRow("代理地址:", self.server_edit)
+
+        # 代理端解析域名开关
+        self.remote_dns_switch = SwitchButton("代理端解析")
+        self.remote_dns_switch.setChecked(True)
+        form_layout.addRow("代理端解析域名:", self.remote_dns_switch)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "启用后所有网络请求（AI 接口、拼多多消息、图片下载等）经 SOCKS5 代理。\n"
+            "代理端解析域名：由代理服务端解析域名，本地不发 DNS 查询（socks5h）；关闭则本地解析。\n"
+            "注意：AI 接口与拼多多 WebSocket 需重启或重连后生效；浏览器登录窗口不受开关影响，"
+            "Chromium 的 SOCKS5 始终由代理服务端解析域名。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        return {
+            "proxy": {
+                "enabled": self.enable_switch.isChecked(),
+                "server": self.server_edit.text().strip(),
+                "remote_dns": self.remote_dns_switch.isChecked()
+            }
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        proxy = config.get("proxy", {})
+        self.enable_switch.setChecked(proxy.get("enabled", False))
+        self.server_edit.setText(proxy.get("server", "127.0.0.1:1080"))
+        self.remote_dns_switch.setChecked(proxy.get("remote_dns", True))
+
+
 class BannedWordsCard(CardWidget):
     """禁用词配置卡片 - AI 回复发送前的硬拦截词表"""
 
@@ -820,6 +894,9 @@ class SettingUI(QFrame):
             self.business_hours_card,
             self.human_reply_wait_card,
             self.auto_start_card,
+            self.relogin_card,
+            self.rate_limit_card,
+            self.proxy_card,
             self.banned_words_card
         ]
         
@@ -957,6 +1034,7 @@ class SettingUI(QFrame):
         self.auto_start_card = AutoStartCard()
         self.relogin_card = AutoReloginCard()
         self.rate_limit_card = RateLimitCard()
+        self.proxy_card = ProxyConfigCard()
         self.banned_words_card = BannedWordsCard()
 
         # 添加到布局
@@ -969,6 +1047,7 @@ class SettingUI(QFrame):
         content_layout.addWidget(self.auto_start_card)
         content_layout.addWidget(self.relogin_card)
         content_layout.addWidget(self.rate_limit_card)
+        content_layout.addWidget(self.proxy_card)
         content_layout.addWidget(self.banned_words_card)
         content_layout.addStretch()
 
@@ -1048,7 +1127,12 @@ class SettingUI(QFrame):
                     "max_requests": config.get("rate_limit.max_requests", 10),
                     "fallback_reply": config.get("rate_limit.fallback_reply", [])
                 },
-                "banned_words": config.get("banned_words", [])
+                "banned_words": config.get("banned_words", []),
+                "proxy": {
+                    "enabled": config.get("proxy.enabled", False),
+                    "server": config.get("proxy.server", "127.0.0.1:1080"),
+                    "remote_dns": config.get("proxy.remote_dns", True)
+                }
             }
 
             # 验证并设置配置
@@ -1133,7 +1217,12 @@ class SettingUI(QFrame):
             "business_hours": config_data.get("business_hours", {"start": "08:00", "end": "23:00"}),
             "staff_reply_wait": config_data.get("staff_reply_wait", {"enable": True, "wait_seconds": 30}),
             "rate_limit": config_data.get("rate_limit", {"window_hours": 4, "max_requests": 10, "fallback_reply": ["这个我不了解呢，帮你问下我们的技术人员"]}),
-            "banned_words": config_data.get("banned_words", [])
+            "banned_words": config_data.get("banned_words", []),
+            "proxy": config_data.get("proxy", {
+                "enabled": False,
+                "server": "127.0.0.1:1080",
+                "remote_dns": True
+            })
         }
 
         # 验证business_hours格式
@@ -1194,6 +1283,7 @@ class SettingUI(QFrame):
         self.relogin_card.setConfig({"relogin": relogin_config})
 
         self.rate_limit_card.setConfig(validated_config)
+        self.proxy_card.setConfig(validated_config)
         self.banned_words_card.setConfig(validated_config)
     
     def onSaveConfig(self):
@@ -1209,6 +1299,7 @@ class SettingUI(QFrame):
             auto_start_config = self.auto_start_card.getConfig()
             relogin_config = self.relogin_card.getConfig()
             rate_limit_config = self.rate_limit_card.getConfig()
+            proxy_config = self.proxy_card.getConfig()
             banned_words_config = self.banned_words_card.getConfig()
 
             # 合并配置为新的结构
@@ -1222,6 +1313,7 @@ class SettingUI(QFrame):
                 "auto_start_on_launch": auto_start_config.get("auto_start_on_launch", False),
                 **relogin_config,
                 **rate_limit_config,
+                **proxy_config,
                 "banned_words": banned_words_config.get("banned_words", []),
                 # 保持与旧配置的兼容性
                 "db_path": config.get("db_path", "")
@@ -1257,6 +1349,15 @@ class SettingUI(QFrame):
                 self.logger.info(f"限流器已热更新: {rc}")
             except Exception as e:
                 self.logger.warning(f"限流器热更新失败: {e}，重启后生效")
+
+            # 热更新网络代理环境变量：保存后立即生效
+            # （requests 即时生效；httpx/openai 长驻客户端与 websockets/playwright 需重启或重连）
+            try:
+                from utils.proxy_config import apply_proxy_env
+                apply_proxy_env()
+                self.logger.info(f"网络代理已热更新: {self.proxy_card.getConfig()}")
+            except Exception as e:
+                self.logger.warning(f"网络代理热更新失败: {e}，重启后生效")
 
             self.logger.info("配置保存成功")
 

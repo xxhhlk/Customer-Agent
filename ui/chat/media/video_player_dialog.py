@@ -63,7 +63,8 @@ class VideoDownloadWorker(QThread):
                 self.finished_ok.emit(self._cache_path)
                 return
 
-            resp = requests.get(self._url, timeout=30, stream=True)
+            from utils.proxy_config import get_proxies
+            resp = requests.get(self._url, timeout=30, stream=True, proxies=get_proxies())
             resp.raise_for_status()
 
             total = int(resp.headers.get("content-length", 0))
