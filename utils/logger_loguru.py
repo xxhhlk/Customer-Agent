@@ -55,11 +55,11 @@ except ImportError:
 # 默认配置
 DEFAULT_LOG_LEVEL = "info"
 DEFAULT_LOG_FILE = "logs/app.log"
-MAX_LOG_SIZE = os.environ.get("LOG_MAX_SIZE", "50 MB")
+MAX_LOG_SIZE = os.environ.get("LOG_MAX_SIZE", "5 MB")
 LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", "7"))
 
 # 日志轮转：按天 + 按大小双条件（loguru 的 rotation 参数只接受单一条件，用 callable 组合）
-_ROTATION_MAX_BYTES = _parse_size(MAX_LOG_SIZE) or (50 * 1024 * 1024)
+_ROTATION_MAX_BYTES = _parse_size(MAX_LOG_SIZE) or (5 * 1024 * 1024)
 _rotation_state = {"date": datetime.now().date()}
 
 def _rotation_condition(message, file) -> bool:
