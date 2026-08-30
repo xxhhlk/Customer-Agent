@@ -13,8 +13,8 @@ import os
 from typing import Optional
 
 import requests
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRectF
-from PyQt6.QtGui import QKeyEvent, QColor, QPainter
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRectF, QSizeF
+from PyQt6.QtGui import QKeyEvent, QColor, QPainter, QResizeEvent
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from PyQt6.QtWidgets import (
@@ -97,6 +97,7 @@ class VideoPlayerDialog(QDialog):
         self._local_path: Optional[str] = None
         self._download_worker: Optional[VideoDownloadWorker] = None
         self._rotation = 0  # 0/90/180/270
+        self._sink_bound = False  # videoSizeChanged 信号是否已绑定（setVideoOutput 后才能绑定）
 
         self._init_ui()
         self._start_download()
@@ -217,6 +218,7 @@ class VideoPlayerDialog(QDialog):
         url = QUrl.fromLocalFile(local_path)
         # 使用 play_bar 内置的 MediaPlayer，绑定视频输出到 QGraphicsVideoItem
         self._play_bar.player.setVideoOutput(self._video_item)
+        self._bind_video_sink()
         self._play_bar.player.setSource(url)
         self._play_bar.play()
         self._on_playback_started()
@@ -227,9 +229,29 @@ class VideoPlayerDialog(QDialog):
         self._play_bar.show()
         qurl = QUrl(url)
         self._play_bar.player.setVideoOutput(self._video_item)
+        self._bind_video_sink()
         self._play_bar.player.setSource(qurl)
         self._play_bar.play()
         self._on_playback_started()
+
+    def _bind_video_sink(self):
+        """绑定视频尺寸信号（必须在 setVideoOutput 之后调用，幂等）"""
+        if self._sink_bound:
+            return
+        sink = self._play_bar.player.videoSink()
+        if sink is not None:
+            sink.videoSizeChanged.connect(self._on_video_size_changed)
+            self._sink_bound = True
+
+    def _on_video_size_changed(self, size):
+        """视频帧真实尺寸到达后，更新 item 尺寸并重新适配窗口
+
+        QGraphicsVideoItem 默认尺寸是 320x240，不 setSize 的话画面只渲染
+        在中间一小块；拿到真实视频尺寸后必须同步 item 尺寸并重新 fit。
+        """
+        if size.isValid() and not size.isEmpty():
+            self._video_item.setSize(QSizeF(size))
+            self._fit_video()
 
     def _on_playback_started(self):
         """播放开始时启用旋转按钮并适配窗口"""
@@ -244,10 +266,18 @@ class VideoPlayerDialog(QDialog):
         self._fit_video()
 
     def _fit_video(self):
-        """将视频适配到视图，考虑旋转后的包围盒"""
-        rect = self._scene.itemsBoundingRect()
+        """将视频适配到视图，考虑旋转后的场景包围盒"""
+        # 用 item 自身 boundingRect 映射到场景，而不是 itemsBoundingRect()，
+        # 避免 scene 里其他 item / 过期矩形干扰缩放计算
+        rect = self._video_item.mapRectToScene(self._video_item.boundingRect())
         if rect.isValid() and not rect.isEmpty():
             self._view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def resizeEvent(self, event: QResizeEvent):
+        """窗口大小变化时重新适配视频（拖拽放大/缩小窗口画面跟随）"""
+        super().resizeEvent(event)
+        if self._video_item is not None and self._video_item.scene() is not None:
+            QTimer.singleShot(0, self._fit_video)
 
     def _save_as(self):
         """另存视频到用户指定路径"""
