@@ -63,8 +63,9 @@ class VideoDownloadWorker(QThread):
                 self.finished_ok.emit(self._cache_path)
                 return
 
-            from utils.proxy_config import get_proxies
-            resp = requests.get(self._url, timeout=30, stream=True, proxies=get_proxies())
+            # 代理：默认走代理；设置 proxy.exclude_media=True 时聊天媒体直连
+            from utils.proxy_config import get_media_proxies
+            resp = requests.get(self._url, timeout=30, stream=True, proxies=get_media_proxies())
             resp.raise_for_status()
 
             total = int(resp.headers.get("content-length", 0))
@@ -98,6 +99,7 @@ class VideoPlayerDialog(QDialog):
         self._download_worker: Optional[VideoDownloadWorker] = None
         self._rotation = 0  # 0/90/180/270
         self._sink_bound = False  # videoSizeChanged 信号是否已绑定（setVideoOutput 后才能绑定）
+        self._size_poll_timer: Optional[QTimer] = None  # 视频尺寸轮询兜底（信号不可靠时使用）
 
         self._init_ui()
         self._start_download()
@@ -242,22 +244,72 @@ class VideoPlayerDialog(QDialog):
         if sink is not None:
             sink.videoSizeChanged.connect(self._on_video_size_changed)
             self._sink_bound = True
+        # videoSizeChanged 信号实测在某些后端/播放器上不触发（绑定对象正确但
+        # 信号从未发出），画面会一直停在默认 320x240 的中间一小块。
+        # 启动轮询兜底：定期读 videoSink().videoSize()，拿到有效尺寸即适配。
+        self._start_size_polling()
+
+    def _start_size_polling(self):
+        """启动视频尺寸轮询兜底（幂等）"""
+        if self._size_poll_timer is not None:
+            return
+        self._size_poll_timer = QTimer(self)
+        self._size_poll_timer.setInterval(200)
+        self._size_poll_timer.timeout.connect(self._poll_video_size)
+        self._size_poll_timer.start()
+        # 立即查一次，避免等首个 timeout（200ms）
+        self._poll_video_size()
+
+    def _stop_size_polling(self):
+        if self._size_poll_timer is not None:
+            try:
+                self._size_poll_timer.stop()
+            except RuntimeError:
+                pass
+            self._size_poll_timer = None
+
+    def _poll_video_size(self):
+        """轮询读取当前视频尺寸，有效则应用并停止轮询"""
+        try:
+            sink = self._play_bar.player.videoSink()
+            if sink is None:
+                return
+            size = sink.videoSize()
+        except RuntimeError:
+            # C++ 对象已删除（对话框关闭中）
+            self._stop_size_polling()
+            return
+        if size.isValid() and not size.isEmpty():
+            self._apply_video_size(size)
+            self._stop_size_polling()
 
     def _on_video_size_changed(self, size):
-        """视频帧真实尺寸到达后，更新 item 尺寸并重新适配窗口
+        """videoSizeChanged 信号回调（信号能触发时的路径）"""
+        if size.isValid() and not size.isEmpty():
+            self._apply_video_size(size)
+            self._stop_size_polling()
+
+    def _apply_video_size(self, size):
+        """应用视频真实尺寸并重新适配窗口
 
         QGraphicsVideoItem 默认尺寸是 320x240，不 setSize 的话画面只渲染
         在中间一小块；拿到真实视频尺寸后必须同步 item 尺寸并重新 fit。
+        延迟到下一轮事件循环执行：此时 show/hide 引起的布局变更已处理完，
+        viewport 尺寸才是最终值（否则 fit 会按旧尺寸缩放导致画面不占满窗口）。
         """
-        if size.isValid() and not size.isEmpty():
-            self._video_item.setSize(QSizeF(size))
-            self._fit_video()
+        self._video_item.setSize(QSizeF(size))
+        QTimer.singleShot(0, self._fit_video)
 
     def _on_playback_started(self):
         """播放开始时启用旋转按钮并适配窗口"""
         self._rotate_left_btn.setEnabled(True)
         self._rotate_right_btn.setEnabled(True)
-        self._fit_video()
+        QTimer.singleShot(0, self._fit_video)
+
+    def showEvent(self, event):
+        """窗口显示后（布局已定）主动适配一次，兜底视频尺寸信号早于布局到达的情况"""
+        super().showEvent(event)
+        QTimer.singleShot(0, self._fit_video)
 
     def _rotate(self, delta: int):
         """旋转视频（-90 左旋 / +90 右旋），旋转后自动适配窗口"""
@@ -320,6 +372,8 @@ class VideoPlayerDialog(QDialog):
                 self._play_bar.player.setVideoOutput(None)  # type: ignore[arg-type]
         except Exception:
             pass
+
+        self._stop_size_polling()
 
         if self._download_worker and self._download_worker.isRunning():
             self._download_worker.requestInterruption()
