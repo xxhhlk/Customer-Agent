@@ -88,11 +88,13 @@ class DatabaseManager:
             print(f"[DatabaseManager] 启用 WAL 模式失败: {e}")
 
         # 每个新连接都设置 busy_timeout（PRAGMA 是 per-connection 的）
+        # 2000ms：切换会话的后台查询若撞上写锁，最多等 2s 即返回
+        # （原 5000ms 曾导致查询死等 10s 白屏）
         @event.listens_for(self.engine, "connect")
         def _set_sqlite_pragma(dbapi_conn, connection_record):
             cursor = dbapi_conn.cursor()
             try:
-                cursor.execute("PRAGMA busy_timeout=5000")
+                cursor.execute("PRAGMA busy_timeout=2000")
             except Exception as e:
                 print(f"[DatabaseManager] 设置 PRAGMA busy_timeout 失败: {e}")
             finally:

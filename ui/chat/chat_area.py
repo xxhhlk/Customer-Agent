@@ -78,6 +78,11 @@ class ChatAreaPanel(QWidget):
         self._user_scrolled_up: bool = False  # 用户是否手动向上滚动（浏览历史）
         self._scroll_fallback_timer: QTimer | None = None  # 兜底定时器（1.5s后强制滚动）
         self._last_msg_time: datetime | None = None  # 上一条消息时间，用于插入时间/日期分隔标签
+        # 分批渲染状态
+        self._render_batch_queue: list = []
+        self._render_batch_index: int = 0
+        self._render_batch_token: int = 0
+        self._render_batch_timer: QTimer | None = None
 
         self._init_ui()
         self._apply_theme()
@@ -163,6 +168,7 @@ class ChatAreaPanel(QWidget):
         # 切换会话时重置滚动状态
         self._user_scrolled_up = False
         self._cancel_scroll_retry()
+        self._cancel_batch_render()  # 取消旧会话的进行中分批渲染
         self._last_msg_time = None  # 重置时间分隔状态
 
         # 清空旧消息
@@ -174,18 +180,25 @@ class ChatAreaPanel(QWidget):
         # 后台线程加载
         if self._loader is not None:
             try:
-                self._loader.result.disconnect(self._on_messages_loaded)
+                self._loader.result.disconnect()  # 无参断开所有连接(含 lambda)
             except (TypeError, RuntimeError):
                 pass
-            self._loader.quit()
-            self._loader.wait(500)
-        self._loader = _MessageLoader(shop_id, buyer_uid, self)
-        self._loader.result.connect(lambda sid, buid, msgs: self._on_messages_loaded(sid, buid, msgs, token))
-        self._loader.start()
+            # 不 wait 阻塞主线程：旧线程自然结束，结果被 token 拦截
+            self._loader = None
+
+        loader = _MessageLoader(shop_id, buyer_uid, self)
+        loader.result.connect(lambda sid, buid, msgs: self._on_messages_loaded(sid, buid, msgs, token))
+        loader.finished.connect(lambda: loader.deleteLater())  # 线程结束后释放对象
+        self._loader = loader
+        loader.start()
         logger.info("[ChatArea] load_messages: loader 已启动")
 
+    # 分批渲染参数：避免一次创建几百个气泡冻结 UI
+    _RENDER_BATCH_SIZE = 20
+    _RENDER_BATCH_INTERVAL_MS = 15
+
     def _on_messages_loaded(self, shop_id: str, buyer_uid: str, messages: list, token: int = 0):
-        """后台线程加载完成后，在主线程渲染气泡"""
+        """后台线程加载完成后，在主线程分批渲染气泡"""
         logger.info(f"[ChatArea] _on_messages_loaded: {len(messages)} 条消息")
 
         # 防止过期结果（用户已切换到其他会话）
@@ -194,36 +207,70 @@ class ChatAreaPanel(QWidget):
         if shop_id != self._current_shop_id or buyer_uid != self._current_buyer_uid:
             return
 
-        if messages:
-            # 从首条消息提取 user_id
-            self._current_user_id = messages[0].get("user_id", "")
-            # 标题应显示买家昵称：首条消息可能是客服发出的（outbound），
-            # 其 nickname 为空或历史脏数据 "客服"/"AI客服"，需过滤后兜底 buyer_uid
-            nickname = messages[0].get("nickname") or ""
-            if nickname in ("客服", "AI客服", "mall_cs", "user"):
-                nickname = ""
-            self.header_title.setText(nickname or buyer_uid)
-            self.header_detail.setText(f"({buyer_uid})")
-
-            # 渲染气泡
-            logger.info("[ChatArea] _on_messages_loaded: 开始渲染气泡")
-            for msg in messages:
-                self._add_time_separator_if_needed(msg)
-                bubble = MessageBubble(msg)
-                self._connect_bubble_signal(bubble)
-                self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
-            logger.info("[ChatArea] _on_messages_loaded: 气泡渲染完成")
-
-            self.input_area.set_enabled(True)
-        else:
+        if not messages:
             self.header_title.setText("暂无消息")
             self.header_detail.setText("")
             self.input_area.set_enabled(False)
+            self._schedule_scroll_to_bottom(token)
+            return
 
-        # 滚动到底部 — 使用带重试的滚动策略
-        logger.info("[ChatArea] _on_messages_loaded: 准备滚动到底部")
-        self._schedule_scroll_to_bottom(token)
-        logger.info("[ChatArea] _on_messages_loaded: 完成")
+        # 从首条消息提取 user_id
+        self._current_user_id = messages[0].get("user_id", "")
+        # 标题应显示买家昵称：首条消息可能是客服发出的（outbound），
+        # 其 nickname 为空或历史脏数据 "客服"/"AI客服"，需过滤后兜底 buyer_uid
+        nickname = messages[0].get("nickname") or ""
+        if nickname in ("客服", "AI客服", "mall_cs", "user"):
+            nickname = ""
+        self.header_title.setText(nickname or buyer_uid)
+        self.header_detail.setText(f"({buyer_uid})")
+        self.input_area.set_enabled(True)
+
+        # 分批渲染（旧批次由 token 拦截）
+        logger.info("[ChatArea] _on_messages_loaded: 开始渲染气泡")
+        self._render_batch_queue = list(messages)
+        self._render_batch_index = 0
+        self._render_batch_token = token
+        self._render_batch_timer = None
+        self._render_next_batch()
+
+    def _render_next_batch(self):
+        """渲染下一批气泡（每批 _RENDER_BATCH_SIZE 条）"""
+        if self._render_batch_token != self._load_token:
+            return  # 已切换会话，丢弃旧批次
+        start = self._render_batch_index
+        queue = self._render_batch_queue
+        if start >= len(queue):
+            logger.info("[ChatArea] _on_messages_loaded: 气泡渲染完成")
+            self._schedule_scroll_to_bottom(self._render_batch_token)
+            return
+        end = min(start + self._RENDER_BATCH_SIZE, len(queue))
+        for msg in queue[start:end]:
+            self._add_time_separator_if_needed(msg)
+            bubble = MessageBubble(msg)
+            self._connect_bubble_signal(bubble)
+            self._msg_layout.insertWidget(self._msg_layout.count() - 1, bubble)
+        self._render_batch_index = end
+        if end < len(queue):
+            # 复用单个 timer，避免每批新建 QTimer 对象
+            if self._render_batch_timer is None:
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._render_next_batch)
+                self._render_batch_timer = timer
+            self._render_batch_timer.start(self._RENDER_BATCH_INTERVAL_MS)
+        else:
+            logger.info("[ChatArea] _on_messages_loaded: 气泡渲染完成")
+            self._schedule_scroll_to_bottom(self._render_batch_token)
+
+    def _cancel_batch_render(self):
+        """取消进行中的分批渲染（切换会话时调用）"""
+        if getattr(self, "_render_batch_timer", None) is not None:
+            try:
+                self._render_batch_timer.stop()
+                self._render_batch_timer.deleteLater()
+            except RuntimeError:
+                pass
+            self._render_batch_timer = None
 
     def append_message(self, msg_data: dict):
         """追加新消息（实时）"""

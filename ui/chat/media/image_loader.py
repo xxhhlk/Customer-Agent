@@ -10,6 +10,7 @@
 import hashlib
 import io
 import os
+import threading
 from typing import Callable, Optional
 from collections import OrderedDict
 
@@ -29,6 +30,10 @@ _THUMB_MEMORY_CACHE: OrderedDict = OrderedDict()
 # 原图内存缓存 (LRU)
 _FULL_MEMORY_CACHE: OrderedDict = OrderedDict()
 _MEMORY_CACHE_MAX = 100
+# 网络下载并发上限：一次切换会话可能渲染几十张图片，
+# 不加限制会同时启动几十个下载线程拖垮主线程/网络
+_MAX_CONCURRENT_DOWNLOADS = 4
+_download_semaphore = threading.Semaphore(_MAX_CONCURRENT_DOWNLOADS)
 
 
 def _url_to_cache_path(url: str, prefix: str = "") -> str:
@@ -95,8 +100,10 @@ class ImageLoadWorker(QThread):
 
         # 3. 网络下载 → Pillow 缩放(仅缩略图) → PNG bytes → 存磁盘缓存
         #    代理：默认走代理；设置 proxy.exclude_media=True 时聊天媒体直连
+        #    并发上限：同一会话可能渲染几十张图片，信号量限制同时下载数
         from utils.proxy_config import get_media_proxies
-        resp = requests.get(self._url, timeout=15, proxies=get_media_proxies())
+        with _download_semaphore:
+            resp = requests.get(self._url, timeout=15, proxies=get_media_proxies())
         resp.raise_for_status()
         img_data = resp.content
 
