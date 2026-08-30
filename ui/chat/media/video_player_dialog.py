@@ -283,11 +283,10 @@ class VideoPlayerDialog(QDialog):
             self._apply_video_size(size)
             self._stop_size_polling()
 
-    def _on_video_size_changed(self, size):
-        """videoSizeChanged 信号回调（信号能触发时的路径）"""
-        if size.isValid() and not size.isEmpty():
-            self._apply_video_size(size)
-            self._stop_size_polling()
+    def _on_video_size_changed(self):
+        """videoSizeChanged 信号回调（Qt6 中该信号为无参信号，尺寸需从
+        videoSink().videoSize() 读取）→ 复用轮询读取逻辑"""
+        self._poll_video_size()
 
     def _apply_video_size(self, size):
         """应用视频真实尺寸并重新适配窗口
