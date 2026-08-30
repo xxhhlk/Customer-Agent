@@ -207,6 +207,18 @@ def get_proxies() -> Dict[str, str]:
     return {"http": url, "https": url}
 
 
+def get_media_proxies() -> Dict[str, str]:
+    """聊天媒体（图片/视频）下载用的 proxies。
+
+    proxy.exclude_media=True 时强制直连（不走代理）；否则与 get_proxies() 一致。
+    """
+    from config import config
+
+    if config.get("proxy.exclude_media", False):
+        return {}
+    return get_proxies()
+
+
 def apply_proxy_env() -> None:
     """将代理写入进程环境变量，使 httpx / openai(agno) 走 socks5。
 
@@ -285,11 +297,30 @@ async def open_socks5_connection(host: str, port: int, timeout: float = 30.0) ->
         return buf
 
     async def _handshake() -> socket.socket:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setblocking(False)
-        try:
-            await loop.sock_connect(sock, (proxy_host, proxy_port))
+        # 连接代理服务器：每次连接重新解析代理地址（代理为域名时适配 DNS 变动），
+        # 用 getaddrinfo 异步解析避免阻塞事件循环，并兼容 IPv4/IPv6
+        infos = await loop.getaddrinfo(
+            proxy_host, proxy_port, type=socket.SOCK_STREAM
+        )
+        last_err: Optional[OSError] = None
+        sock: Optional[socket.socket] = None
+        for family, _stype, _proto, _cname, sockaddr in infos:
+            s = socket.socket(family, socket.SOCK_STREAM)
+            s.setblocking(False)
+            try:
+                await loop.sock_connect(s, sockaddr)
+                sock = s
+                break
+            except OSError as e:
+                last_err = e
+                s.close()
+        if sock is None:
+            raise ConnectionError(
+                f"无法连接 SOCKS5 代理 {proxy_host}:{proxy_port}"
+                + (f": {last_err}" if last_err else "")
+            )
 
+        try:
             # 1. 协商认证方法（仅支持无认证）
             await loop.sock_sendall(sock, b"\x05\x01\x00")
             resp = await _recv_exact(sock, 2)

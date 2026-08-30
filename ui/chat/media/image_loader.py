@@ -94,8 +94,9 @@ class ImageLoadWorker(QThread):
                 return data
 
         # 3. 网络下载 → Pillow 缩放(仅缩略图) → PNG bytes → 存磁盘缓存
-        from utils.proxy_config import get_proxies
-        resp = requests.get(self._url, timeout=15, proxies=get_proxies())
+        #    代理：默认走代理；设置 proxy.exclude_media=True 时聊天媒体直连
+        from utils.proxy_config import get_media_proxies
+        resp = requests.get(self._url, timeout=15, proxies=get_media_proxies())
         resp.raise_for_status()
         img_data = resp.content
 

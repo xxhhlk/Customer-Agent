@@ -799,14 +799,21 @@ class ProxyConfigCard(CardWidget):
         self.check_interval_spin.setSuffix(" 秒")
         form_layout.addRow("健康检查间隔:", self.check_interval_spin)
 
+        # 聊天媒体不走代理
+        self.exclude_media_switch = SwitchButton("媒体直连")
+        self.exclude_media_switch.setChecked(False)
+        form_layout.addRow("聊天媒体不走代理:", self.exclude_media_switch)
+
         layout.addLayout(form_layout)
 
         # 说明文本
         description_label = CaptionLabel(
             "启用后所有网络请求（AI 接口、拼多多消息、图片下载等）经 SOCKS5 代理。\n"
+            "代理地址支持域名（如 proxy.example.com:1080），每次连接实时解析，适配地址变动。\n"
             "代理端解析域名：由代理服务端解析域名，本地不发 DNS 查询（socks5h）；关闭则本地解析。\n"
             "健康检查：按设定间隔经代理探测拼多多首页，连续失败自动回退直连，恢复后自动切回代理"
             "（0 秒表示关闭自动检查）。\n"
+            "聊天媒体不走代理：聊天窗口中的图片/视频下载直连，不经过代理（可能提高加载速度）。\n"
             "注意：AI 接口与拼多多 WebSocket 需重启或重连后生效；浏览器登录窗口不受开关影响，"
             "Chromium 的 SOCKS5 始终由代理服务端解析域名。\n"
             "测试连接：使用当前表单填写的地址（无需先保存），经代理访问拼多多首页验证可用性。"
@@ -881,7 +888,8 @@ class ProxyConfigCard(CardWidget):
                 "enabled": self.enable_switch.isChecked(),
                 "server": self.server_edit.text().strip(),
                 "remote_dns": self.remote_dns_switch.isChecked(),
-                "check_interval": self.check_interval_spin.value()
+                "check_interval": self.check_interval_spin.value(),
+                "exclude_media": self.exclude_media_switch.isChecked()
             }
         }
 
@@ -892,6 +900,7 @@ class ProxyConfigCard(CardWidget):
         self.server_edit.setText(proxy.get("server", "127.0.0.1:1080"))
         self.remote_dns_switch.setChecked(proxy.get("remote_dns", True))
         self.check_interval_spin.setValue(proxy.get("check_interval", 60))
+        self.exclude_media_switch.setChecked(proxy.get("exclude_media", False))
 
 
 class BarkTestThread(QThread):
@@ -1422,7 +1431,8 @@ class SettingUI(QFrame):
                     "enabled": config.get("proxy.enabled", False),
                     "server": config.get("proxy.server", "127.0.0.1:1080"),
                     "remote_dns": config.get("proxy.remote_dns", True),
-                    "check_interval": config.get("proxy.check_interval", 60)
+                    "check_interval": config.get("proxy.check_interval", 60),
+                    "exclude_media": config.get("proxy.exclude_media", False)
                 },
                 "bark": {
                     "key": config.get("bark.key", ""),
@@ -1521,7 +1531,8 @@ class SettingUI(QFrame):
                 "enabled": False,
                 "server": "127.0.0.1:1080",
                 "remote_dns": True,
-                "check_interval": 60
+                "check_interval": 60,
+                "exclude_media": False
             }),
             "bark": config_data.get("bark", {
                 "key": "",
