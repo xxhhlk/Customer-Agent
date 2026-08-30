@@ -553,17 +553,19 @@ class MessagePersistenceService:
         db_manager = get_db_manager()
         session: Session = db_manager.Session()
         try:
+            # 倒序取最新 limit 条再反转成正序：会话消息超过 limit 时，
+            # 正序取前 limit 条会把最新消息截掉（会话列表能看到、聊天区看不到）。
             rows = (
                 session.query(ChatMessageRecord)
                 .filter(
                     ChatMessageRecord.shop_id == shop_id,
                     ChatMessageRecord.buyer_uid == buyer_uid,
                 )
-                .order_by(ChatMessageRecord.timestamp.asc())
+                .order_by(ChatMessageRecord.timestamp.desc())
                 .limit(limit)
                 .all()
             )
-            return [self._record_to_dict(r) for r in rows]
+            return [self._record_to_dict(r) for r in reversed(rows)]
         except Exception as e:
             logger.error(f"get_messages_by_uid 失败: {e}")
             return []

@@ -51,7 +51,7 @@ class _MessageLoader(QThread):
         try:
             from services.message_persistence import message_persistence_service
             messages = message_persistence_service.get_messages_by_uid(
-                shop_id=self._shop_id, buyer_uid=self._buyer_uid, limit=200
+                shop_id=self._shop_id, buyer_uid=self._buyer_uid, limit=500
             )
         except Exception:
             messages = []
