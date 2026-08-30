@@ -894,6 +894,169 @@ class ProxyConfigCard(CardWidget):
         self.check_interval_spin.setValue(proxy.get("check_interval", 60))
 
 
+class BarkTestThread(QThread):
+    """后台发送一条 Bark 测试通知（不阻塞 UI）"""
+
+    # (耗时ms) 成功
+    finished_ok = pyqtSignal(int)
+    # (错误信息) 失败
+    finished_err = pyqtSignal(str)
+
+    _TIMEOUT = 10
+
+    def __init__(self, key: str, base_url: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.key = key
+        self.base_url = base_url
+        self.setObjectName("BarkTestThread")
+
+    def run(self):
+        """后台线程：走 bark_notify 的推送逻辑（复用同一套请求），通过信号回传结果"""
+        try:
+            from utils.bark_notify import _do_push_with
+
+            start = time.perf_counter()
+            ok = _do_push_with(
+                self.key, self.base_url,
+                "客服系统：测试通知",
+                "Bark 通知配置验证成功，重登失败告警将推送到此设备。",
+            )
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            if ok:
+                self.finished_ok.emit(elapsed_ms)
+            else:
+                self.finished_err.emit("推送失败（详见日志）")
+        except Exception as e:
+            self.finished_err.emit(str(e))
+
+
+class BarkConfigCard(CardWidget):
+    """Bark 通知配置卡片 - 账号重登失败等告警推送"""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._test_thread: Optional[BarkTestThread] = None
+        self.setupUI()
+
+    def setupUI(self) -> None:
+        """设置UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 卡片标题行（标题 + 测试按钮）
+        title_row = QHBoxLayout()
+        title_label = StrongBodyLabel("Bark 通知")
+        title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        title_row.addWidget(title_label)
+        title_row.addStretch()
+        self.test_btn = PushButton(FIF.SEND, "发送测试通知")
+        self.test_btn.setToolTip("用当前填写的密钥立即发送一条测试通知，验证能否推送到手机")
+        self.test_btn.clicked.connect(self._on_test)
+        title_row.addWidget(self.test_btn)
+        layout.addLayout(title_row)
+
+        # 表单布局
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # 设备密钥
+        self.key_edit = PasswordLineEdit()
+        self.key_edit.setPlaceholderText("Bark 设备 key（App 内复制）")
+        form_layout.addRow("设备密钥:", self.key_edit)
+
+        # 服务地址
+        self.base_url_edit = LineEdit()
+        self.base_url_edit.setPlaceholderText("https://api.day.app")
+        self.base_url_edit.setText("https://api.day.app")
+        form_layout.addRow("服务地址:", self.base_url_edit)
+
+        layout.addLayout(form_layout)
+
+        # 说明文本
+        description_label = CaptionLabel(
+            "自动重登连续失败达上限时推送告警，提醒人工处理（否则该店铺消息将无法回复）。\n"
+            "密钥：手机安装 Bark App 后，在 App 内获取设备 key 填入。\n"
+            "服务地址：默认 day.app 官方服务；自建 bark-server 可改为自己的地址。\n"
+            "发送测试通知：使用当前填写的密钥（无需先保存），验证推送链路是否正常。"
+        )
+        description_label.setStyleSheet("color: #666; padding: 8px 0;")
+        description_label.setWordWrap(True)
+        layout.addWidget(description_label)
+
+    def _on_test(self):
+        """点击测试：校验表单值 → 后台线程发测试通知"""
+        if self._test_thread is not None and self._test_thread.isRunning():
+            return
+
+        key = self.key_edit.text().strip()
+        base_url = self.base_url_edit.text().strip() or "https://api.day.app"
+        if not key:
+            InfoBar.warning(
+                title="密钥为空",
+                content="请先填写 Bark 设备密钥",
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("发送中...")
+
+        self._test_thread = BarkTestThread(key, base_url, parent=self)
+        self._test_thread.finished_ok.connect(self._on_test_ok)
+        self._test_thread.finished_err.connect(self._on_test_err)
+        self._test_thread.finished.connect(self._on_test_done)
+        self._test_thread.start()
+
+    def _on_test_ok(self, elapsed_ms: int):
+        InfoBar.success(
+            title="测试通知已发送",
+            content=f"Bark 推送成功，耗时 {elapsed_ms} ms，请查看手机通知",
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+            parent=self,
+        )
+
+    def _on_test_err(self, error_msg: str):
+        InfoBar.error(
+            title="测试通知发送失败",
+            content=f"{error_msg}，请检查密钥和服务地址",
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=8000,
+            parent=self,
+        )
+
+    def _on_test_done(self):
+        try:
+            self.test_btn.setEnabled(True)
+            self.test_btn.setText("发送测试通知")
+        except RuntimeError:
+            pass  # 窗口已销毁
+
+    def getConfig(self) -> dict:
+        """获取配置"""
+        return {
+            "bark": {
+                "key": self.key_edit.text().strip(),
+                "base_url": self.base_url_edit.text().strip() or "https://api.day.app"
+            }
+        }
+
+    def setConfig(self, config: dict):
+        """设置配置"""
+        bark_config = config.get("bark", {}) if isinstance(config, dict) else {}
+        self.key_edit.setText(bark_config.get("key", ""))
+        self.base_url_edit.setText(bark_config.get("base_url", "https://api.day.app"))
+
+
 class BannedWordsCard(CardWidget):
     """禁用词配置卡片 - AI 回复发送前的硬拦截词表"""
 
@@ -1160,6 +1323,7 @@ class SettingUI(QFrame):
         self.relogin_card = AutoReloginCard()
         self.rate_limit_card = RateLimitCard()
         self.proxy_card = ProxyConfigCard()
+        self.bark_card = BarkConfigCard()
         self.banned_words_card = BannedWordsCard()
 
         # 添加到布局
@@ -1173,6 +1337,7 @@ class SettingUI(QFrame):
         content_layout.addWidget(self.relogin_card)
         content_layout.addWidget(self.rate_limit_card)
         content_layout.addWidget(self.proxy_card)
+        content_layout.addWidget(self.bark_card)
         content_layout.addWidget(self.banned_words_card)
         content_layout.addStretch()
 
@@ -1258,6 +1423,10 @@ class SettingUI(QFrame):
                     "server": config.get("proxy.server", "127.0.0.1:1080"),
                     "remote_dns": config.get("proxy.remote_dns", True),
                     "check_interval": config.get("proxy.check_interval", 60)
+                },
+                "bark": {
+                    "key": config.get("bark.key", ""),
+                    "base_url": config.get("bark.base_url", "https://api.day.app")
                 }
             }
 
@@ -1308,6 +1477,10 @@ class SettingUI(QFrame):
             },
             "relogin": {
                 "max_auto_failures": 3
+            },
+            "bark": {
+                "key": "",
+                "base_url": "https://api.day.app"
             }
         }
 
@@ -1349,6 +1522,10 @@ class SettingUI(QFrame):
                 "server": "127.0.0.1:1080",
                 "remote_dns": True,
                 "check_interval": 60
+            }),
+            "bark": config_data.get("bark", {
+                "key": "",
+                "base_url": "https://api.day.app"
             })
         }
 
@@ -1411,6 +1588,7 @@ class SettingUI(QFrame):
 
         self.rate_limit_card.setConfig(validated_config)
         self.proxy_card.setConfig(validated_config)
+        self.bark_card.setConfig(validated_config)
         self.banned_words_card.setConfig(validated_config)
     
     def onSaveConfig(self):
@@ -1427,6 +1605,7 @@ class SettingUI(QFrame):
             relogin_config = self.relogin_card.getConfig()
             rate_limit_config = self.rate_limit_card.getConfig()
             proxy_config = self.proxy_card.getConfig()
+            bark_config = self.bark_card.getConfig()
             banned_words_config = self.banned_words_card.getConfig()
 
             # 合并配置为新的结构
@@ -1441,6 +1620,7 @@ class SettingUI(QFrame):
                 **relogin_config,
                 **rate_limit_config,
                 **proxy_config,
+                **bark_config,
                 "banned_words": banned_words_config.get("banned_words", []),
                 # 保持与旧配置的兼容性
                 "db_path": config.get("db_path", "")

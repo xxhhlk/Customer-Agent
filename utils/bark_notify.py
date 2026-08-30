@@ -37,16 +37,16 @@ def _get_bark_config() -> dict:
         return {"base_url": "https://api.day.app", "key": ""}
 
 
-def _do_push(title: str, body: str) -> bool:
-    """同步推送（内部用，勿直接调用，会阻塞）"""
-    cfg = _get_bark_config()
-    key = cfg["key"]
+def _do_push_with(key: str, base_url: str, title: str, body: str) -> bool:
+    """按给定 key/base_url 同步推送（内部用，勿直接调用，会阻塞）"""
+    key = (key or "").strip()
+    base_url = (base_url or "https://api.day.app").strip().rstrip("/")
     if not key:
         logger.debug("Bark key 未配置，跳过通知")
         return False
 
     payload = json.dumps({"title": title, "body": body, "device_key": key}).encode("utf-8")
-    url = f"{cfg['base_url']}/push"
+    url = f"{base_url}/push"
     req = urllib.request.Request(
         url,
         data=payload,
@@ -69,6 +69,12 @@ def _do_push(title: str, body: str) -> bool:
     except Exception as e:
         logger.warning(f"Bark 推送失败: {e}")
         return False
+
+
+def _do_push(title: str, body: str) -> bool:
+    """按配置同步推送（内部用，勿直接调用，会阻塞）"""
+    cfg = _get_bark_config()
+    return _do_push_with(cfg["key"], cfg["base_url"], title, body)
 
 
 def push_bark(title: str, body: str) -> None:
