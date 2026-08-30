@@ -17,6 +17,7 @@ import requests
 from database import db_manager
 from utils.logger_loguru import get_logger
 from utils.async_helper import run_async_in_thread
+from utils.bark_notify import push_bark
 
 logger = get_logger("CookieUtils")
 
@@ -107,6 +108,7 @@ class ReloginGuard:
         self._account_locks: Dict[str, threading.Lock] = {}
         self._last_relogin: Dict[str, float] = {}
         self._failures: Dict[str, int] = {}
+        self._notified: set = set()  # 已达上限且已发 Bark 通知的 key（同会话内去重）
         self._cooldown = cooldown_seconds
 
     @staticmethod
@@ -132,11 +134,13 @@ class ReloginGuard:
         key = self._make_key(channel_name, shop_id, user_id)
         with self._lock:
             self._failures.pop(key, None)
+            self._notified.discard(key)
 
     def reset_all(self):
         """清零所有账户的失败计数"""
         with self._lock:
             self._failures.clear()
+            self._notified.clear()
 
     def try_acquire(self, channel_name: str, shop_id: str, user_id: str) -> bool:
         """
@@ -170,11 +174,13 @@ class ReloginGuard:
     def release(self, channel_name: str, shop_id: str, user_id: str, success: bool = False):
         """释放锁；成功时记录时间戳用于冷却期并清零失败计数，失败时累加失败计数"""
         key = self._make_key(channel_name, shop_id, user_id)
+        should_notify = False
 
         with self._lock:
             acct_lock = self._account_locks.get(key)
             if success:
                 self._failures.pop(key, None)
+                self._notified.discard(key)
             else:
                 new_count = self._failures.get(key, 0) + 1
                 self._failures[key] = new_count
@@ -183,6 +189,10 @@ class ReloginGuard:
                         f"自动重登连续失败 {new_count} 次，"
                         f"已达上限，转入等待人工处理: {key}"
                     )
+                    # 仅在第一次达上限时发 Bark 通知，避免健康检查循环重复轰炸
+                    if key not in self._notified:
+                        self._notified.add(key)
+                        should_notify = True
 
         if acct_lock:
             try:
@@ -193,6 +203,22 @@ class ReloginGuard:
         if success:
             with self._lock:
                 self._last_relogin[key] = time.time()
+
+        # 锁外异步发通知，绝不阻塞重登/发送链路
+        if should_notify:
+            shop_name = str(shop_id)
+            try:
+                info = db_manager.get_shop(channel_name, shop_id)
+                if info and info.get("shop_name"):
+                    shop_name = str(info["shop_name"])
+            except Exception:
+                pass
+            push_bark(
+                "客服系统：账号重登失败，需人工处理",
+                f"店铺「{shop_name}」({shop_id}) 自动重登连续失败 "
+                f"{self._failures.get(key, 0)} 次已达上限，已停止自动重登。"
+                f"请尽快扫码/手动重新登录，期间该店铺消息将无法回复。",
+            )
 
 
 # 模块级单例

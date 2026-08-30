@@ -66,6 +66,11 @@ class ReloginConfig(BaseModel):
     """自动重登配置模型"""
     max_auto_failures: int = Field(default=3, description="自动重登连续失败上限，超过后停止自动重登等待人工处理", ge=1, le=20)
 
+class BarkConfig(BaseModel):
+    """Bark 通知配置模型"""
+    key: str = Field(default="", description="Bark 设备 key（留空则不发送通知）")
+    base_url: str = Field(default="https://api.day.app", description="Bark 服务地址（day.app 或自建 bark-server）")
+
 class ProxyConfig(BaseModel):
     """SOCKS5 代理配置模型"""
     enabled: bool = Field(default=False, description="是否启用代理")
@@ -111,6 +116,10 @@ class ConfigModel(BaseModel):
         default_factory=ReloginConfig,
         description="自动重登配置"
     )
+    bark: BarkConfig = Field(
+        default_factory=BarkConfig,
+        description="Bark 通知配置"
+    )
     proxy: ProxyConfig = Field(
         default_factory=ProxyConfig,
         description="SOCKS5代理配置"
@@ -152,6 +161,10 @@ config_base = {
     },
     "relogin": {
         "max_auto_failures": 3
+    },
+    "bark": {
+        "key": "",
+        "base_url": "https://api.day.app"
     },
     "proxy": {
         "enabled": False,
