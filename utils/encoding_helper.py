@@ -104,7 +104,10 @@ class EncodingConverter:
             prefix='utf8_'
         )
 
-        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+        # newline='' 关闭文本模式换行转换：
+        # Windows 上默认会把 '\n' 写成 '\r\n'，若源文件已是 CRLF（\r\n），
+        # 会导致 \r\n → \r\r\n，知识库入库后 UI 渲染出多余空行。
+        with os.fdopen(temp_fd, 'w', encoding='utf-8', newline='') as f:
             f.write(content)
 
         logger.info(f"已创建UTF-8编码临时文件: {temp_path}")
