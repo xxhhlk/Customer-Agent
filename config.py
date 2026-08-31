@@ -32,6 +32,7 @@ class EmbedderConfig(OpenAIEmbedder):
 class LLMConfig(OpenAILike):
     """LLM配置模型"""
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    send_image_to_ai: bool = Field(default=True, description="是否将买家图片传给视觉大模型")
     pass
 
 class KnowledgeConfig(BaseModel):
@@ -143,7 +144,8 @@ config_base = {
         "model_name": "",
         "api_key": "",
         "api_base": "",
-        "reasoning_effort": ""
+        "reasoning_effort": "",
+        "send_image_to_ai": True
     },
     "embedder": {
         "model_name": "",

@@ -14,6 +14,7 @@ from agno.session.workflow import WorkflowSession
 from bridge.context import Context, ContextType
 from bridge.reply import Reply, ReplyType
 from agno.models.openai import OpenAILike
+from agno.media import Image
 from agno.db.sqlite import SqliteDb
 from Agent.CustomerAgent.agent_knowledge import KnowledgeManager
 from Agent.CustomerAgent.tools.move_conversation import transfer_conversation
@@ -393,6 +394,23 @@ class CustomerAgent(Bot):
                 "from_uid": str(context.kwargs.from_uid),
             }
 
+            # 图片消息传给视觉大模型（llm.send_image_to_ai 开关实时读取，免重启热开关）
+            # URL 直传优先；直传失败时由 _arun 内的重试逻辑下载转 base64 再试一次
+            images: Optional[list] = None
+            image_url: Optional[str] = None
+            if (
+                context.type == ContextType.IMAGE
+                and get_config("llm.send_image_to_ai", True)
+                and context.content
+            ):
+                _img = str(context.content).strip()
+                if _img.startswith(("http://", "https://")):
+                    images = [Image(url=_img)]
+                    image_url = _img
+                elif _img.startswith("data:image"):
+                    # 已是 base64 编码的 data URL，直接走 agno 的 base64 通道
+                    images = [Image(url=_img)]
+
             # 预读 session 到缓存，避免 _aread_or_create_session 中的同步 DB 读取阻塞事件循环
             # arun() → _arun() → _aread_or_create_session() 在同步 DB 路径上会通过
             # asyncio.to_thread 读取，这里在线程池中预读并设置 agent._cached_session，
@@ -415,15 +433,33 @@ class CustomerAgent(Bot):
 
             self.logger.info("[async_reply] 开始调用 arun")
             # 给 arun 加 60 秒超时，避免某个步骤无限挂起导致事件循环冻结
-            response: RunOutput = await asyncio.wait_for(
-                self._agent.arun(
-                    user_id=context.kwargs.user_id,
-                    session_id=session_id,
-                    input=final_input,
-                    dependencies=dependencies
-                ),
-                timeout=60.0
-            )
+            # images 为 None 时与旧行为完全一致；带图片时 URL 直传优先，
+            # 直传失败（HTTP 错误 / 超时）则下载转 base64 重试一次，仍失败 re-raise 走外层兜底
+            async def _arun(images=None) -> RunOutput:
+                assert self._agent is not None, "Agent未初始化"
+                return await asyncio.wait_for(
+                    self._agent.arun(
+                        user_id=context.kwargs.user_id,
+                        session_id=session_id,
+                        input=final_input,
+                        dependencies=dependencies,
+                        images=images
+                    ),
+                    timeout=60.0
+                )
+
+            try:
+                response = await _arun(images)
+            except Exception:
+                if image_url:
+                    b64_image = await self._download_image_as_base64(image_url)
+                    if b64_image is not None:
+                        self.logger.info("[async_reply] URL 直传失败，改用 base64 重试")
+                        response = await _arun([Image(url=b64_image)])
+                    else:
+                        raise
+                else:
+                    raise
             self.logger.info("[async_reply] arun 调用完成")
             return Reply(ReplyType.TEXT, response.content)
         except Exception as e:
@@ -435,3 +471,33 @@ class CustomerAgent(Bot):
             if _fallbacks:
                 return Reply(ReplyType.TEXT, random.choice(_fallbacks))
             return Reply(ReplyType.TEXT, "抱歉，我现在无法回复，请稍后再试。")
+
+    async def _download_image_as_base64(self, url: str) -> Optional[str]:
+        """下载图片并转 base64 data URL（方舟单图上限 10MB）。
+
+        供图片 URL 直传失败时回退使用：下载走线程池不阻塞事件循环；
+        下载失败 / 非图片 / 超过 10MB 均返回 None，由调用方 re-raise 走外层兜底。
+        """
+        import base64
+        import mimetypes
+        import requests
+
+        def _fetch() -> Optional[str]:
+            from utils.proxy_config import get_media_proxies
+            resp = requests.get(url, timeout=15, proxies=get_media_proxies())
+            resp.raise_for_status()
+            data = resp.content
+            if len(data) > 10 * 1024 * 1024:
+                return None
+            mime = resp.headers.get("Content-Type", "").split(";")[0].strip()
+            if not mime.lower().startswith("image/"):
+                mime = mimetypes.guess_type(url)[0] or "image/jpeg"
+            if not mime.lower().startswith("image/"):
+                return None
+            return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+        try:
+            return await asyncio.to_thread(_fetch)
+        except Exception as e:
+            self.logger.warning(f"[async_reply] 图片下载失败: {e}")
+            return None

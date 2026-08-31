@@ -89,6 +89,17 @@ class LLMConfigCard(CardWidget):
         )
         form_layout.addRow("思考强度:", self.effort_combo)
 
+        # 图片传 AI 识别开关
+        from qfluentwidgets import SwitchButton
+        self.send_image_switch = SwitchButton("开启")
+        self.send_image_switch.setChecked(True)
+        self.send_image_switch.setToolTip(
+            "开启后，买家图片消息传给视觉大模型识别。\n"
+            "URL 直传优先，失败自动下载转 base64 重试一次。\n"
+            "非视觉模型（如 DeepSeek）建议关闭。"
+        )
+        form_layout.addRow("图片传AI识别:", self.send_image_switch)
+
         layout.addLayout(form_layout)
 
         # 说明文本
@@ -116,7 +127,8 @@ class LLMConfigCard(CardWidget):
             "thinking": {
                 "type": thinking_type
             },
-            "reasoning_effort": reasoning_effort
+            "reasoning_effort": reasoning_effort,
+            "send_image_to_ai": self.send_image_switch.isChecked()
         }
 
     def setConfig(self, config: dict):
@@ -135,6 +147,9 @@ class LLMConfigCard(CardWidget):
         reasoning_effort = config.get("reasoning_effort", "")
         effort_map = {"": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4, "max": 5}
         self.effort_combo.setCurrentIndex(effort_map.get(reasoning_effort, 0))
+
+        # 设置图片传 AI 识别开关
+        self.send_image_switch.setChecked(config.get("send_image_to_ai", True))
 
 
 class EmbedderConfigCard(CardWidget):
@@ -1395,7 +1410,8 @@ class SettingUI(QFrame):
                     "api_key": config.get("llm.api_key", ""),
                     "model_name": config.get("llm.model_name", "doubao-seed-1-6-flash-250828"),
                     "thinking": config.get("llm.thinking", {"type": "disabled"}),
-                    "reasoning_effort": config.get("llm.reasoning_effort", "")
+                    "reasoning_effort": config.get("llm.reasoning_effort", ""),
+                    "send_image_to_ai": config.get("llm.send_image_to_ai", True)
                 },
                 "embedder": {
                     "api_base": config.get("embedder.api_base", "https://ark.cn-beijing.volces.com/api/v3"),
@@ -1457,7 +1473,8 @@ class SettingUI(QFrame):
                 "api_key": "",
                 "model_name": "doubao-seed-1-6-flash-250828",
                 "thinking": {"type": "disabled"},
-                "reasoning_effort": ""
+                "reasoning_effort": "",
+                "send_image_to_ai": True
             },
             "embedder": {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -1506,7 +1523,8 @@ class SettingUI(QFrame):
                 "api_key": "",
                 "model_name": "doubao-seed-1-6-flash-250828",
                 "thinking": {"type": "disabled"},
-                "reasoning_effort": ""
+                "reasoning_effort": "",
+                "send_image_to_ai": True
             }),
             "embedder": config_data.get("embedder", {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
