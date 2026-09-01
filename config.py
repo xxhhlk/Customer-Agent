@@ -32,7 +32,8 @@ class EmbedderConfig(OpenAIEmbedder):
 class LLMConfig(OpenAILike):
     """LLM配置模型"""
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    send_image_to_ai: bool = Field(default=True, description="是否将买家图片传给视觉大模型")
+    send_image_to_ai: bool = Field(default=True, description="是否将买家图片/视频传给视觉大模型")
+    video_fps: float = Field(default=1.0, description="视频抽帧率（每秒帧数，范围 0.2-5），影响理解精度与 token 用量")
     pass
 
 class KnowledgeConfig(BaseModel):
@@ -145,7 +146,8 @@ config_base = {
         "api_key": "",
         "api_base": "",
         "reasoning_effort": "",
-        "send_image_to_ai": True
+        "send_image_to_ai": True,
+        "video_fps": 1.0
     },
     "embedder": {
         "model_name": "",

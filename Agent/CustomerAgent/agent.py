@@ -394,15 +394,16 @@ class CustomerAgent(Bot):
                 "from_uid": str(context.kwargs.from_uid),
             }
 
-            # 图片消息传给视觉大模型（llm.send_image_to_ai 开关实时读取，免重启热开关）
-            # URL 直传优先；直传失败时由 _arun 内的重试逻辑下载转 base64 再试一次
+            # 图片/视频消息传给视觉大模型（llm.send_image_to_ai 开关实时读取，免重启热开关）
+            # 图片：URL 直传优先，走 agno images 参数（自动转 image_url 内容块）；
+            # 视频：agno OpenAILike 不支持 videos 参数，构造带 video_url 内容块的 Message 原样透传。
+            # 两者 URL 直传失败时均由 _arun 内的重试逻辑下载转 base64 再试一次。
             images: Optional[list] = None
             image_url: Optional[str] = None
-            if (
-                context.type == ContextType.IMAGE
-                and get_config("llm.send_image_to_ai", True)
-                and context.content
-            ):
+            video_message: Optional[Message] = None
+            video_url: Optional[str] = None
+            _send_media = get_config("llm.send_image_to_ai", True)
+            if context.type == ContextType.IMAGE and _send_media and context.content:
                 _img = str(context.content).strip()
                 if _img.startswith(("http://", "https://")):
                     images = [Image(url=_img)]
@@ -410,6 +411,15 @@ class CustomerAgent(Bot):
                 elif _img.startswith("data:image"):
                     # 已是 base64 编码的 data URL，直接走 agno 的 base64 通道
                     images = [Image(url=_img)]
+            elif context.type == ContextType.VIDEO and _send_media and context.content:
+                _video = str(context.content).strip()
+                if _video.startswith(("http://", "https://", "data:video")):
+                    video_url = _video
+                    _fps = get_config("llm.video_fps", 1.0)
+                    video_message = Message(role="user", content=[
+                        {"type": "text", "text": final_input},
+                        {"type": "video_url", "video_url": {"url": _video, "fps": _fps}},
+                    ])
 
             # 预读 session 到缓存，避免 _aread_or_create_session 中的同步 DB 读取阻塞事件循环
             # arun() → _arun() → _aread_or_create_session() 在同步 DB 路径上会通过
@@ -433,29 +443,46 @@ class CustomerAgent(Bot):
 
             self.logger.info("[async_reply] 开始调用 arun")
             # 给 arun 加 60 秒超时，避免某个步骤无限挂起导致事件循环冻结
-            # images 为 None 时与旧行为完全一致；带图片时 URL 直传优先，
+            # input_msg/ images 均为 None 时与旧行为完全一致；带图片/视频时 URL 直传优先，
             # 直传失败（HTTP 错误 / 超时）则下载转 base64 重试一次，仍失败 re-raise 走外层兜底
-            async def _arun(images=None) -> RunOutput:
+            async def _arun(input_msg: Union[str, Message], images: Optional[list] = None) -> RunOutput:
                 assert self._agent is not None, "Agent未初始化"
                 return await asyncio.wait_for(
                     self._agent.arun(
                         user_id=context.kwargs.user_id,
                         session_id=session_id,
-                        input=final_input,
+                        input=input_msg,
                         dependencies=dependencies,
                         images=images
                     ),
                     timeout=60.0
                 )
 
+            run_input = video_message if video_message is not None else final_input
             try:
-                response = await _arun(images)
+                response = await _arun(run_input, images)
             except Exception:
                 if image_url:
-                    b64_image = await self._download_image_as_base64(image_url)
+                    b64_image = await self._download_media_as_base64(
+                        image_url, 10 * 1024 * 1024, "image/jpeg"
+                    )
                     if b64_image is not None:
-                        self.logger.info("[async_reply] URL 直传失败，改用 base64 重试")
-                        response = await _arun([Image(url=b64_image)])
+                        self.logger.info("[async_reply] 图片 URL 直传失败，改用 base64 重试")
+                        response = await _arun(run_input, [Image(url=b64_image)])
+                    else:
+                        raise
+                elif video_url and video_url.startswith(("http://", "https://")):
+                    b64_video = await self._download_media_as_base64(
+                        video_url, 45 * 1024 * 1024, "video/mp4"
+                    )
+                    if b64_video is not None:
+                        self.logger.info("[async_reply] 视频 URL 直传失败，改用 base64 重试")
+                        _fps = get_config("llm.video_fps", 1.0)
+                        retry_msg = Message(role="user", content=[
+                            {"type": "text", "text": final_input},
+                            {"type": "video_url", "video_url": {"url": b64_video, "fps": _fps}},
+                        ])
+                        response = await _arun(retry_msg, None)
                     else:
                         raise
                 else:
@@ -472,11 +499,15 @@ class CustomerAgent(Bot):
                 return Reply(ReplyType.TEXT, random.choice(_fallbacks))
             return Reply(ReplyType.TEXT, "抱歉，我现在无法回复，请稍后再试。")
 
-    async def _download_image_as_base64(self, url: str) -> Optional[str]:
-        """下载图片并转 base64 data URL（方舟单图上限 10MB）。
+    async def _download_media_as_base64(
+        self, url: str, max_bytes: int, fallback_mime: str
+    ) -> Optional[str]:
+        """下载媒体文件并转 base64 data URL。
 
-        供图片 URL 直传失败时回退使用：下载走线程池不阻塞事件循环；
-        下载失败 / 非图片 / 超过 10MB 均返回 None，由调用方 re-raise 走外层兜底。
+        供图片/视频 URL 直传失败时回退使用：下载走线程池不阻塞事件循环；
+        下载失败 / 媒体类型不符 / 超过 max_bytes 均返回 None，由调用方 re-raise 走外层兜底。
+        方舟限制：图片单图 10MB、base64 视频 50MB 且请求体 64MB（base64 膨胀 4/3，
+        故视频上限取 45MB 留余量）。
         """
         import base64
         import mimetypes
@@ -487,17 +518,17 @@ class CustomerAgent(Bot):
             resp = requests.get(url, timeout=15, proxies=get_media_proxies())
             resp.raise_for_status()
             data = resp.content
-            if len(data) > 10 * 1024 * 1024:
+            if len(data) > max_bytes:
                 return None
             mime = resp.headers.get("Content-Type", "").split(";")[0].strip()
-            if not mime.lower().startswith("image/"):
-                mime = mimetypes.guess_type(url)[0] or "image/jpeg"
-            if not mime.lower().startswith("image/"):
+            if not mime.lower().startswith(("image/", "video/")):
+                mime = mimetypes.guess_type(url)[0] or fallback_mime
+            if not mime.lower().startswith(("image/", "video/")):
                 return None
             return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
 
         try:
             return await asyncio.to_thread(_fetch)
         except Exception as e:
-            self.logger.warning(f"[async_reply] 图片下载失败: {e}")
+            self.logger.warning(f"[async_reply] 媒体下载失败: {e}")
             return None

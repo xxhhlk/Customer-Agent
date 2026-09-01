@@ -89,16 +89,17 @@ class LLMConfigCard(CardWidget):
         )
         form_layout.addRow("思考强度:", self.effort_combo)
 
-        # 图片传 AI 识别开关
+        # 图片/视频传 AI 识别开关
         from qfluentwidgets import SwitchButton
         self.send_image_switch = SwitchButton("开启")
         self.send_image_switch.setChecked(True)
         self.send_image_switch.setToolTip(
-            "开启后，买家图片消息传给视觉大模型识别。\n"
-            "URL 直传优先，失败自动下载转 base64 重试一次。\n"
+            "开启后，买家图片/视频消息传给视觉大模型识别。\n"
+            "图片 URL 直传优先，失败自动下载转 base64 重试一次。\n"
+            "视频抽帧率在 config.json 的 llm.video_fps 配置（默认 1）。\n"
             "非视觉模型（如 DeepSeek）建议关闭。"
         )
-        form_layout.addRow("图片传AI识别:", self.send_image_switch)
+        form_layout.addRow("图片/视频传AI识别:", self.send_image_switch)
 
         layout.addLayout(form_layout)
 
