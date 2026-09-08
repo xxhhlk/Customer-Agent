@@ -11,21 +11,21 @@ SOCKS5 代理统一配置入口
 
 代理健康监控：
 - 后台守护线程按 check_interval 经代理探测业务域名；连续 2 次失败判定代理不可用，
-  1 次成功即恢复。状态变化时自动 apply_proxy_env()（不可用清除 env / 恢复重设）。
-- 不可用期间：requests 系 get_proxies() 返回空（直连）、websockets 跳过代理握手、
-  Playwright 不传 proxy —— 均回退直连；恢复后自动切回代理。
-- 注意：httpx/openai 长驻客户端在创建时读取 env，健康翻转对其不生效（需重启/重建）。
+  1 次成功即恢复。状态变化时调用 apply_proxy_env()——本模块已不再设置全局代理 env
+  （见下「代理作用域」），该函数现仅确保全局 env 不含代理，对 AI 系无影响。
+- 不可用期间：PDD 系 get_proxies() / open_socks5_connection / get_playwright_proxy 均
+  回退直连；恢复后自动切回代理。AI / OpenAI / 静态资源本就不经代理，不受影响。
 
-覆盖范围：
-- requests（PDD API / 图片下载等）：各调用点显式传 get_proxies()（按 remote_dns 精确控制 socks5h/socks5）
-- httpx / openai SDK / agno（AI 回复、embedder）：通过环境变量 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY。
-  注意：httpx 只接受 socks5:// scheme 且其 SOCKS5 实现固定由代理端解析域名（remote DNS），
-  因此 env 一律设 socks5://，remote_dns 开关对 httpx 系不生效（始终远端解析）。
-- websockets（拼多多消息通道）：websockets>=13 已移除内置 SOCKS 支持，由本模块的
-  open_socks5_connection() 自行完成 SOCKS5 握手后把 socket 交给 websockets.connect(sock=...)，
-  开关完全生效。
-- Playwright（登录/店铺浏览器）：显式传 proxy 参数（不读环境变量）；
-  Chromium 的 SOCKS5 始终由代理端解析 DNS，remote_dns 开关对其不生效
+代理作用域（仅拼多多相关请求走代理；AI / OpenAI / 静态资源保持直连）：
+- requests（PDD API / cookie 刷新 / 用户头像等）：各调用点显式传 get_proxies()
+  （按 remote_dns 精确控制 socks5h/socks5），不依赖全局环境变量。
+- websockets（拼多多消息通道）：open_socks5_connection() 自行完成 SOCKS5 握手，
+  开关完全生效；代理不可用返回 None 由调用方直连。
+- Playwright（登录/店铺浏览器）：显式传 get_playwright_proxy()（不读环境变量）。
+- AI 回复 / agno / OpenAI / volcengine embedder：默认读 HTTP_PROXY 等环境变量，
+  本模块不设置这些变量（apply_proxy_env 仅清除），故它们**直连**，不受代理抖动影响。
+- 静态资源（聊天图片/视频下载）：get_media_proxies() 受 proxy.exclude_media 控制，
+  当前 exclude_media=true，保持直连。
 """
 import asyncio
 import os
@@ -220,37 +220,24 @@ def get_media_proxies() -> Dict[str, str]:
 
 
 def apply_proxy_env() -> None:
-    """将代理写入进程环境变量，使 httpx / openai(agno) 走 socks5。
+    """确保进程全局代理环境变量（HTTP_PROXY/HTTPS_PROXY/ALL_PROXY）不含代理。
 
-    关闭或未启用时清除相关环境变量。
-    注意：
-    - 此处固定使用 socks5:// 前缀——httpx 只接受该 scheme（socks5h:// 会直接抛
-      ValueError: Unknown scheme），且 httpx 的 SOCKS5 实现固定由代理端解析域名。
-    - httpx/openai 客户端在创建时读取环境变量，已存在的长驻客户端（如 AI Agent）
-      需重建/重启后才生效。
-    - requests 系不走这里（各调用点显式传 get_proxies()，精确控制 remote_dns）。
-    - 代理判定不可用时（健康监控回退直连）同样清除环境变量。
+    代理作用域已收窄为「仅拼多多相关请求」，由各自调用点显式传入：
+    - PDD 消息 websocket 通道：open_socks5_connection()
+    - PDD API / cookie 刷新 / 头像等 requests：get_proxies()
+    - Playwright 登录/店铺浏览器：get_playwright_proxy()
+
+    AI 回复 / agno / OpenAI / volcengine embedder 这类默认读全局环境变量的 httpx 系
+    客户端，因本函数从不设置、只清除这些变量，始终保持**直连**，不再受代理抖动影响。
+    静态资源（聊天图片/视频）经 get_media_proxies() + proxy.exclude_media 控制，与全局
+    env 无关。
+
+    注意：已长驻的 agno/httpx 客户端在创建时已固化代理设置，修改环境变量的效果需重启
+    进程（重建客户端）后才生效。
     """
-    from config import config
-
-    if not is_proxy_healthy():
-        # 代理不可用：清除 env 回退直连（httpx 系新 client 直连）
-        for key in _ENV_KEYS:
-            os.environ.pop(key, None)
-        return
-
-    enabled = config.get("proxy.enabled", False)
-    server = (config.get("proxy.server", "") or "").strip()
-    if not enabled or not server:
-        for key in _ENV_KEYS:
-            os.environ.pop(key, None)
-        return
-
-    if "://" in server:
-        server = server.split("://", 1)[1]
-    url = f"socks5://{server}"
+    # 不再为 AI / OpenAI 设置全局代理；仅清除，避免任何残留代理影响直连客户端。
     for key in _ENV_KEYS:
-        os.environ[key] = url
+        os.environ.pop(key, None)
 
 
 async def open_socks5_connection(host: str, port: int, timeout: float = 30.0) -> Optional[socket.socket]:
