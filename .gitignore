@@ -186,3 +186,11 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 *.lnk
+
+# ====================
+# Agent/AI 生成文件
+# ====================
+# 项目级 CodeBuddy 记忆与说明（含本地配置，不入库）
+CODEBUDDY.md
+# AI 生成的临时规划文档
+docs/emoji_feature_plan.md
