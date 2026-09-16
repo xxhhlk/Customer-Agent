@@ -1,14 +1,18 @@
 """
-斜杠快捷知识库检索浮窗
-======================
-- 输入框输入 "/" 后触发检索
+快捷语录联想浮窗（原斜杠检索）
+==============================
+- 输入框输入任意文本即触发联想，无需先输入 "/"
+- 仍支持 "/" 显式触发（该模式下自动选中首项，Enter 直接插入）
 - 后台线程查询 LanceDB 向量库（直接读 payload，不走向量搜索）
 - QListWidget 浮窗显示候选项
-- 支持鼠标点击 / 键盘上下选择 + Enter 确认
-- 选中后用知识库 content 替换斜杠及检索文本
+- 支持鼠标点击 / 键盘上下选择 + Tab/Enter 确认
+- 选中后用知识库 content 替换当前输入片段
+- 键盘行为：未显式导航时 Enter 仍为发送，避免误插入
 """
 
-from typing import List, Dict, Any
+import threading
+import time
+from typing import Callable, List, Dict, Any, Optional
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtWidgets import QListWidget, QListWidgetItem
 from qfluentwidgets import isDarkTheme
@@ -28,34 +32,37 @@ class _KnowledgeSearchWorker(QThread):
 
     results_ready = pyqtSignal(list)  # List[Dict[str, str]]
 
-    def __init__(self, query: str, limit: int = 8, parent=None):
+    def __init__(self, query: str, limit: int = 8,
+                 doc_provider: Optional[Callable[[], List[Any]]] = None,
+                 parent=None):
         super().__init__(parent)
         self._query = query
         self._limit = limit
+        self._doc_provider = doc_provider
 
     def run(self):
         try:
             results = self._search_lancedb()
             self.results_ready.emit(results)
         except Exception as e:
-            logger.error(f"斜杠检索后台搜索失败: {e}", exc_info=True)
+            logger.error(f"快捷语录后台搜索失败: {e}", exc_info=True)
             self.results_ready.emit([])
+
+    @staticmethod
+    def _to_doc_pair(doc: Any):
+        """兼容 dataclass / dict 两种文档结构"""
+        if isinstance(doc, dict):
+            return doc.get("name") or "", doc.get("content") or ""
+        return getattr(doc, "name", "") or "", getattr(doc, "content", "") or ""
 
     def _search_lancedb(self) -> List[Dict[str, str]]:
         """通过 IPC 从子进程读取知识库数据并过滤
 
         lancedb 在独立子进程中运行，主进程不直接 import lancedb。
+        docs 由外部 provider 提供时可复用缓存，避免每次输入都走 IPC。
         """
-        import json
-        from pathlib import Path
-
         try:
-            # 通过 IPC 调用子进程获取所有文档
-            from Agent.CustomerAgent.lancedb_proxy import get_ipc_client
-            client = get_ipc_client()
-            if not client.is_started:
-                client.start()
-            docs = client.call("get_all_documents_for_export")
+            docs = self._doc_provider() if self._doc_provider else self._fetch_docs()
 
             if not docs:
                 logger.warning("知识库为空或 IPC 加载失败")
@@ -64,8 +71,7 @@ class _KnowledgeSearchWorker(QThread):
             # 转换为搜索结果格式
             results: List[Dict[str, str]] = []
             for doc in docs:
-                title = doc.name or ""
-                content = doc.content or ""
+                title, content = self._to_doc_pair(doc)
                 if not content:
                     continue
                 results.append({"title": title, "content": content})
@@ -76,6 +82,15 @@ class _KnowledgeSearchWorker(QThread):
         except Exception as e:
             logger.error(f"IPC 搜索知识库失败: {e}")
             return []
+
+    @staticmethod
+    def _fetch_docs() -> List[Any]:
+        """直接通过 IPC 拉取全量文档"""
+        from Agent.CustomerAgent.lancedb_proxy import get_ipc_client
+        client = get_ipc_client()
+        if not client.is_started:
+            client.start()
+        return client.call("get_all_documents_for_export") or []
 
     def _filter_from_dataframe(self, df) -> List[Dict[str, str]]:
         """从 pandas DataFrame 提取并过滤数据"""
@@ -115,45 +130,68 @@ class _KnowledgeSearchWorker(QThread):
             # 无关键词，返回最近的条目
             return results[: self._limit]
 
-        # 使用 jieba 分词
+        # 第一阶段：分词匹配（有 jieba 时）
+        words = self._tokenize(query)
+        scored = self._score_by_terms(results, words) if words else []
+
+        # 第二阶段：无 jieba 或整句分词没命中 → n-gram 回退
+        # 例："运费怎么算" 整句匹配不到，但 4-gram/3-gram 能命中 "运费"
+        if not scored:
+            for n in range(min(4, len(query)), 1, -1):
+                grams = [query[i:i + n] for i in range(len(query) - n + 1)]
+                scored = self._score_by_terms(results, grams)
+                if scored:
+                    break
+
+        if not scored and len(query) == 1:
+            scored = self._score_by_terms(results, [query])
+
+        if not scored:
+            return []
+
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        return [t[2] for t in scored[: self._limit]]
+
+    @staticmethod
+    def _tokenize(query: str) -> List[str]:
+        """分词（jieba 可用时），失败返回空列表由调用方回退"""
         try:
             import jieba  # type: ignore[import-untyped]
-            words = [w.strip() for w in jieba.cut_for_search(query) if w.strip() and len(w.strip()) >= 1]
-        except ImportError:
-            words = [query]
+            words = [w.strip() for w in jieba.cut_for_search(query) if w.strip()]
+            return words if words else []
+        except Exception:
+            return []
 
-        if not words:
-            words = [query]
+    @staticmethod
+    def _score_by_terms(results: List[Dict[str, str]],
+                        terms: List[str]) -> List[tuple]:
+        """按词条命中打分：命中数 + 标题命中加权"""
+        terms = [t.lower() for t in terms if t]
+        if not terms:
+            return []
 
-        # 统一转小写，实现不区分大小写匹配
-        words_lower = [w.lower() for w in words]
-
-        # 对每个结果检查是否包含所有分词
-        filtered = []
-        for item in results:
-            title = item.get("title", "")
-            content = item.get("content", "")
-            combined = (title + " " + content).lower()
-            if all(w in combined for w in words_lower):
-                filtered.append(item)
-
-        # 如果过滤后结果太少，放宽条件：任一匹配
-        if len(filtered) < 3:
-            for item in results:
-                title = item.get("title", "")
-                content = item.get("content", "")
-                combined = (title + " " + content).lower()
-                if any(w in combined for w in words_lower) and item not in filtered:
-                    filtered.append(item)
-
-        return filtered[: self._limit]
+        scored = []
+        for idx, item in enumerate(results):
+            title = item.get("title", "").lower()
+            content = item.get("content", "").lower()
+            combined = title + " " + content
+            score = sum(1 for t in terms if t in combined)
+            score += sum(1 for t in terms if t in title)
+            if score > 0:
+                scored.append((score, idx, item))
+        return scored
 
 
 class SlashKnowledgePopup(QListWidget):
-    """斜杠检索浮窗
+    """快捷语录联想浮窗
 
     用 QListWidget 实现的浮窗，显示知识库候选项。
     不自动定位 —— 由 InputArea 控制 geometry。
+
+    两种激活方式：
+    - 显式（输入 "/"）：auto_select=True，默认选中首项，Enter 直接插入
+    - 隐式（普通输入）：auto_select=False，不自动选中，Enter 仍为发送，
+      需按 ↑/↓ 或点击/Tab 才插入，避免误伤正常发送
     """
 
     item_selected = pyqtSignal(str)  # 选中后 emit(content)
@@ -177,6 +215,11 @@ class SlashKnowledgePopup(QListWidget):
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self._do_search)
         self._pending_query: str = ""
+        self._auto_select: bool = False
+        self._nav_active: bool = False  # 是否已进入键盘导航/可确认状态
+        self._suppressed_query: str = ""  # 被 Esc/点击外部关闭时的 query，避免立刻重弹
+        self._cache_lock = threading.Lock()
+        self._doc_cache: tuple = ()  # (ts, docs)
 
     def _apply_style(self):
         dark = isDarkTheme()
@@ -207,19 +250,42 @@ class SlashKnowledgePopup(QListWidget):
             }}
         """)
 
-    def search(self, query: str):
+    # ========== 知识库文档缓存 ==========
+
+    _DOC_CACHE_TTL = 60.0  # 秒
+
+    def _get_docs(self) -> List[Any]:
+        """带 TTL 的文档缓存：避免每次按键都走 IPC 拉全库"""
+        now = time.monotonic()
+        with self._cache_lock:
+            if self._doc_cache and now - self._doc_cache[0] < self._DOC_CACHE_TTL:
+                return self._doc_cache[1]
+            docs = _KnowledgeSearchWorker._fetch_docs()
+            self._doc_cache = (now, docs)
+            return docs
+
+    def invalidate_cache(self):
+        """知识库变更后调用，清空缓存"""
+        with self._cache_lock:
+            self._doc_cache = ()
+
+    def search(self, query: str, auto_select: bool = False):
         """触发搜索（带防抖 200ms）
 
         query 为空时不弹浮窗，避免输入"/"就弹出无关内容。
+        auto_select=True 时结果回来后自动选中首项（显式斜杠模式）。
         """
         self._pending_query = query
-        if not query.strip():
-            # 无关键词时停止防抖定时器 + 隐藏浮窗
+        if query != self._suppressed_query:
+            self._suppressed_query = ""  # query 变化，解除抑制
+        if not query.strip() or query == self._suppressed_query:
+            # 无关键词 / 已被用户关闭：停止防抖定时器 + 隐藏浮窗
             # 必须停止定时器，否则之前已启动的定时器会在 200ms 后
             # 用空的 _pending_query 触发搜索 → 返回全部条目 → 孤儿浮窗
             self._debounce_timer.stop()
             self.hide()
             return
+        self._auto_select = auto_select
         self._debounce_timer.start(200)
 
     def _do_search(self):
@@ -234,7 +300,9 @@ class SlashKnowledgePopup(QListWidget):
             self._worker.wait(300)
             self._worker = None
 
-        self._worker = _KnowledgeSearchWorker(self._pending_query)
+        self._worker = _KnowledgeSearchWorker(
+            self._pending_query, doc_provider=self._get_docs
+        )
         self._worker.results_ready.connect(self._on_results)
         self._worker.start()
 
@@ -271,9 +339,12 @@ class SlashKnowledgePopup(QListWidget):
         # 通知 InputArea 重新定位
         self.position_requested.emit()
 
-        # 默认选中第一项
+        # 显式模式自动选中首项；隐式模式不选中，Enter 仍走发送
+        self._nav_active = bool(self._auto_select)
         if self.count() > 0:
-            self.setCurrentRow(0)
+            self.setCurrentRow(0 if self._nav_active else -1)
+        else:
+            self._nav_active = False
 
     def adjust_height(self):
         """根据条目数量自适应高度"""
@@ -292,42 +363,64 @@ class SlashKnowledgePopup(QListWidget):
         self.item_selected.emit(content)
         self.hide()
 
+    def is_nav_active(self) -> bool:
+        """是否已进入可确认状态（显式模式或按过 ↑/↓）"""
+        return self._nav_active and self.isVisible() and self.count() > 0
+
     def select_next(self):
-        """键盘向下选择"""
+        """键盘向下选择（首次按下即从 -1 进入导航态）"""
         if self.count() == 0 or not self.isVisible():
             return
+        self._nav_active = True
         row = self.currentRow()
-        if row < self.count() - 1:
-            self.setCurrentRow(row + 1)
+        self.setCurrentRow(0 if row < 0 else min(row + 1, self.count() - 1))
 
     def select_prev(self):
         """键盘向上选择"""
         if self.count() == 0 or not self.isVisible():
             return
+        self._nav_active = True
         row = self.currentRow()
-        if row > 0:
-            self.setCurrentRow(row - 1)
+        self.setCurrentRow(0 if row < 0 else max(row - 1, 0))
 
     def confirm_selection(self) -> bool:
-        """确认当前选中项，返回是否成功"""
-        if not self.isVisible() or self.count() == 0:
+        """确认当前选中项，返回是否成功
+
+        仅当用户已进入导航态（显式斜杠模式或按过 ↑/↓）才插入，
+        否则返回 False 让 Enter 继续走发送逻辑。
+        """
+        if not self.isVisible() or self.count() == 0 or not self._nav_active:
             return False
         item = self.currentItem()
         if item is None:
             return False
         content = item.data(Qt.ItemDataRole.UserRole)
         self.item_selected.emit(content)
+        self._nav_active = False
         self.hide()
         return True
+
+    def dismiss(self):
+        """用户主动关闭（Esc / 点击外部）：记住当前 query，避免立刻重弹"""
+        self.suppress(self._pending_query)
+
+    def suppress(self, query: str):
+        """隐藏并抑制指定 query（该 query 未变化前不再自动弹出）"""
+        self._debounce_timer.stop()
+        self._suppressed_query = query
+        self._nav_active = False
+        self.hide()
 
     def cancel(self):
         """取消搜索：停止防抖定时器、清空 pending query、隐藏浮窗
 
-        用于 InputArea 退出斜杠模式时清理状态，防止异步搜索
+        用于 InputArea 退出联想模式时清理状态，防止异步搜索
         在模式退出后仍弹出孤儿浮窗。
         """
         self._debounce_timer.stop()
         self._pending_query = ""
+        self._suppressed_query = ""
+        self._nav_active = False
         self.hide()
 
     def refresh_theme(self):

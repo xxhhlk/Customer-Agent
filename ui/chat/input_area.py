@@ -1,6 +1,6 @@
 """
 输入区域组件 - 消息输入框 + 发送按钮
-支持斜杠"/"快捷检索知识库
+支持快捷语录自动联想：无需斜杠，输入即联想；"/" 为显式触发
 """
 
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer, QPoint
@@ -23,8 +23,11 @@ class InputArea(QWidget):
         super().__init__(parent)
         self.setObjectName("InputArea")
         self.setFixedHeight(120)
-        self._slash_active = False  # 斜杠检索模式
+        self._slash_active = False  # 显式斜杠检索模式
         self._slash_start_pos = 0  # 斜杠位置
+        self._query_start_pos = 0  # 当前联想片段起始位置（替换时用）
+        self._min_query_len = 1  # 触发联想的最小字符数
+        self._max_query_len = 12  # 参与匹配的查询长度（取末尾片段）
         self._init_ui()
         self._init_slash_popup()
         self._apply_theme()
@@ -61,7 +64,7 @@ class InputArea(QWidget):
 
         # 输入框
         self.text_edit = QTextEdit()
-        self.text_edit.setPlaceholderText("输入消息...  (输入 / 快捷检索知识库)")
+        self.text_edit.setPlaceholderText("输入消息...  (直接输入即联想快捷语录，/ 显式触发)")
         self.text_edit.setFont(QFont("Microsoft YaHei", 10))
         self.text_edit.setMaximumHeight(68)
         self.text_edit.setMinimumHeight(60)
@@ -97,51 +100,75 @@ class InputArea(QWidget):
     # ========== 斜杠检索逻辑 ==========
 
     def _check_slash_trigger(self):
-        """检查是否需要触发/继续/退出斜杠检索"""
+        """检查是否需要触发/继续/退出快捷语录联想
+
+        触发规则：
+        - 显式：输入 "/" → 自动选中首项，Enter 直接插入
+        - 隐式：普通输入（无需斜杠）→ 只展示候选，Enter 仍发送，
+                需 ↑/↓ 或点击 / Tab 才插入
+        """
+        # 输入框失焦（如程序写入文本、AI 自动填充）时不联想
+        if not self.text_edit.hasFocus():
+            self._cancel_slash()
+            return
+
         cursor = self.text_edit.textCursor()
         pos = cursor.position()
         text = self.text_edit.toPlainText()
 
         if self._slash_active:
-            # 已在检索模式：检查斜杠是否还在
-            if pos < self._slash_start_pos or pos > len(text):
-                # 光标超出范围，退出
+            # 显式斜杠模式：校验斜杠是否还在
+            if pos <= self._slash_start_pos or pos > len(text):
                 self._cancel_slash()
                 return
-
-            # 检查斜杠字符是否还在（用户可能删除了它）
             if self._slash_start_pos >= len(text) or text[self._slash_start_pos] != '/':
                 self._cancel_slash()
                 return
 
-            # 提取斜杠后的查询文本
             query = text[self._slash_start_pos + 1:pos]
-            # 如果包含换行，退出检索模式
             if '\n' in query:
                 self._cancel_slash()
                 return
-            # 如果光标跑到斜杠前面（长按 backspace 快速删除时），
-            # 退出检索模式
-            if pos <= self._slash_start_pos:
-                self._cancel_slash()
-                return
 
-            # 触发搜索（空 query 时 popup 内部会 hide）
-            self._slash_popup.search(query)
-            # 更新浮窗位置（仅当浮窗可见时）
+            self._query_start_pos = self._slash_start_pos
+            self._slash_popup.search(query, auto_select=True)
             if self._slash_popup.isVisible():
                 self._update_popup_position()
-        else:
-            # 不在检索模式：检查光标前一个字符是否是斜杠
-            # 且斜杠位于行首或文本开头
-            if pos > 0 and pos <= len(text) and text[pos - 1] == '/':
-                # 检查斜杠前是否是行首或换行
-                if pos == 1 or text[pos - 2] == '\n':
-                    # 触发斜杠检索模式（但不弹浮窗，等输入关键词）
-                    self._slash_active = True
-                    self._slash_start_pos = pos - 1
-                    # query 为空，search 内部不会弹出浮窗
-                    # 不主动调 search，等用户输入关键词
+            return
+
+        # 未进入显式模式：以「光标所在行」为片段
+        if pos <= 0 or pos > len(text):
+            self._cancel_slash()
+            return
+
+        line_start = text.rfind('\n', 0, pos) + 1
+        segment = text[line_start:pos]
+
+        # 行内出现斜杠 → 转为显式模式（斜杠后内容作为 query）
+        stripped = segment.lstrip()
+        if stripped.startswith('/'):
+            slash_idx = line_start + (len(segment) - len(stripped))
+            self._slash_active = True
+            self._slash_start_pos = slash_idx
+            self._query_start_pos = slash_idx
+            query = text[slash_idx + 1:pos]
+            self._slash_popup.search(query, auto_select=True)
+            if self._slash_popup.isVisible():
+                self._update_popup_position()
+            return
+
+        # 隐式联想：普通文本
+        query = segment.strip()
+        if len(query) > self._max_query_len:
+            query = query[-self._max_query_len:]
+        if len(query) < self._min_query_len:
+            self._cancel_slash()
+            return
+
+        self._query_start_pos = line_start
+        self._slash_popup.search(query, auto_select=False)
+        if self._slash_popup.isVisible():
+            self._update_popup_position()
 
     def _update_popup_position(self):
         """将浮窗定位到输入框上方"""
@@ -156,34 +183,38 @@ class InputArea(QWidget):
         self._slash_popup.move(x, y)
 
     def _on_slash_item_selected(self, content: str):
-        """选中知识库条目，替换斜杠及检索文本"""
+        """选中知识库条目，替换当前联想片段（斜杠 + 关键词 或 整段输入）"""
         cursor = self.text_edit.textCursor()
         text = self.text_edit.toPlainText()
 
-        if self._slash_active and self._slash_start_pos < len(text):
-            # 找到斜杠后文本的结束位置（到下一个换行或文本末尾）
+        start_pos = self._query_start_pos
+        if start_pos < len(text):
+            # 找到片段结束位置（到下一个换行或文本末尾）
             end_pos = len(text)
-            # 从光标位置向后查找换行
             cursor_pos = cursor.position()
             for i in range(cursor_pos, len(text)):
                 if text[i] == '\n':
                     end_pos = i
                     break
 
-            # 选中从斜杠到结束位置的文本
-            cursor.setPosition(self._slash_start_pos)
+            cursor.setPosition(start_pos)
             cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
             cursor.insertText(content)
 
         self._slash_active = False
-        self._slash_popup.hide()
+        # 抑制刚插入的内容，避免浮窗立刻对自身内容再次联想
+        self._slash_popup.suppress(content[: self._max_query_len])
         self.text_edit.setFocus()
 
     def _cancel_slash(self):
-        """取消斜杠检索模式"""
+        """取消联想模式"""
         self._slash_active = False
         self._slash_popup.cancel()
         self._slash_popup.hide()
+
+    def _dismiss_popup(self):
+        """用户主动关闭浮窗（Esc / 点击外部）：记住 query，避免立刻重弹"""
+        self._slash_popup.dismiss()
 
     # ========== 事件处理 ==========
 
@@ -191,11 +222,11 @@ class InputArea(QWidget):
         """拦截键盘事件 + 输入法事件 + 全局鼠标点击（关闭浮窗）"""
         # 全局鼠标点击：如果点在浮窗外，关闭浮窗
         if event.type() == QEvent.Type.MouseButtonPress:
-            if self._slash_active and self._slash_popup.isVisible():
+            if self._slash_popup.isVisible():
                 # 检查点击是否在浮窗外
                 popup_rect = self._slash_popup.geometry()
                 if not popup_rect.contains(event.globalPosition().toPoint()):
-                    self._cancel_slash()
+                    self._dismiss_popup()
             return False
 
         # 处理输入法事件（中文输入法候选词确认后触发）
@@ -209,39 +240,30 @@ class InputArea(QWidget):
             key = event.key()
             modifiers = event.modifiers()
 
-            # 斜杠检索模式下的键盘导航
-            if self._slash_active and self._slash_popup.isVisible():
+            # 浮窗可见时的键盘导航
+            if self._slash_popup.isVisible():
                 if key == Qt.Key.Key_Down:
                     self._slash_popup.select_next()
                     return True
                 elif key == Qt.Key.Key_Up:
-                    self._slash_popup.select_prev()
-                    return True
-                elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
-                    if not (modifiers & Qt.KeyboardModifier.ShiftModifier):
-                        # Enter 确认选择
-                        if self._slash_popup.confirm_selection():
-                            return True
-                        # 没选中任何项，继续走发送逻辑
+                    # 已进入导航才拦截；否则放行，避免多行输入时无法上移光标
+                    if self._slash_popup.is_nav_active():
+                        self._slash_popup.select_prev()
+                        return True
                 elif key == Qt.Key.Key_Escape:
-                    # ESC 退出检索
-                    self._cancel_slash()
+                    # ESC 关闭联想（记住 query，输入变化前不再弹）
+                    self._dismiss_popup()
                     return True
                 elif key == Qt.Key.Key_Tab:
-                    # Tab 也可以确认选择
+                    # Tab 确认选择（有选中项才插入）
                     if self._slash_popup.confirm_selection():
                         return True
-
-            # 兜底：浮窗可见但 _slash_active 已被取消（异步搜索竞态）
-            # ESC 和 Enter 都应关闭孤儿浮窗
-            if self._slash_popup.isVisible() and not self._slash_active:
-                if key == Qt.Key.Key_Escape:
-                    self._slash_popup.hide()
-                    return True
-                elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+                elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                     if not (modifiers & Qt.KeyboardModifier.ShiftModifier):
+                        # 仅在已进入导航态时插入；否则继续走发送逻辑
+                        if self._slash_popup.confirm_selection():
+                            return True
                         self._slash_popup.hide()
-                        return True
 
             # 常规按键：Enter 发送 / Shift+Enter 换行
             if key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
@@ -278,9 +300,8 @@ class InputArea(QWidget):
 
     def _on_send_clicked(self):
         """发送按钮 / Enter 触发"""
-        # 如果斜杠检索浮窗可见，先关闭
-        if self._slash_active:
-            self._cancel_slash()
+        # 发送前关闭联想浮窗
+        self._cancel_slash()
 
         text = self.text_edit.toPlainText().strip()
         if not text:
@@ -299,6 +320,12 @@ class InputArea(QWidget):
 
     def clear(self):
         self.text_edit.clear()
+        self._slash_active = False
+        self._slash_popup.cancel()
+
+    def invalidate_knowledge_cache(self):
+        """知识库内容变更后调用，清空浮窗缓存"""
+        self._slash_popup.invalidate_cache()
 
     def cleanup(self):
         """清理资源"""
