@@ -91,14 +91,17 @@ class EmojiPopup(QFrame):
         self._rebuild_tabs()
 
     def _rebuild_tabs(self):
-        """重建所有分组标签"""
+        """重建所有分组标签；跳过空分组（如未导入前的「自定义」）"""
         self._tabs.clear()
         groups = list(self._lib.get("groups", []))
         recent = self._lib.get("recent", [])
         if recent:
             groups = [{"name": "最近", "items": recent}] + groups
         for g in groups:
-            self._tabs.addTab(self._build_grid(g.get("items", [])), g.get("name", ""))
+            items = g.get("items", [])
+            if not items:
+                continue
+            self._tabs.addTab(self._build_grid(items), g.get("name", ""))
 
     def _build_grid(self, items: list[str]) -> QScrollArea:
         scroll = QScrollArea()
