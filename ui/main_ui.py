@@ -12,6 +12,8 @@ from qfluentwidgets import SubtitleLabel, TeachingTip, TeachingTipTailPosition
 from qfluentwidgets import Action, setTheme, Theme, isDarkTheme, SystemThemeListener, qconfig
 from utils.logger_loguru import get_logger
 import time
+import threading
+import multiprocessing
 
 
 class SafeSystemThemeListener(SystemThemeListener):
@@ -588,6 +590,58 @@ class MainWindow(FluentWindow):
         self.logger.info(f"  [closeEvent] user_manager_view.cleanup 耗时: {time.perf_counter()-_t0:.3f}s")
 
         self.logger.info(f"closeEvent 清理完成，总耗时: {time.perf_counter()-_t0:.3f}s")
+
+        # 优雅停止 lancedb 子进程（若已启动）：避免靠 daemon 强杀，释放 Pipe 与子进程
+        try:
+            from Agent.CustomerAgent.lancedb_proxy import get_ipc_client
+            _ipc = get_ipc_client()
+            if _ipc.is_started:
+                self.logger.info("[closeEvent] 优雅停止 lancedb 子进程...")
+                _ipc.stop()
+        except Exception as e:
+            self.logger.error(f"[closeEvent] 停止 lancedb 子进程失败: {e}")
+
+        # —— 退出诊断：快照当前存活的线程/子进程，定位退出卡顿根因 ——
+        try:
+            _threads = threading.enumerate()
+            self.logger.info(
+                f"[退出诊断] 存活 Python 线程 {len(_threads)} 个: "
+                f"{[(t.name, t.daemon) for t in _threads]}"
+            )
+            _procs = multiprocessing.active_children()
+            if _procs:
+                self.logger.info(
+                    f"[退出诊断] 存活 multiprocessing 子进程: {[p.name for p in _procs]}"
+                )
+            else:
+                self.logger.info("[退出诊断] 无存活 multiprocessing 子进程")
+            try:
+                from Agent.CustomerAgent.lancedb_proxy import get_ipc_client as _g
+                self.logger.info(f"[退出诊断] lancedb IPC 已启动: {_g().is_started}")
+            except Exception:
+                pass
+            # 打开中的店铺浏览器（Chromium/Playwright 子进程，最可能导致控制台滞留）
+            _open_browsers = 0
+            try:
+                from ui.user_ui import AccountCard as _AC
+                _layout = getattr(self, 'user_manager_view', None)
+                _layout = getattr(_layout, 'accounts_layout', None) if _layout else None
+                if _layout is not None:
+                    for i in range(_layout.count()):
+                        item = _layout.itemAt(i)
+                        w = item.widget() if item else None
+                        if isinstance(w, _AC):
+                            ow = getattr(w, 'open_shop_thread', None)
+                            if ow is not None and ow.isRunning() and getattr(ow, '_context', None) is not None:
+                                _open_browsers += 1
+            except Exception:
+                pass
+            self.logger.info(
+                f"[退出诊断] 打开中的店铺浏览器: {_open_browsers} 个"
+                f"（其 Chromium/Playwright 进程会吊住控制台，退出时应已被关闭）"
+            )
+        except Exception as e:
+            self.logger.error(f"退出诊断失败: {e}")
 
         if a0 is not None:
             super().closeEvent(a0)

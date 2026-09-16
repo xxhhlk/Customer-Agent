@@ -203,6 +203,30 @@ def main():
 
     atexit.register(_cleanup_pid)
 
+    # 退出诊断钩子：在进程真正退出前（线程 join / 子进程清理之前）快照存活资源，
+    # 用于定位"清理完成但控制台很久才退"的根因（如残留的非 daemon 线程或子进程）。
+    # 注册在所有 atexit 之后 → LIFO 中最早运行，能捕获未被 join/terminate 的状态。
+    def _exit_diagnostic():
+        try:
+            import threading as _th, multiprocessing as _mp
+            _alive = [(t.name, t.daemon) for t in _th.enumerate()]
+            _non_daemon = [x for x in _alive if not x[1]]
+            _procs = _mp.active_children()
+            try:
+                _fault_file.write(
+                    f"\n=== EXIT DIAGNOSTIC ({_time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n"
+                    f"alive threads ({len(_alive)}): {_alive}\n"
+                    f"non-daemon threads (会阻塞退出): {_non_daemon}\n"
+                    f"multiprocessing children: {[p.name for p in _procs]}\n"
+                )
+                _fault_file.flush()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    atexit.register(_exit_diagnostic)
+
     # 设置 Playwright 浏览器路径
     browsers_path = setup_playwright_browsers_path()
 

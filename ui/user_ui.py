@@ -78,49 +78,82 @@ class LoginThread(QThread):
 
 
 class OpenShopThread(QThread):
-    """打开店铺浏览器线程"""
-    
+    """打开店铺浏览器线程
+
+    注意：以往实现在 page.goto 后既不关闭 context 也不 stop Playwright，
+    导致 Chromium + Playwright node 驱动进程一直残留，程序退出后仍吊住控制台窗口。
+    现改为：持活事件循环等待关闭信号，由主线程在退出清理时线程安全地
+    request_close()，finally 中统一关闭浏览器，确保进程随程序退出而释放。
+    """
+
     def __init__(self, username: str):
         super().__init__()
         self.username = username
         self.setObjectName("OpenShopThread")
-        
+        self._context = None        # Playwright 持久化上下文（跨线程关闭用）
+        self._playwright = None     # Playwright 驱动
+        self._shutdown = None       # asyncio.Event，用于通知关闭
+        self.loop = None
+
     def run(self):
         """在后台线程中打开店铺浏览器"""
         try:
             # 创建事件循环
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
-            # 执行打开店铺
-            loop.run_until_complete(self._open_shop_browser())
-            
-            loop.close()
-            
+            self.loop = loop
+
+            try:
+                loop.run_until_complete(self._open_shop_browser())
+            except Exception as e:
+                logger.error(f"打开店铺浏览器线程异常: {e}")
+            finally:
+                if not loop.is_closed():
+                    loop.close()
+                self.loop = None
+
         except Exception as e:
             logger.error(f"打开店铺浏览器线程异常: {e}")
-    
+
+    def request_close(self):
+        """线程安全地请求关闭浏览器（主线程退出清理时调用）"""
+        self.requestInterruption()
+        loop = self.loop
+        evt = self._shutdown
+        if loop is not None and not loop.is_closed() and evt is not None:
+            try:
+                loop.call_soon_threadsafe(evt.set)
+            except RuntimeError:
+                pass
+
     async def _open_shop_browser(self):
         """使用 Playwright 打开带用户数据的浏览器"""
         from playwright.async_api import async_playwright
-        
+
+        self._shutdown = asyncio.Event()
+        # 极端竞态：线程刚启动、尚未打开浏览器就已收到退出请求
+        if self.isInterruptionRequested():
+            return
+
         try:
             # 启动Playwright
             playwright = await async_playwright().start()
-            
+            self._playwright = playwright
+
             # 使用相同用户名的用户数据目录（与登录时保持一致）
             app_dir = get_app_dir()
             user_data_dir = str(app_dir / "user_data" / self.username)
-            
+
             # 检查用户数据目录是否存在
             if not os.path.exists(user_data_dir):
                 logger.warning(f"用户数据目录不存在: {user_data_dir}，使用默认浏览器打开")
                 webbrowser.open("https://mms.pinduoduo.com/home/")
                 await playwright.stop()
+                self._playwright = None
                 return
-            
+
             logger.info(f"使用用户数据目录打开店铺: {user_data_dir}")
-            
+
             # 使用持久化上下文启动浏览器（非无头模式，显示界面）。
             # proxy=None 表示不代理；启用时走 SOCKS5
             from utils.proxy_config import get_playwright_proxy
@@ -138,20 +171,38 @@ class OpenShopThread(QThread):
                     '--disable-features=VizDisplayCompositor'
                 ]
             )
-            
+            self._context = context
+
             # 创建新页面并访问店铺后台
             page = await context.new_page()
             await page.goto("https://mms.pinduoduo.com/home/")
-            
+
             logger.info(f"已打开店铺后台浏览器: {self.username}")
-            
-            # 注意：不关闭 context，让浏览器保持打开状态
-            # 用户可以手动关闭浏览器窗口
-            
+
+            # 保持浏览器打开，直到被请求关闭（程序退出时 request_close 触发）
+            await self._shutdown.wait()
+
         except Exception as e:
             logger.error(f"打开店铺浏览器失败: {e}")
             # 失败时回退到默认浏览器
-            webbrowser.open("https://mms.pinduoduo.com/home/")
+            try:
+                webbrowser.open("https://mms.pinduoduo.com/home/")
+            except Exception:
+                pass
+        finally:
+            # 无论何种路径，退出前都关闭浏览器，避免 Chromium/Playwright 进程残留吊住控制台
+            try:
+                if self._context is not None:
+                    await self._context.close()
+            except Exception as e:
+                logger.error(f"关闭店铺浏览器 context 失败: {e}")
+            try:
+                if self._playwright is not None:
+                    await self._playwright.stop()
+            except Exception as e:
+                logger.error(f"停止 Playwright 失败: {e}")
+            self._context = None
+            self._playwright = None
 
 
 class AccountCard(CardWidget):
@@ -240,11 +291,34 @@ class AccountCard(CardWidget):
             if hasattr(self, 'logo_loader_thread') and self.logo_loader_thread and self.logo_loader_thread.isRunning():
                 self.logo_loader_thread.requestInterruption()
                 self.logo_loader_thread.wait(3000)
-            
-            # 清理打开店铺线程
-            if hasattr(self, 'open_shop_thread') and self.open_shop_thread and self.open_shop_thread.isRunning():
-                self.open_shop_thread.requestInterruption()
-                self.open_shop_thread.wait(3000)
+
+            # 关闭打开中的店铺浏览器（关键：否则 Chromium/Playwright 进程残留，吊住控制台）
+            if hasattr(self, 'open_shop_thread') and self.open_shop_thread:
+                ow = self.open_shop_thread
+                if ow.isRunning():
+                    try:
+                        ow.request_close()
+                    except Exception as e:
+                        logger.error(f"请求关闭店铺浏览器失败: {e}")
+                    ow.wait(3000)
+                # 兜底：线程已结束但 context 仍残留（异常路径），跨事件循环强制关闭
+                elif getattr(ow, '_context', None) is not None:
+                    try:
+                        import asyncio
+                        _ctx = ow._context
+                        _pw = ow._playwright
+
+                        async def _force_close():
+                            try:
+                                if _ctx is not None:
+                                    await _ctx.close()
+                            finally:
+                                if _pw is not None:
+                                    await _pw.stop()
+
+                        asyncio.run(_force_close())
+                    except Exception as e:
+                        logger.error(f"强制关闭店铺浏览器失败: {e}")
         except Exception as e:
             logger.error(f"清理账号卡片资源失败: {e}")
 
