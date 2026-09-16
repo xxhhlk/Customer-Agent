@@ -122,6 +122,10 @@ class MessageBubble(QFrame):
             self._content_widget.clicked.connect(self._on_video_clicked)
             self._content_label = self._content_widget  # 兼容别名
         else:
+            # 气泡本地预览：把已知 [xxx] 占位符渲染为 emoji 字符（发送内容不受影响）
+            from ui.chat.emoji_data import render_text
+            content = render_text(content)
+
             content_label = QLabel(content)
             content_label.setObjectName("ContentLabel")
             content_label.setWordWrap(True)
@@ -129,6 +133,8 @@ class MessageBubble(QFrame):
             content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             content_label.setMaximumWidth(420)
             content_font = QFont("Microsoft YaHei", 10)
+            # 追加 emoji 字体回退，Windows 上保证彩色字形
+            content_font.setFamilies(["Microsoft YaHei", "Segoe UI Emoji", "Noto Color Emoji"])
             content_label.setFont(content_font)
             content_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             self._content_label = content_label

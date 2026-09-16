@@ -6,9 +6,10 @@
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer, QPoint
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, QLabel, QApplication
 from PyQt6.QtGui import QFont, QKeyEvent, QTextCursor, QInputMethodEvent
-from qfluentwidgets import PrimaryPushButton, isDarkTheme
+from qfluentwidgets import PrimaryPushButton, isDarkTheme, TransparentToolButton, FluentIcon
 
 from ui.chat.slash_popup import SlashKnowledgePopup
+from ui.chat.emoji_panel import EmojiPopup
 from utils.logger_loguru import get_logger
 
 logger = get_logger("InputArea")
@@ -30,6 +31,7 @@ class InputArea(QWidget):
         self._max_query_len = 12  # 参与匹配的查询长度（取末尾片段）
         self._init_ui()
         self._init_slash_popup()
+        self._init_emoji_panel()
         self._apply_theme()
 
     def _apply_theme(self):
@@ -80,6 +82,13 @@ class InputArea(QWidget):
         self.hint_label.setFont(QFont("Microsoft YaHei", 9))
         self.hint_label.setStyleSheet("color: #999;")
         btn_layout.addWidget(self.hint_label)
+
+        self.emoji_btn = TransparentToolButton(FluentIcon.EMOJI_TAB_SYMBOLS)
+        self.emoji_btn.setToolTip("表情")
+        self.emoji_btn.setFixedSize(32, 32)
+        self.emoji_btn.clicked.connect(self._toggle_emoji_panel)
+        btn_layout.addWidget(self.emoji_btn)
+
         btn_layout.addStretch()
 
         self.send_btn = PrimaryPushButton("发送 (Enter)")
@@ -96,6 +105,40 @@ class InputArea(QWidget):
         self._slash_popup.position_requested.connect(self._update_popup_position)
         # 安装全局鼠标事件过滤器，用于点击浮窗外部时关闭浮窗
         self._install_global_click_filter()
+
+    # ========== 表情面板 ==========
+
+    def _init_emoji_panel(self):
+        """初始化表情浮窗（Popup，跟随输入框定位）"""
+        self._emoji_popup = EmojiPopup(self)
+        self._emoji_popup.emoji_selected.connect(self._on_emoji_selected)
+
+    def _toggle_emoji_panel(self):
+        """显示/收起表情面板并定位到输入框上方"""
+        if self._emoji_popup.isVisible():
+            self._emoji_popup.hide()
+            return
+        self._emoji_popup.reload()
+        self._position_emoji_popup()
+        self._emoji_popup.show()
+        self._emoji_popup.raise_()
+
+    def _position_emoji_popup(self):
+        """将表情浮窗定位到输入框上方（照抄 _update_popup_position 算法）"""
+        bottom_left = self.text_edit.mapToGlobal(self.text_edit.rect().bottomLeft())
+        h = self._emoji_popup.height()
+        if h <= 0:
+            h = 280
+        x = bottom_left.x()
+        y = bottom_left.y() - h - 4
+        self._emoji_popup.move(x, y)
+
+    def _on_emoji_selected(self, text: str):
+        """选中表情：在光标处插入 [xxx]，并抑制快捷语录联想"""
+        cursor = self.text_edit.textCursor()
+        cursor.insertText(text)                      # text 形如 "[玫瑰]"
+        self._slash_popup.suppress(text)             # 防止刚插入内容触发快捷语录联想
+        self.text_edit.setFocus()
 
     # ========== 斜杠检索逻辑 ==========
 
@@ -227,6 +270,11 @@ class InputArea(QWidget):
                 popup_rect = self._slash_popup.geometry()
                 if not popup_rect.contains(event.globalPosition().toPoint()):
                     self._dismiss_popup()
+            if self._emoji_popup.isVisible():
+                # 检查点击是否在表情面板外
+                popup_rect = self._emoji_popup.geometry()
+                if not popup_rect.contains(event.globalPosition().toPoint()):
+                    self._emoji_popup.hide()
             return False
 
         # 处理输入法事件（中文输入法候选词确认后触发）
@@ -300,8 +348,9 @@ class InputArea(QWidget):
 
     def _on_send_clicked(self):
         """发送按钮 / Enter 触发"""
-        # 发送前关闭联想浮窗
+        # 发送前关闭联想浮窗与表情面板
         self._cancel_slash()
+        self._emoji_popup.hide()
 
         text = self.text_edit.toPlainText().strip()
         if not text:
@@ -330,6 +379,9 @@ class InputArea(QWidget):
     def cleanup(self):
         """清理资源"""
         self._slash_popup.cleanup()
+        if getattr(self, "_emoji_popup", None) is not None:
+            self._emoji_popup.hide()
+            self._emoji_popup.deleteLater()
         self._remove_global_click_filter()
 
     def changeEvent(self, event):
@@ -346,6 +398,7 @@ class InputArea(QWidget):
         try:
             self._apply_theme()
             self._slash_popup.refresh_theme()
+            self._emoji_popup.refresh_theme()
         finally:
             QTimer.singleShot(200, self._reset_palette_pending)
 
