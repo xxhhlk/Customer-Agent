@@ -1,6 +1,6 @@
 """
 防抖处理器适配器
-适配 UserSequentialProcessor 到 MessageConsumer
+为 EnhancedMessageConsumer 提供防抖等待与多消息合并
 """
 
 import asyncio
@@ -279,7 +279,3 @@ class DebounceProcessorAdapter:
         except Exception as e:
             self.logger.error(f"Failed to extract user ID: {e}")
             return "unknown_unknown"
-
-
-# 全局实例
-debounce_processor = DebounceProcessorAdapter()
