@@ -473,8 +473,9 @@ class BusinessHoursCard(CardWidget):
         
         # 说明文本
         description_label = CaptionLabel(
-            "设置AI客服的工作时间。在工作时间内，系统将自动响应客户消息。\n"
-            "在非工作时间，系统将不会自动回复。"
+            "设置AI客服的工作时间。工作时间内消息约 8 秒后回复；\n"
+            "非工作时间（夜间/凌晨）仍会自动回复，但延迟约 5 分钟，"
+            "并会多等一会儿人工客服是否介入。"
         )
         description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)

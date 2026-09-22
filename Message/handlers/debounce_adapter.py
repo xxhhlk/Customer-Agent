@@ -16,11 +16,9 @@ logger = get_logger(__name__)
 class DebounceProcessorAdapter:
     """防抖处理器适配器 - 简化版"""
 
-    # 防抖配置
+    # 防抖配置（白天/夜间时段由 config.business_hours 决定，非营业时间即夜间）
     DEBOUNCE_SECONDS = 8  # 白天防抖时间
     NIGHT_DEBOUNCE_SECONDS = 300  # 夜间防抖时间（5分钟）
-    NIGHT_START = 23  # 夜间开始时间（23:01）
-    NIGHT_END = 7   # 夜间结束时间（07:55）
 
     def __init__(self):
         self._last_message_time: Dict[str, float] = {}
@@ -98,6 +96,8 @@ class DebounceProcessorAdapter:
         白天总防抖时长上限 MAX_DEBOUNCE_DAY 秒，夜间不设上限。
         """
         start_time = asyncio.get_event_loop().time()
+        # 由秒数反推白天/夜间（故必须保证 NIGHT_DEBOUNCE_SECONDS > DEBOUNCE_SECONDS）；
+        # 窗口中途不重查配置，避免上限判定在窗口内跳变
         is_daytime = debounce_seconds <= self.DEBOUNCE_SECONDS
         messages_to_merge = [wrapper]
 
@@ -246,15 +246,17 @@ class DebounceProcessorAdapter:
         return last_wrapper
 
     def _get_debounce_seconds(self) -> float:
-        """获取当前应该使用的防抖等待时间"""
-        import time
-        current_hour = time.localtime().tm_hour
+        """获取当前应该使用的防抖等待时间
 
-        # 检查是否在夜间时段
-        if current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END:
-            return self.NIGHT_DEBOUNCE_SECONDS
-        else:
+        营业时间内用白天防抖；非营业时间（夜间/凌晨）用夜间防抖，给买家更长的
+        合并窗口。每条消息到达时判定一次，等待窗口内不重算。
+        """
+        from config import config
+        if config.is_business_hours():
             return self.DEBOUNCE_SECONDS
+
+        self.logger.info(f"非营业时间，使用夜间防抖 {self.NIGHT_DEBOUNCE_SECONDS}s")
+        return self.NIGHT_DEBOUNCE_SECONDS
 
     def _extract_user_id(self, context: Context) -> str:
         """提取用户ID"""

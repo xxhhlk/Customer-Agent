@@ -345,6 +345,40 @@ class Config:
             'fallback_reply': model.rate_limit.fallback_reply
         }
 
+    @staticmethod
+    def _parse_hhmm(value: Any) -> Optional[int]:
+        """将 "HH:MM" 解析为当日分钟数，非法返回 None（容忍 "8:00"、前后空白）"""
+        if not isinstance(value, str):
+            return None
+        try:
+            hh, mm = value.strip().split(":")
+            h, m = int(hh), int(mm)
+        except ValueError:
+            return None
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h * 60 + m
+        return None
+
+    def is_business_hours(self, now: Optional[datetime] = None) -> bool:
+        """指定时刻（默认当前）是否在营业时间内，左闭右开 [start, end)
+
+        business_hours 由 UI 写入（HH:MM）；缺失、格式非法或 start >= end 时
+        回退默认 08:00-23:00。只读，不修改配置（_config 为浅拷贝，嵌套 dict
+        与 config_base 共享，禁止原地修改）。
+        """
+        default_start, default_end = 8 * 60, 23 * 60  # config_base 默认 08:00-23:00
+        raw = self.get("business_hours", {})
+        start_min = end_min = None
+        if isinstance(raw, dict):
+            start_min = self._parse_hhmm(raw.get("start"))
+            end_min = self._parse_hhmm(raw.get("end"))
+        if start_min is None or end_min is None or start_min >= end_min:
+            start_min, end_min = default_start, default_end
+
+        current = now or datetime.now()
+        now_min = current.hour * 60 + current.minute
+        return start_min <= now_min < end_min
+
     def __getitem__(self, key: str) -> Any:
         """支持使用字典方式访问配置"""
         return self.get(key)

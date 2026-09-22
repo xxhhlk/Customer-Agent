@@ -23,11 +23,7 @@ logger = get_logger(__name__)
 class EnhancedMessageConsumer:
     """增强版消息消费者 - 集成防抖、AI超时等功能"""
 
-    # 防抖配置
-    DEBOUNCE_SECONDS = 8  # 白天防抖时间
-    NIGHT_DEBOUNCE_SECONDS = 300  # 夜间防抖时间（5分钟）
-    NIGHT_START = 23  # 夜间开始时间（23:01）
-    NIGHT_END = 7   # 夜间结束时间（07:55）
+    # 防抖时段（白天/夜间）由 config.business_hours 决定，非营业时间即夜间
 
     # AI超时配置
     CANCEL_WINDOW = 5  # AI取消窗口（秒）
@@ -429,13 +425,20 @@ class EnhancedMessageConsumer:
             self.logger.error(f"发送关键词回复失败: {e}")
             return False
 
+    def _get_staff_reply_wait_seconds(self) -> float:
+        """人工回复等待时长：非营业时间至少等 60s，给人工客服更长的介入窗口"""
+        from config import config, get_config
+        wait_seconds = get_config("staff_reply_wait", {}).get("wait_seconds", 30)
+        if not config.is_business_hours():
+            wait_seconds = max(wait_seconds, 60)
+        return wait_seconds
+
     async def _check_staff_reply(self, context: Context) -> bool:
         """检查人工客服是否已回复"""
         # 检查配置
         from config import get_config
         staff_wait_config = get_config("staff_reply_wait", {})
         enable_staff_wait = staff_wait_config.get("enable", True)
-        wait_seconds = staff_wait_config.get("wait_seconds", 30)
 
         if not enable_staff_wait:
             return False
@@ -445,11 +448,7 @@ class EnhancedMessageConsumer:
             return False
 
         # 冷却期内不再短路返回 True：等待 staff 实际回复，超时则走 AI
-        # 夜间时段使用更长的等待时间
-        current_hour = time.localtime().tm_hour
-        is_night = current_hour >= self.NIGHT_START or current_hour <= self.NIGHT_END
-        if is_night:
-            wait_seconds = max(wait_seconds, 60)  # 夜间至少等待60秒
+        wait_seconds = self._get_staff_reply_wait_seconds()
 
         self.logger.info(f"Waiting for staff reply (max {wait_seconds}s)")
 
@@ -472,10 +471,7 @@ class EnhancedMessageConsumer:
         event_id: str
     ) -> bool:
         """检查人工客服是否已回复（使用提前创建的等待事件）"""
-        # 检查配置
-        from config import get_config
-        staff_wait_config = get_config("staff_reply_wait", {})
-        wait_seconds = staff_wait_config.get("wait_seconds", 30)
+        wait_seconds = self._get_staff_reply_wait_seconds()
         
         # 冷却期内不再短路返回 True：
         # wait_for_staff_reply 会实际等待新的 staff 回复通知，
