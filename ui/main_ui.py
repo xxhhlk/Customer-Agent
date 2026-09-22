@@ -604,9 +604,14 @@ class MainWindow(FluentWindow):
         # —— 退出诊断：快照当前存活的线程/子进程，定位退出卡顿根因 ——
         try:
             _threads = threading.enumerate()
+            # 注意：Dummy-N 不是真实存活线程。PyQt6 的 QThread 等原生线程一旦调用
+            # threading.current_thread()（loguru 打日志即触发），就会被登记为 _DummyThread，
+            # 且线程结束后仍留在 enumerate() 中，属于簿记残留、daemon、不阻塞退出。
+            _dummy = [t.name for t in _threads if t.name.startswith("Dummy-")]
+            _real = [(t.name, t.daemon) for t in _threads if not t.name.startswith("Dummy-")]
             self.logger.info(
-                f"[退出诊断] 存活 Python 线程 {len(_threads)} 个: "
-                f"{[(t.name, t.daemon) for t in _threads]}"
+                f"[退出诊断] 存活 Python 线程 {len(_threads)} 个"
+                f"（其中 Dummy 簿记残留 {len(_dummy)} 个，常为已结束的 QThread）: {_real}"
             )
             _procs = multiprocessing.active_children()
             if _procs:

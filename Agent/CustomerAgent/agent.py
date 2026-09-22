@@ -16,15 +16,21 @@ from bridge.reply import Reply, ReplyType
 from agno.models.openai import OpenAILike
 from agno.media import Image
 from agno.db.sqlite import SqliteDb
-from Agent.CustomerAgent.agent_knowledge import KnowledgeManager
 from Agent.CustomerAgent.tools.move_conversation import transfer_conversation
 from Agent.CustomerAgent.tools.get_product_list import get_shop_products
 from Agent.CustomerAgent.tools.send_goods_link import send_goods_link
 from config import get_config
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union, cast, TYPE_CHECKING
 from utils.logger_loguru import get_logger
 from pydantic import BaseModel, Field
 from typing import Dict
+
+if TYPE_CHECKING:
+    # 仅用于类型注解（下方均为字符串注解，运行时不需要真实类型）。
+    # 严禁在主进程真实导入 agent_knowledge：它会连带 import knowledge_enhanced
+    # → agno.vectordb.lancedb → lancedb（lance/arrow/tantivy C 扩展 + 后台线程），
+    # 击穿 LanceDB 子进程隔离，导致退出期解释器拆解 C 线程时 ntdll 堆 access violation。
+    from Agent.CustomerAgent.agent_knowledge import KnowledgeManager
 
 # ---------------------------------------------------------------------------
 # agno monkey-patch: 同步 DB 操作在 async 上下文中必须走 asyncio.to_thread()

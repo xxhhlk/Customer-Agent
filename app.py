@@ -210,12 +210,17 @@ def main():
         try:
             import threading as _th, multiprocessing as _mp
             _alive = [(t.name, t.daemon) for t in _th.enumerate()]
-            _non_daemon = [x for x in _alive if not x[1]]
+            # Dummy-N 为原生线程（PyQt6 QThread）调用 threading.current_thread() 后的簿记残留：
+            # 线程结束后不会从 enumerate() 移除，不代表仍在运行、也不阻塞退出，故单列出来。
+            _dummy = [x for x in _alive if x[0].startswith("Dummy-")]
+            _real = [x for x in _alive if not x[0].startswith("Dummy-")]
+            _non_daemon = [x for x in _real if not x[1]]
             _procs = _mp.active_children()
             try:
                 _fault_file.write(
                     f"\n=== EXIT DIAGNOSTIC ({_time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n"
-                    f"alive threads ({len(_alive)}): {_alive}\n"
+                    f"real threads ({len(_real)}): {_real}\n"
+                    f"dummy bookkeeping entries (已结束的原生线程残留, 可忽略): {len(_dummy)}\n"
                     f"non-daemon threads (会阻塞退出): {_non_daemon}\n"
                     f"multiprocessing children: {[p.name for p in _procs]}\n"
                 )
