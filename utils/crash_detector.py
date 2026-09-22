@@ -244,7 +244,10 @@ def _enable_wer_localdumps():
                 key_path = rf"SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\{app_name}"
                 key = winreg.CreateKey(hive, key_path)
                 winreg.SetValueEx(key, "DumpFolder", 0, winreg.REG_EXPAND_SZ, dump_dir)
-                winreg.SetValueEx(key, "DumpType", 0, winreg.REG_DWORD, 2)  # 2 = 完整 dump
+                # DumpType=1 (MiniDumpNormal)：仅含异常上下文+栈，约百 KB，毫秒级写盘。
+                # 原先为 2 (MiniDumpWithFullMemory)：会把整个进程内存（本机约 1.4GB）落盘，
+                # 在退出期崩溃时会拖住控制台窗口约 2 分钟才消失。改用 mini 既保留崩溃信息又不卡退出。
+                winreg.SetValueEx(key, "DumpType", 0, winreg.REG_DWORD, 1)
                 winreg.SetValueEx(key, "DumpCount", 0, winreg.REG_DWORD, 5)
                 winreg.CloseKey(key)
             except Exception:
@@ -255,7 +258,8 @@ def _enable_wer_localdumps():
             key_path = r"SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
             key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, key_path)
             winreg.SetValueEx(key, "DumpFolder", 0, winreg.REG_EXPAND_SZ, dump_dir)
-            winreg.SetValueEx(key, "DumpType", 0, winreg.REG_DWORD, 2)
+            # 同上：用 mini dump（1）避免退出期完整内存 dump 写盘卡住 2 分钟
+            winreg.SetValueEx(key, "DumpType", 0, winreg.REG_DWORD, 1)
             winreg.SetValueEx(key, "DumpCount", 0, winreg.REG_DWORD, 5)
             winreg.CloseKey(key)
         except Exception:
