@@ -10,6 +10,7 @@
 - 键盘行为：未显式导航时 Enter 仍为发送，避免误插入
 """
 
+import math
 import threading
 import time
 from typing import Callable, List, Dict, Any, Optional
@@ -30,7 +31,8 @@ class _KnowledgeSearchWorker(QThread):
     不走向量搜索，不需要嵌入模型，速度快。
     """
 
-    results_ready = pyqtSignal(list)  # List[Dict[str, str]]
+    results_ready = pyqtSignal(str, list)  # (query, List[Dict[str, str]])
+    _MATCH_RATIO = 0.5  # 最长连续命中片段占 query 长度的最低比例（可调）
 
     def __init__(self, query: str, limit: int = 8,
                  doc_provider: Optional[Callable[[], List[Any]]] = None,
@@ -43,10 +45,10 @@ class _KnowledgeSearchWorker(QThread):
     def run(self):
         try:
             results = self._search_lancedb()
-            self.results_ready.emit(results)
+            self.results_ready.emit(self._query, results)
         except Exception as e:
             logger.error(f"快捷语录后台搜索失败: {e}", exc_info=True)
-            self.results_ready.emit([])
+            self.results_ready.emit(self._query, [])
 
     @staticmethod
     def _to_doc_pair(doc: Any):
@@ -149,8 +151,36 @@ class _KnowledgeSearchWorker(QThread):
         if not scored:
             return []
 
-        scored.sort(key=lambda t: (-t[0], t[1]))
-        return [t[2] for t in scored[: self._limit]]
+        # 命中质量闸门：最长连续命中片段占 query 长度的比例 >= _MATCH_RATIO
+        # 输入越长要求越严 —— 多打无关字会稀释命中片段，浮窗随之关闭
+        need = max(2, math.ceil(len(query) * self._MATCH_RATIO)) if len(query) > 1 else 1
+        lowered = query.lower()
+        passed = []
+        for score, idx, item in scored:
+            combined = (item.get("title", "") + " " + item.get("content", "")).lower()
+            if self._passes_match_ratio(lowered, combined, need):
+                passed.append((score, idx, item))
+
+        if not passed:
+            return []
+
+        passed.sort(key=lambda t: (-t[0], t[1]))
+        return [t[2] for t in passed[: self._limit]]
+
+    @classmethod
+    def _passes_match_ratio(cls, query: str, combined: str, need: int) -> bool:
+        """query 与条目文本的最长公共连续片段是否达到 need
+
+        单字查询按整字匹配（与原有行为一致）；need 由 _MATCH_RATIO 推导。
+        """
+        n = len(query)
+        if n == 1:
+            return query in combined
+        for length in range(need, n + 1):
+            for i in range(n - length + 1):
+                if query[i:i + length] in combined:
+                    return True
+        return False
 
     @staticmethod
     def _tokenize(query: str) -> List[str]:
@@ -306,8 +336,11 @@ class SlashKnowledgePopup(QListWidget):
         self._worker.results_ready.connect(self._on_results)
         self._worker.start()
 
-    def _on_results(self, results: list):
+    def _on_results(self, query: str, results: list):
         """搜索完成，更新浮窗"""
+        # 丢弃过期结果：用户已继续输入，结果对应的 query 不再是当前 query
+        if query != self._pending_query:
+            return
         # 如果查询已被清空或浮窗已不可见，丢弃过期的异步结果
         if not self._pending_query.strip():
             self.hide()
