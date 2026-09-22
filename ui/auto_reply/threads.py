@@ -54,6 +54,7 @@ class AutoReplyThread(QThread):
         self.logger = get_logger("AutoReplyThread")
         self.loop = None
         self._stop_requested = False
+        self._main_task = None  # 主任务（start_account）引用，用于 stop() 直接取消
         self._restart_count = 0
         # 设置线程对象名，便于调试
         self.setObjectName(f"AutoReplyThread-{account_data.get('username', 'unknown')}")
@@ -91,6 +92,7 @@ class AutoReplyThread(QThread):
                         on_failure=on_failure
                     )
                 )
+                self._main_task = task
 
                 # 运行事件循环，直到任务完成或被停止
                 try:
@@ -117,16 +119,24 @@ class AutoReplyThread(QThread):
                                 task.cancel()
 
                         # 运行事件循环让取消的任务完成清理
+                        # 关键：用 wait_for 兜底，避免 websocket.close() 等收尾操作
+                        # 在网络异常时阻塞 close_timeout（默认/配置值）之久，拖慢线程退出
                         if pending:
                             try:
                                 self.loop.run_until_complete(
-                                    asyncio.gather(*pending, return_exceptions=True)
+                                    asyncio.wait_for(
+                                        asyncio.gather(*pending, return_exceptions=True),
+                                        timeout=3.0,
+                                    )
                                 )
+                            except (asyncio.TimeoutError, asyncio.CancelledError):
+                                self.logger.warning("取消任务收尾超时(3s)，强制关闭事件循环")
                             except Exception:
                                 pass
 
                         # 关闭事件循环
-                        self.loop.close()
+                        if not self.loop.is_closed():
+                            self.loop.close()
                         self.logger.debug("事件循环已关闭")
                     except Exception as e:
                         self.logger.error(f"关闭事件循环失败: {e}")
@@ -183,8 +193,12 @@ class AutoReplyThread(QThread):
             # call_soon_threadsafe 是唯一安全的跨线程事件循环操作
             if self.loop and not self.loop.is_closed():
                 try:
+                    # 直接取消主任务：立即打断 websockets.connect()/recv()/close() 等
+                    # 任意阻塞点，避免仅靠 loop.stop() 等待事件循环自然推进导致停不下来
+                    if self._main_task is not None and not self._main_task.done():
+                        self.loop.call_soon_threadsafe(self._main_task.cancel)
                     self.loop.call_soon_threadsafe(self.loop.stop)
-                    self.logger.debug("已请求停止事件循环")
+                    self.logger.debug("已请求停止事件循环并取消主任务")
                 except RuntimeError:
                     # 事件循环已经关闭
                     pass

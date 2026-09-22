@@ -211,7 +211,10 @@ class LifecycleMixin:
                 ping_timeout=30,
                 max_size=10**7,
                 compression=None,
-                close_timeout=10
+                close_timeout=10,
+                # 连接建立超时：不设置时 connect() 会一直挂到 OS TCP 超时（~20-30s），
+                # 在重连重试场景下会拖住线程退出。设 10s 作为纵深防御。
+                open_timeout=10,
             )
             try:
                 from utils.proxy_config import open_socks5_connection
