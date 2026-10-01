@@ -7,6 +7,7 @@ from websockets import exceptions as ws_exceptions
 from typing import Optional, Any, Dict, Set, TYPE_CHECKING
 from utils.logger_loguru import get_logger
 from Channel.pinduoduo.utils.API.get_token import GetToken
+from Channel.pinduoduo.core.pdd_connection import ConnectionLostError
 from config import config
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class LifecycleMixin:
     ws: Optional[Any]
     API_VERSION: str
     base_url: str
+    _ws_connected_at: Optional[float]  # 由 ConnectionMixin 初始化的连接建立时刻
 
     # Methods provided by ConnectionMixin / MessageHandlerMixin
     async def _connect_with_retry(self, shop_id: str, user_id: str, username: str, on_success, on_failure) -> None: ...
@@ -173,6 +175,8 @@ class LifecycleMixin:
         try:
             # 使用实例级停止事件，避免全局停止信号影响新连接
             self._stop_event = asyncio.Event()
+            # 本次连接尚未建立：掉线存活时长以建立成功时刻为准，避免沿用上一条连接的旧值
+            self._ws_connected_at = None
             self.logger.info(f"init 开始: {shop_id}-{username}")
 
             token = GetToken(shop_id, user_id)
@@ -246,6 +250,7 @@ class LifecycleMixin:
 
                 self.status_manager.update_status(shop_id, user_id, username, ConnectionState.CONNECTED)
                 self.logger.info(f"WebSocket 连接成功，状态已更新: {shop_id}-{username}")
+                self._ws_connected_at = time.monotonic()  # 记录建立时刻，供掉线存活时长判定
                 self.logger.debug(f"暂时跳过在线状态设置: {shop_id}-{username}")
 
                 on_success()
@@ -312,7 +317,7 @@ class LifecycleMixin:
                     # 如果需要重连，抛出异常让 _connect_with_retry 捕获
                     if should_reconnect:
                         self.logger.info(f"消息循环异常结束，触发重连: {shop_id}-{username}")
-                        raise RuntimeError(f"消息循环异常结束，需要重连: {shop_id}-{username}")
+                        raise ConnectionLostError(f"消息循环异常结束，需要重连: {shop_id}-{username}")
 
                 except asyncio.CancelledError:
                     self.logger.debug(f"WebSocket任务被取消: {shop_id}-{username}")
@@ -344,8 +349,8 @@ class LifecycleMixin:
             self.logger.warning(f"WebSocket连接已关闭: {shop_id}-{username}, 错误: {str(e)}")
             # 不在此处调用 on_failure，让 _connect_with_retry 决定是否回调
             await self._cleanup_resources(f"pdd_{shop_id}")
-            # 抛出异常，让 _connect_with_retry 能够捕获并触发重连
-            raise
+            # 抛出掉线异常，让 _connect_with_retry 区分"连接失败"与"连接后掉线"
+            raise ConnectionLostError(f"WebSocket连接已关闭: {shop_id}-{username}, 错误: {str(e)}") from e
         except Exception as e:
             self.status_manager.update_status(shop_id, user_id, username, ConnectionState.ERROR, str(e))
             self.logger.error(f"WebSocket连接错误: {shop_id}-{username}, 错误: {str(e)}")
