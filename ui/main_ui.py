@@ -218,19 +218,21 @@ class MainWindow(FluentWindow):
         gap = now - self._freeze_check_last
         self._freeze_check_last = now
         if gap > 5:
-            # 输出主线程当前堆栈，帮助定位阻塞来源
-            main_thread_id = self.thread()
-            stack_frames = []
-            for thread_id, frame in sys._current_frames().items():
-                # 找到主线程的堆栈
-                frame_info = traceback.extract_stack(frame)
-                # 通过堆栈深度和内容判断是否是主线程（Qt主线程通常有app.exec）
-                stack_str = ''.join(traceback.format_list(frame_info[-5:]))
-                stack_frames.append(stack_str)
-
+            # 只取主线程自己的堆栈。本方法由 QTimer 在主线程触发，
+            # 因此 threading.get_ident() 就是主线程 id，与 sys._current_frames() 的 key 一致。
+            # （旧实现取了 main_thread_id 却没用，直接打印 stack_frames[0]，
+            #   经常打印到别的线程——如 ProxyHealthMonitor——的栈，误导卡顿排查。）
+            main_thread_id = threading.get_ident()
+            frame = sys._current_frames().get(main_thread_id)
+            if frame is not None:
+                stack_str = ''.join(
+                    traceback.format_list(traceback.extract_stack(frame)[-8:])
+                )
+            else:
+                stack_str = f"无法获取（主线程 id={main_thread_id} 不在 sys._current_frames()）"
             self.logger.warning(
                 f"⚠️ 主线程卡顿检测: 事件循环间隔 {gap:.1f}s（正常应≈3s），可能存在阻塞操作\n"
-                f"主线程堆栈（最近5帧）:\n{stack_frames[0] if stack_frames else '无法获取'}"
+                f"主线程堆栈（最近8帧）:\n{stack_str}"
             )
 
         # 顺便清理 staff_reply_event_manager 中的孤儿事件

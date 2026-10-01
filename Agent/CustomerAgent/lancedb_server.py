@@ -92,7 +92,23 @@ def _server_main(conn):
             except Exception as e:
                 conn.send((req_id, "error", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
 
-    conn.close()
+        # 主进程断开 / 收到关闭信号：不再服务请求。
+        # 注意：本段必须在 with 块内——sys.stdout 此时仍指向打开的日志文件，
+        # 放到 with 之外会打到已关闭的 log_f 上，抛 ValueError('I/O operation on closed file')。
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+        # —— 快速退出：跳过本进程的 Py_Finalize ——
+        # 收到关闭信号后本进程已不再服务请求，但拆解 lancedb 的 C 扩展（lance/arrow/tantivy）
+        # 需要 ~4s，主进程 closeEvent 的 join 会一直干等。直接 os._exit(0) 跳过：
+        #   - 数据无丢失风险：lance 按次提交，关闭时无在途写（原有兜底在 join 超时后
+        #     本来就会 terminate()，os._exit 比它更温和）；
+        #   - 顺带跳过从 app.py 顶层继承来的 atexit（心跳/Process exiting 标记/日志轮转），
+        #     不再污染主进程的 heartbeat.json 与 crash_trace.log。
+        print("[lancedb_server] 快速退出 (os._exit)", flush=True)
+        os._exit(0)
 
 
 def start_lancedb_server():

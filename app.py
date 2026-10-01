@@ -27,6 +27,12 @@ import traceback
 import threading
 from pathlib import Path
 
+# multiprocessing（Windows spawn）会把本文件当 __mp_main__ 再执行一遍顶层：
+# 创建 lancedb 子进程时，子进程也会走到这里。子进程不需要主进程的这些副作用
+# （写崩溃日志/启动心跳/时间戳线程/注册 atexit），否则会轮流覆写 heartbeat.json、
+# 与主进程争抢 crash_trace.log（甚至替主进程截断它），掩盖主进程的真实崩溃状态。
+_IS_MP_CHILD = (__name__ == "__mp_main__")
+
 # Qt 渲染后端配置 —— 必须在导入任何 PyQt6 模块之前设置，否则平台插件已加载、失效。
 # 根因：7-13/7-14/7-15/7-18/7-31 的 ntdll 堆崩溃，崩溃线程为 Qt/D3D 内部线程，
 # WER 报告显示 d3d10warp.dll（WARP 软件光栅化器）曾被加载并卸载。
@@ -64,20 +70,27 @@ _fault_log_path = Path("./temp") / "crash_trace.log"
 _fault_log_path.parent.mkdir(parents=True, exist_ok=True)
 
 # 清理 crash_trace.log：超过阈值时只保留最近 1 小时
+# （子进程不执行：否则可能替主进程截断掉崩溃日志）
 from utils.log_manager import truncate_to_recent_hours
 CRASH_LOG_MAX_SIZE = os.environ.get("CRASH_LOG_MAX_SIZE", "100 MB")
-truncate_to_recent_hours(
-    _fault_log_path,
-    hours=1,
-    max_size=CRASH_LOG_MAX_SIZE,
-)
+if not _IS_MP_CHILD:
+    truncate_to_recent_hours(
+        _fault_log_path,
+        hours=1,
+        max_size=CRASH_LOG_MAX_SIZE,
+    )
 
-_fault_file = open(_fault_log_path, "a", encoding="utf-8")
+if _IS_MP_CHILD:
+    # 子进程写空设备，避免与主进程争抢 crash_trace.log、打多余的 App started
+    _fault_file = open(os.devnull, "w", encoding="utf-8")
+else:
+    _fault_file = open(_fault_log_path, "a", encoding="utf-8")
 
 # 写入启动时间戳，方便定位每次运行
 import time as _time
-_fault_file.write(f"\n{'='*60}\n=== App started at {_time.strftime('%Y-%m-%d %H:%M:%S')} ===\n{'='*60}\n")
-_fault_file.flush()
+if not _IS_MP_CHILD:
+    _fault_file.write(f"\n{'='*60}\n=== App started at {_time.strftime('%Y-%m-%d %H:%M:%S')} ===\n{'='*60}\n")
+    _fault_file.flush()
 
 faulthandler.enable(_fault_file)
 # 不再使用 dump_traceback_later（每 30s dump 一次在 4GB 机器上会加剧内存压力，
@@ -102,7 +115,8 @@ def _on_exit():
         _fault_file.flush()
     except Exception:
         pass
-atexit.register(_on_exit)
+if not _IS_MP_CHILD:
+    atexit.register(_on_exit)
 
 # 周期性写入时间戳到 fault file，方便定位崩溃发生的时间点
 def _periodic_fault_timestamp():
@@ -115,8 +129,10 @@ def _periodic_fault_timestamp():
             pass  # 文件已关闭等情况，静默退出
         _time.sleep(30)
 
-_ts_thread = threading.Thread(target=_periodic_fault_timestamp, daemon=True)
-_ts_thread.start()
+_ts_thread = None
+if not _IS_MP_CHILD:
+    _ts_thread = threading.Thread(target=_periodic_fault_timestamp, daemon=True)
+    _ts_thread.start()
 
 # ============================================================================
 # 三层崩溃捕获系统（VEH + 心跳 + WER minidump）
@@ -124,15 +140,19 @@ _ts_thread.start()
 # ============================================================================
 from utils.crash_detector import setup_crash_detection, check_previous_crash
 
-_prev_crash = setup_crash_detection(enable_wer=True, heartbeat_interval=5.0)
-if _prev_crash:
-    _fault_file.write(
-        f"!!! WARNING: Previous session crashed (not clean exit) !!!\n"
-        f"  Last heartbeat: {_prev_crash['last_heartbeat']}\n"
-        f"  Time since crash: {_prev_crash['seconds_ago']}s ago\n"
-        f"  PID: {_prev_crash['pid']}\n"
-    )
-    _fault_file.flush()
+_prev_crash = None
+if not _IS_MP_CHILD:
+    # 子进程跳过：避免启动第二套心跳线程轮流覆写 heartbeat.json，
+    # 否则主进程真崩溃时会被子进程退出的 clean_exit=true 掩盖。
+    _prev_crash = setup_crash_detection(enable_wer=True, heartbeat_interval=5.0)
+    if _prev_crash:
+        _fault_file.write(
+            f"!!! WARNING: Previous session crashed (not clean exit) !!!\n"
+            f"  Last heartbeat: {_prev_crash['last_heartbeat']}\n"
+            f"  Time since crash: {_prev_crash['seconds_ago']}s ago\n"
+            f"  PID: {_prev_crash['pid']}\n"
+        )
+        _fault_file.flush()
 
 # ============================================================================
 # 全局单例预初始化（确保正确的初始化顺序）
