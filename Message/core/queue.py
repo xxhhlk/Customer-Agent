@@ -144,6 +144,12 @@ class SimpleMessageQueue:
         if self._deduplication_cache is None:
             return
         current_time = time.time()
+        # 硬上限：极端流量下防止缓存无界增长（正常路径由时间窗清空）
+        if len(self._deduplication_cache) > 10000:
+            self._deduplication_cache.clear()
+            self._last_cleanup_time = current_time
+            self.logger.debug("Deduplication cache cleared (size limit)")
+            return
         if current_time - self._last_cleanup_time > self.config.deduplication_window:
             # 简单策略：清空缓存
             self._deduplication_cache.clear()

@@ -4,7 +4,6 @@
 """
 
 from .di_container import DIContainer, container, configure_standard_services
-from .cache import MemoryCache
 from .base_service import BaseService
 from .connection_status import ConnectionStatusManager, ConnectionState, ConnectionStatus
 
@@ -12,7 +11,6 @@ __all__ = [
     'DIContainer',
     'container',
     'configure_standard_services',
-    'MemoryCache',
     'BaseService',
     'ConnectionStatusManager',
     'ConnectionState',

@@ -217,24 +217,23 @@ class LogModel(QAbstractTableModel):
         return None
 
     def add_log(self, level: str, message: str, record):
-        """添加日志"""
+        """添加日志（增量插入，保留滚动位置；避免 layoutChanged 把滚动重置回顶部）"""
         log_item = LogItem(level, message, record)
         self._logs.append(log_item)
 
-        # 如果没有过滤条件，直接添加到显示列表
-        if not hasattr(self, '_filter') or self._filter is None:
+        # 通过过滤则增量插入到显示列表末尾
+        passes = (not hasattr(self, '_filter') or self._filter is None) or self._filter(log_item)
+        if passes:
+            row = len(self._filtered_logs)
+            self.beginInsertRows(QModelIndex(), row, row)
             self._filtered_logs.append(log_item)
-        else:
-            # 检查是否通过过滤
-            if self._filter(log_item):
-                self._filtered_logs.append(log_item)
+            self.endInsertRows()
 
-        # 限制显示的日志数量
+        # 限制显示数量：超出则移除最旧的一条（同步通知视图）
         if len(self._filtered_logs) > 1000:
-            self._filtered_logs = self._filtered_logs[-1000:]
-
-        # 发出数据变更信号
-        self.layoutChanged.emit()
+            self.beginRemoveRows(QModelIndex(), 0, 0)
+            self._filtered_logs.pop(0)
+            self.endRemoveRows()
 
     def set_filter(self, filter_func=None):
         """设置过滤器"""
@@ -412,8 +411,9 @@ class LogDisplayWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._setup_ui()
-        # 保存所有日志记录
-        self.all_logs: List[tuple] = []
+        # 保存所有日志记录（循环缓冲，上限 10000，避免长期运行内存增长）
+        self.all_logs: deque = deque(maxlen=10000)
+        self._auto_scroll = True  # 由过滤器面板的「自动滚动」勾选框控制
 
     def _setup_ui(self):
         """设置UI"""
@@ -433,6 +433,10 @@ class LogDisplayWidget(QWidget):
         # 直接添加到模型（模型会根据当前过滤器进行处理）
         self.log_table._log_model.add_log(level, message, record)
 
+        # 「自动滚动」勾选时，新日志跟随滚动到底部
+        if self._auto_scroll:
+            self.log_table.scrollToBottom()
+
     def clear_all(self):
         """清空所有日志"""
         self.all_logs.clear()
@@ -440,6 +444,8 @@ class LogDisplayWidget(QWidget):
 
     def set_filter(self, filter_dict):
         """设置过滤条件"""
+        # 「自动滚动」勾选状态由过滤器面板透传（此前是空壳，无人消费）
+        self._auto_scroll = filter_dict.get('auto_scroll', True)
         level_filter = filter_dict.get('level', '全部')
 
         # 创建过滤器函数
@@ -469,6 +475,10 @@ class LogDisplayWidget(QWidget):
         # 设置搜索高亮
         search_text = filter_dict.get('search', '').strip()
         self.log_table.set_highlight(search_text if search_text else "")
+
+        # 重放后统一滚动一次（避免重放过程中逐条滚动）
+        if self._auto_scroll:
+            self.log_table.scrollToBottom()
     
     
 

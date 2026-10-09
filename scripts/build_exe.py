@@ -127,7 +127,8 @@ def create_distribution_files(dist_path):
 - 程序需要网络连接才能正常工作
 - 建议关闭杀毒软件的实时防护或添加白名单
 - 如遇到问题，请查看 dist 目录下的日志文件
-- Playwright 浏览器采用外置模式，需要单独安装
+- Playwright 驱动已随程序打包，添加账号时会调用本机已安装的 Chrome 或 Edge，
+  用户无需额外安装 Playwright 或 Chromium 浏览器
 
 配置说明：
 - config.json 包含 API 密钥等配置信息
