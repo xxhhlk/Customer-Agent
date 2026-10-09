@@ -15,6 +15,11 @@ logger = get_logger(__name__)
 class MessagePreprocessor:
     """消息预处理器 - 提取通用逻辑"""
 
+    # 内容为空时的兜底文案，避免把空串送给模型
+    EMPTY_CONTENT_FALLBACK = "[收到一条无法解析的消息]"
+    # 表情解析不到描述时的兜底
+    EMOTION_FALLBACK = "[表情]"
+
     @staticmethod
     def safe_parse_json(data: Any, default_structure: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """安全解析JSON，统一处理各种消息格式"""
@@ -80,7 +85,16 @@ class MessagePreprocessor:
                 return self.create_image_message(content)
             elif msg_type == ContextType.VIDEO:
                 return self.create_video_message(content)
-            
+
+            if msg_type == ContextType.EMOTION:
+                text = self._clean_text(content) if content else ""
+                return self.create_text_message(
+                    text if text and text != "None" else self.EMOTION_FALLBACK
+                )
+
+            if not content:
+                return self.create_text_message(self.EMPTY_CONTENT_FALLBACK)
+
             # 1. 尝试解析为JSON
             parsed = self.safe_parse_json(content)
 
@@ -94,7 +108,7 @@ class MessagePreprocessor:
 
             # 3. 清理文本
             cleaned = self._clean_text(content)
-            return self.create_text_message(cleaned)
+            return self.create_text_message(cleaned or self.EMPTY_CONTENT_FALLBACK)
 
         except Exception as e:
             logger.error(f"Message preprocessing failed: {e}")
@@ -103,6 +117,17 @@ class MessagePreprocessor:
     def _extract_key_info(self, data: Dict[str, Any]) -> str:
         """提取关键信息"""
         parts = []
+
+        # 卡片标题与说明文字：type=64 的规格/说明书卡、type=8 的订单卡
+        # 全靠这两项承载语义。之前不认这两个键，未识别模板会因
+        # 「一个字段都提不出来」而把整串 JSON 丢给模型。
+        title = data.get('title')
+        if title:
+            parts.append(str(title))
+
+        detail = data.get('text') or data.get('sub_title') or data.get('description')
+        if detail and str(detail) != str(title):
+            parts.append(str(detail))
 
         # 商品信息
         goods_name = data.get('goods_name') or data.get('name')

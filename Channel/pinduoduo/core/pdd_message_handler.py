@@ -4,6 +4,7 @@ import asyncio
 from websockets import exceptions as ws_exceptions
 from typing import Optional, Any, TYPE_CHECKING
 from bridge.context import Context, ContextType, ChannelType
+from Channel.pinduoduo.message_rules import Action, Origin, effective_action
 from Channel.pinduoduo.pdd_message import PDDChatMessage
 from database import db_manager
 from utils.logger_loguru import get_logger
@@ -60,8 +61,6 @@ class MessageHandlerMixin:
 
     async def _process_websocket_message(self, message: str, shop_id: str, user_id: str, username: str, queue_name: str):
         """处理单条WebSocket消息"""
-        from Message import put_message
-
         try:
             if not message or not message.strip():
                 self.logger.debug(f"收到空消息，跳过处理: {shop_id}-{username}")
@@ -108,14 +107,7 @@ class MessageHandlerMixin:
                 except Exception as e:
                     self.logger.warning(f"持久化入站消息失败: {e}")
 
-                if self._should_process_immediately(context):
-                    await self._handle_immediate_message(context, shop_id, user_id)
-                    self.logger.debug(f"立即处理消息: {context.type}, ID: {pdd_message.msg_id}")
-                elif self._should_queue_message(context):
-                    msg_id = await put_message(queue_name, context)
-                    self.logger.debug(f"消息已入队: {queue_name}, ID: {msg_id}, 类型: {context.type}")
-                else:
-                    self.logger.debug(f"忽略消息: {context.type}, ID: {pdd_message.msg_id}")
+                await self._dispatch_by_action(context, shop_id, user_id, queue_name, pdd_message)
             else:
                 self.logger.warning("消息转换失败，跳过处理")
 
@@ -124,80 +116,198 @@ class MessageHandlerMixin:
         except Exception as e:
             self.logger.error(f"处理WebSocket消息失败: {e}")
 
-    def _should_process_immediately(self, context: Context) -> bool:
-        """判断消息是否需要立即处理"""
-        immediate_types = {
-            ContextType.SYSTEM_STATUS,
-            ContextType.AUTH,
-            ContextType.WITHDRAW,
-            ContextType.SYSTEM_HINT,
-            ContextType.MALL_CS,
-            ContextType.TRANSFER
-        }
-        return context.type in immediate_types
-
-    def _should_queue_message(self, context: Context) -> bool:
-        """判断消息是否需要放入队列处理"""
-        queue_types = {
-            ContextType.TEXT,
-            ContextType.IMAGE,
-            ContextType.VIDEO,
-            ContextType.EMOTION,
-            ContextType.GOODS_INQUIRY,
-            ContextType.ORDER_INFO,
-            ContextType.GOODS_CARD,
-            ContextType.GOODS_SPEC,
-        }
-        return context.type in queue_types
-
-    async def _handle_immediate_message(self, context: Context, shop_id: str, user_id: str):
-        """立即处理消息"""
-        username = context.kwargs.username
-        recipient_uid = context.kwargs.from_uid
+    def _resolve_action(self, pdd_message: PDDChatMessage) -> Action:
+        """取解析层判定出的动作；缺失或非法时降级为 UNKNOWN。"""
+        action = getattr(pdd_message, "action", None)
+        if isinstance(action, Action):
+            return action
         try:
-            from Channel.pinduoduo.utils.API.send_message import SendMessage
-            send_message = SendMessage(shop_id, user_id)
-            if context.type == ContextType.AUTH:
-                auth_info = context.content
-                if isinstance(auth_info, dict):
-                    result = auth_info.get('result')
-                    if result == 'ok':
-                        self.logger.info(f"{username}认证成功")
-                    else:
-                        self.logger.warning(f"{username}认证失败")
+            return Action(action)
+        except ValueError:
+            return Action.UNKNOWN
 
-            elif context.type == ContextType.WITHDRAW:
-                self.logger.info(f"收到撤回消息: {context.content}")
-                send_message.send_text(recipient_uid, "[玫瑰]")
+    async def _dispatch_by_action(
+        self,
+        context: Context,
+        shop_id: str,
+        user_id: str,
+        queue_name: str,
+        pdd_message: PDDChatMessage,
+    ) -> None:
+        """按动作分派。每条消息都有归宿，不存在静默丢弃的分支。"""
+        raw_action = self._resolve_action(pdd_message)
+        action = effective_action(raw_action)
+        origin = getattr(pdd_message, "origin", None)
+        origin_value = getattr(origin, "value", "unknown")
+        pdd_type = getattr(pdd_message, "pdd_type", None)
+        sub_type = getattr(pdd_message, "pdd_sub_type", None)
+        template = getattr(pdd_message, "template_name", None)
 
-            elif context.type == ContextType.SYSTEM_STATUS:
-                self.logger.debug(f"系统状态消息: {context.content}")
+        # 铁律：未识别的组合降级为 CONTEXT_ONLY 的同时必须告警。
+        # 只降级不告警，等于让动作表的缺项悄悄消失，后续无从补表。
+        if raw_action is Action.UNKNOWN:
+            self.logger.warning(
+                f"unknown message action, degraded to context_only: "
+                f"origin={origin_value}, type={pdd_type}, sub_type={sub_type}, "
+                f"template={template}"
+            )
 
-            elif context.type == ContextType.SYSTEM_HINT:
-                self.logger.info(f"系统提示: {context.content}")
+        # 客服侧（MERCHANT）消息：先完成既有的人工回复处理
+        # （staff_reply_event 通知 + 上下文缓存），这是 60s cooldown 与
+        # AI 上下文的事件源，不能因动作分类而跳过；随后照常按动作分流
+        # （动作表保证客服侧不产生 REPLY，不会与人工抢答）。
+        if origin is Origin.MERCHANT:
+            self._handle_staff_reply(context)
 
-            elif context.type == ContextType.MALL_CS:
-                # 其他客服消息，通知人工回复事件管理器
-                self.logger.debug(f"收到客服消息: {context.content}")
-                # 注意：人工客服消息的from_uid是店铺ID，to_uid才是买家ID
-                buyer_uid = context.kwargs.to_uid
+        if action is Action.REPLY:
+            from Message import put_message
+            msg_id = await put_message(queue_name, context)
+            self.logger.debug(f"消息已入队: {queue_name}, ID: {msg_id}, 类型: {context.type}")
+            return
+
+        if action is Action.HANDOFF:
+            await self._handle_immediate_message(context, shop_id, user_id)
+            return
+
+        if action is Action.CONTEXT_ONLY:
+            # 买家侧 CONTEXT_ONLY（订单卡 / 用户来源等）：不回复、不丢弃
+            self.logger.debug(
+                f"context only: origin={origin_value}, type={pdd_type}, "
+                f"template={template}, content={str(context.content)[:120]}"
+            )
+            return
+
+        if action is Action.IGNORE:
+            self.logger.debug(
+                f"message ignored: origin={origin_value}, type={pdd_type}, template={template}"
+            )
+            return
+
+        # OBSERVE 及任何未预期分支：只记录，绝不丢弃
+        await self._handle_observe(context, origin_value, pdd_type, template)
+
+    def _handle_staff_reply(self, context: Context) -> None:
+        """客服侧消息的既有处理：通知人工回复事件 + 缓存消息供 AI 上下文。
+
+        注意：人工客服消息的 from_uid 是店铺侧账号，to_uid 才是买家。
+        """
+        buyer_uid = context.kwargs.to_uid
+        if buyer_uid:
+            try:
                 from Message.handlers.staff_reply_event import staff_reply_event_manager
                 staff_reply_event_manager.notify_staff_reply(buyer_uid)
-                # 缓存客服消息，供AI回复时作为上下文
-                if context.content and buyer_uid:
-                    from Message.handlers.staff_message_cache import staff_message_cache
-                    staff_message_cache.add_message(buyer_uid, context.content)
+            except Exception as e:
+                self.logger.error(f"通知人工回复事件失败: {e}")
+        else:
+            self.logger.warning("客服消息缺少 to_uid，无法定位买家")
 
-            elif context.type == ContextType.SYSTEM_BIZ:
-                self.logger.info(f"系统业务消息: {context.content}")
+        # 缓存客服消息，供 AI 回复时作为上下文；结构化卡片先摘要成一行，
+        # 避免原始 JSON 直接进 AI 上下文。
+        if context.content and buyer_uid:
+            from Message.handlers.staff_message_cache import staff_message_cache
+            staff_message_cache.add_message(
+                buyer_uid, self._summarize_content(context.content)
+            )
 
-            elif context.type == ContextType.MALL_SYSTEM_MSG:
-                self.logger.info(f"商城系统消息: {context.content}")
+    @staticmethod
+    def _summarize_content(content: str) -> str:
+        """把结构化卡片（JSON）压成一行可读文本；纯文本原样返回。"""
+        if not isinstance(content, str):
+            return str(content)
+        stripped = content.strip()
+        if not stripped.startswith("{"):
+            return content
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return content
+        if not isinstance(parsed, dict):
+            return content
+        parts = []
+        for key in ("title", "text", "sub_title", "description",
+                    "goods_name", "order_id", "content"):
+            value = parsed.get(key)
+            if value and str(value) not in parts:
+                parts.append(str(value))
+        return "，".join(parts) if parts else content
 
-            elif context.type == ContextType.TRANSFER:
+    @staticmethod
+    def _extract_auth_result(content) -> str:
+        """从 auth 消息内容里取 result。
+
+        内容可能是 dict，也可能已被归一化为 JSON 字符串，两种都要支持。
+        """
+        if isinstance(content, dict):
+            return str(content.get("result"))
+        if isinstance(content, str):
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                return content[:60]
+            if isinstance(parsed, dict):
+                return str(parsed.get("result"))
+        return "unknown"
+
+    async def _handle_observe(
+        self,
+        context: Context,
+        origin: str,
+        pdd_type,
+        template,
+    ) -> None:
+        """只观察，不参与对话。
+
+        type=30（system_push）实测内容为「账户在别处登录 请刷新重登。」，
+        属于需要运维可见的信号，因此提升到 WARNING。
+        """
+        # auth 的连接鉴权结果保留 INFO 可见性（排查登录问题需要）。
+        # 注意 _convert_to_context 已把 dict 归一化成 JSON 字符串，
+        # 因此这里必须解析字符串——原实现只判 dict，日志实际从未打印。
+        if context.type == ContextType.AUTH:
+            username = getattr(context.kwargs, "username", "") or ""
+            self.logger.info(
+                f"{username} auth result: {self._extract_auth_result(context.content)}"
+            )
+            return
+
+        message = (
+            f"observe: origin={origin}, type={pdd_type}, "
+            f"template={template}, ctx={context.type}"
+        )
+        # type=30 实测为「账户在别处登录 请刷新重登。」，需运维可见
+        if pdd_type == 30 and context.content:
+            self.logger.warning(f"{message}, content={str(context.content)[:120]}")
+        elif context.type == ContextType.TRANSFER:
+            # 默认日志级别是 INFO，转接若记 debug 等于没记；
+            # 而「转接通知可排查」正是客服侧仍然要解析消息的理由之一。
+            self.logger.info(f"{message}, content={str(context.content)[:120]}")
+        else:
+            self.logger.debug(message)
+
+    async def _handle_immediate_message(self, context: Context, shop_id: str, user_id: str):
+        """处理 HANDOFF 动作：目前只有买家侧会话转接。
+
+        AUTH 归入 OBSERVE、WITHDRAW 归入 IGNORE，都不再到这条路径，
+        因此这里不再保留它们的分支，避免出现永不执行的死代码。
+        """
+        recipient_uid = getattr(context.kwargs, "from_uid", None)
+        if isinstance(context.kwargs, dict):
+            recipient_uid = recipient_uid or context.kwargs.get("from_uid")
+        recipient_uid = recipient_uid or ""
+        try:
+            from Channel.pinduoduo.utils.API.send_message import SendMessage
+
+            def _send_notice() -> None:
+                # 构造也要放进工作线程：SendMessage -> BaseRequest.__init__ ->
+                # _init_account_info() 会同步读 cookie 缓存与数据库，
+                # 在事件循环线程里构造会阻塞整条连接的收发。
+                SendMessage(shop_id, user_id).send_text(recipient_uid, "[玫瑰]")
+
+            if context.type == ContextType.TRANSFER:
                 self.logger.info(f"转接消息: {context.content}")
-                send_message.send_text(recipient_uid, "[玫瑰]")
-
+                await asyncio.to_thread(_send_notice)
+            else:
+                self.logger.debug(f"handoff: unhandled type {context.type}")
         except Exception as e:
             self.logger.error(f"立即处理消息失败: {e}")
 
@@ -231,7 +341,12 @@ class MessageHandlerMixin:
             username=str(username),
             shop_name=str(shop_name),
             raw_data=pdd_message.raw_data,
-            channel_type=ChannelType.PINDUODUO
+            channel_type=ChannelType.PINDUODUO,
+            origin=getattr(getattr(pdd_message, "origin", None), "value", None),
+            action=getattr(getattr(pdd_message, "action", None), "value", None),
+            pdd_type=getattr(pdd_message, "pdd_type", None),
+            pdd_sub_type=getattr(pdd_message, "pdd_sub_type", None),
+            template_name=getattr(pdd_message, "template_name", None),
         )
         return context
 

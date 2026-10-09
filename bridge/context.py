@@ -49,6 +49,12 @@ class PinduoduoKwargs(BaseModel):
     nickname: Optional[str] = None
     timestamp: Optional[str] = None
     user_msg_type: Optional[ContextType] = None
+    # 路由元信息（由 PDDChatMessage 产出，供 handler 决定动作）
+    origin: Optional[str] = None
+    action: Optional[str] = None
+    pdd_type: Optional[int] = None
+    pdd_sub_type: Optional[int] = None
+    template_name: Optional[str] = None
     shop_id: Optional[str] = None
     user_id: Optional[str] = None
     username: Optional[str] = None
@@ -68,7 +74,9 @@ class Context(BaseModel):
     def create_pinduoduo_context(cls, content=None, msg_id=None, from_user=None, from_uid=None,
                                 to_user=None, to_uid=None, nickname=None, timestamp=None,
                                 user_msg_type=None, shop_id=None, user_id=None, username=None, shop_name=None,
-                                raw_data=None,channel_type= None):
+                                raw_data=None,channel_type= None,
+                                origin=None, action=None, pdd_type=None, pdd_sub_type=None,
+                                template_name=None):
         """创建拼多多上下文实例的便捷方法"""
         kwargs = PinduoduoKwargs(
             msg_id=msg_id,
@@ -79,6 +87,11 @@ class Context(BaseModel):
             nickname=nickname,
             timestamp=timestamp,
             user_msg_type=user_msg_type,
+            origin=origin,
+            action=action,
+            pdd_type=pdd_type,
+            pdd_sub_type=pdd_sub_type,
+            template_name=template_name,
             shop_id=shop_id,
             user_id=user_id,
             username=username,

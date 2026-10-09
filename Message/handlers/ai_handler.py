@@ -30,15 +30,30 @@ class AIReplyHandler(BaseHandler):
                 logger.warning(f"从DI容器获取CustomerAgent失败: {e}, 将使用无Bot模式")
         self.bot = bot
         self.preprocessor = MessagePreprocessor()
-        self.auto_reply_types = auto_reply_types or {
-            ContextType.TEXT,
-            ContextType.GOODS_INQUIRY,
-            ContextType.GOODS_SPEC,
-            ContextType.ORDER_INFO,
-            ContextType.IMAGE,
-            ContextType.VIDEO,
-            ContextType.EMOTION
-        }
+        self.auto_reply_types = auto_reply_types or self._default_reply_types()
+
+    @staticmethod
+    def _default_reply_types() -> set:
+        """默认白名单，来自拼多多动作表（单一事实来源）。
+
+        改为推导而非手写，避免此前的漂移：入队集合含 GOODS_CARD
+        而这里不含，导致消息入队后无人处理。
+        延迟导入：Message 层不应在导入期依赖 Channel 层。
+        """
+        try:
+            from Channel.pinduoduo.message_rules import CUSTOMER_REPLY_CONTEXT_TYPES
+            return set(CUSTOMER_REPLY_CONTEXT_TYPES)
+        except ImportError:
+            # 非拼多多场景或模块缺失时的安全回退
+            return {
+                ContextType.TEXT,
+                ContextType.GOODS_INQUIRY,
+                ContextType.GOODS_SPEC,
+                ContextType.ORDER_INFO,
+                ContextType.IMAGE,
+                ContextType.VIDEO,
+                ContextType.EMOTION,
+            }
 
         # 加载限流配置（消费者层 is_rate_limited 检查依赖此配置）
         self._load_rate_limit_config()
