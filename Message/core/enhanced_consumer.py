@@ -398,10 +398,13 @@ class EnhancedMessageConsumer:
             reply_text = reply_text.replace('\\n', '\n')
             self.logger.info(f"发送关键词回复（从{len(reply_list)}条中随机选择）: {reply_text}")
 
-            # 发送回复
-            from Channel.pinduoduo.utils.API.send_message import SendMessage
-            sender = SendMessage(str(shop_id), str(user_id))
-            result = sender.send_text(str(from_uid), reply_text)
+            # 发送回复（通过发送器抽象，同步 HTTP 放工作线程）
+            from bridge.sender import get_sender
+            sender = get_sender(context.channel_type)
+            if not sender:
+                self.logger.warning("无可用的发送器")
+                return False
+            result = await asyncio.to_thread(sender.send_text, shop_id, user_id, str(from_uid), reply_text)
 
             if result is not None and hasattr(result, 'get') and result.get('success'):
                 self.logger.info(f"已发送关键词回复: {reply_text}")
@@ -945,10 +948,13 @@ class EnhancedMessageConsumer:
                 self.logger.warning(f"缺少发送信息: shop_id={shop_id}, user_id={user_id}, from_uid={from_uid}")
                 return
 
-            # 尝试发送消息
-            from Channel.pinduoduo.utils.API.send_message import SendMessage
-            sender = SendMessage(str(shop_id), str(user_id))
-            result = sender.send_text(str(from_uid), reply_text)
+            # 尝试发送消息（通过发送器抽象，同步 HTTP 放工作线程）
+            from bridge.sender import get_sender
+            sender = get_sender(context.channel_type)
+            if not sender:
+                self.logger.warning("无可用的发送器")
+                return
+            result = await asyncio.to_thread(sender.send_text, shop_id, user_id, str(from_uid), reply_text)
             if isinstance(result, dict) and result.get("success"):
                 self.logger.info(f"已发送兜底回复给用户 {from_uid}")
                 # === 持久化兜底回复（接入点C） ===

@@ -1,6 +1,7 @@
 """
 关键词检测处理器 - 检测转人工关键词并触发转人工流程
 """
+import asyncio
 import re
 from typing import Dict, Any, Optional, List
 from bridge.context import Context, ContextType
@@ -8,7 +9,7 @@ from .base import BaseHandler
 from .keyword_matcher import matcher_factory
 from database.db_manager import db_manager
 from utils.logger_loguru import get_logger
-from Channel.pinduoduo.utils.API.send_message import SendMessage
+from bridge.sender import get_sender
 
 class KeywordDetectionHandler(BaseHandler):
     """关键词检测处理器 - 检测转人工关键词并触发转人工流程"""
@@ -138,8 +139,9 @@ class KeywordDetectionHandler(BaseHandler):
                 # 将 \n 转义字符替换为实际换行符
                 reply_content = reply_content.replace('\\n', '\n')
                 self.logger.info(f"发送关键词回复（从{len(reply_list)}条中随机选择）: {reply_content}")
-                sender = SendMessage(shop_id, user_id)
-                sender.send_text(from_uid, reply_content)
+                sender = get_sender(context.channel_type)
+                if sender:
+                    await asyncio.to_thread(sender.send_text, shop_id, user_id, from_uid, reply_content)
                 self.logger.info(f"已发送关键词回复: {reply_content}")
                 
                 # 如果 pass_to_ai 为 True，发送回复后继续传递给AI
@@ -261,8 +263,11 @@ class KeywordDetectionHandler(BaseHandler):
         """转接到人工客服"""
         try:
             # 获取可用的客服列表
-            sender = SendMessage(shop_id, user_id)
-            cs_list = sender.getAssignCsList()
+            sender = get_sender()
+            if not sender:
+                self.logger.warning("无可用的发送器")
+                return False
+            cs_list = await asyncio.to_thread(sender.get_cs_list, shop_id, user_id)
             my_cs_uid = f"cs_{shop_id}_{user_id}"
             
             if cs_list and isinstance(cs_list, dict):
@@ -275,8 +280,8 @@ class KeywordDetectionHandler(BaseHandler):
                     target_cs = cs_list[cs_uid]
                     cs_name = target_cs.get('username', '客服')
                     
-                    # 转移会话
-                    transfer_result = sender.move_conversation(from_uid, cs_uid)
+                    # 转移会话（同步 HTTP，放工作线程）
+                    transfer_result = await asyncio.to_thread(sender.transfer_to_cs, shop_id, user_id, from_uid, cs_uid)
                     
                     if transfer_result and transfer_result.get('success'):
                         self.logger.info(f"会话已成功转接给 {cs_name} ({cs_uid})")
@@ -285,7 +290,7 @@ class KeywordDetectionHandler(BaseHandler):
                         self.logger.error("会话转接失败")
                 else:
                     self.logger.warning("没有其他可用的客服进行转接")
-                    sender.send_text(from_uid, "抱歉，当前没有其他客服在线，请您稍后再试。")
+                    await asyncio.to_thread(sender.send_text, shop_id, user_id, from_uid, "抱歉，当前没有其他客服在线，请您稍后再试。")
             
             return False
             

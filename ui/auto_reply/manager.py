@@ -187,7 +187,7 @@ class AutoReplyManager(QObject):
             blocking: 为 True 时阻塞调用线程直到所有线程结束（用于程序退出清理）。
                      默认 False，不阻塞主线程事件循环。
         """
-        # 防止重复调用（shutdown场景，不需要重置标志）
+        # 防止重复调用（停止流程结束后在 _on_stop_all_* 中复位，支持"停止→重启→再停止"）
         if self._stopping:
             self.logger.debug("stop_all()已执行过，跳过重复调用")
             return
@@ -196,6 +196,7 @@ class AutoReplyManager(QObject):
         threads = list(self.running_accounts.values())
         if not threads:
             self.logger.info("没有正在运行的自动回复任务")
+            self._stopping = False  # 无实际停止流程，立即复位以允许后续再次 stop_all
             self.all_stopped.emit()
             return
 
@@ -226,6 +227,7 @@ class AutoReplyManager(QObject):
         self.running_accounts.clear()
         self.logger.info("所有自动回复任务已停止")
         self._stop_worker = None
+        self._stopping = False  # 复位，允许后续"重启账号→再次停止全部"
         self.all_stopped.emit()
 
     def _on_stop_all_timeout(self, timeout_names: list):
@@ -233,6 +235,7 @@ class AutoReplyManager(QObject):
         self.running_accounts.clear()
         self.logger.warning(f"部分自动回复线程未在5秒内结束: {timeout_names}")
         self._stop_worker = None
+        self._stopping = False  # 超时同样复位，避免管理器永久处于停止态
         self.all_stopped.emit()
 
 

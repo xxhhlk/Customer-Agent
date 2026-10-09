@@ -45,12 +45,12 @@ class Channel:
         :return: 是否删除成功
         """
         # 检查数据库中是否存在店铺
-        shop_info = await asyncio.to_thread(db_manager.get_shop, self.channel_name, shop_id, shop_name)
+        shop_info = await asyncio.to_thread(db_manager.get_shop, self.channel_name, shop_id)
         if not shop_info:
             self.logger.error(f"店铺 {shop_name} 不存在")
             return False
         # 删除店铺
-        delete_info = await asyncio.to_thread(db_manager.delete_shop, self.channel_name, shop_id, shop_name)
+        delete_info = await asyncio.to_thread(db_manager.delete_shop, self.channel_name, shop_id)
         if not delete_info:
             self.logger.error(f"店铺 {shop_name} 删除失败")
             return False

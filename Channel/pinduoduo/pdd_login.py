@@ -18,6 +18,23 @@ else:
     # 回退到用户目录
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.getenv("LOCALAPPDATA", ""), "ms-playwright")
 
+# PyInstaller 打包（frozen）时，Playwright 默认的 inspect.getfile 定位驱动会指向
+# 构建机路径而失效。这里显式接管：node.exe 走环境变量，cli.js 走 monkeypatch。
+import sys as _sys
+if getattr(_sys, "frozen", False):
+    _driver_dir = Path(getattr(_sys, "_MEIPASS", ".")) / "playwright" / "driver"
+    _node = _driver_dir / "node.exe"
+    _cli = _driver_dir / "package" / "cli.js"
+    if _node.exists():
+        os.environ["PLAYWRIGHT_NODEJS_PATH"] = str(_node)
+    if _cli.exists():
+        from playwright._impl import _driver as _pw_driver
+        _pw_driver.compute_driver_executable = lambda: (
+            os.environ.get("PLAYWRIGHT_NODEJS_PATH", str(_node)),
+            str(_cli),
+        )
+del _sys
+
 from http import cookies
 import requests
 import json

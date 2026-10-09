@@ -65,7 +65,7 @@ class LifecycleMixin:
 
         if connection_key in self._reconnect_tasks:
             self._reconnect_tasks[connection_key].cancel()
-            del self._reconnect_tasks[connection_key]
+            self._reconnect_tasks.pop(connection_key, None)
 
         if self.reconnect_config.enable_auto_reconnect:
             self.logger.info(f"start_account: 调用 _connect_with_retry, _threading_stop_event={self._threading_stop_event.is_set()}, _stop_event={self._stop_event}")
@@ -88,7 +88,7 @@ class LifecycleMixin:
         finally:
             # 清理任务引用
             if connection_key in self._reconnect_tasks:
-                del self._reconnect_tasks[connection_key]
+                self._reconnect_tasks.pop(connection_key, None)
             self.logger.info(f"start_account 结束: {shop_id}-{username}")
 
     async def stop_account(self, shop_id: str, user_id: str):
@@ -119,7 +119,7 @@ class LifecycleMixin:
                         self.logger.warning(f"重连任务取消超时: {connection_key}")
                     except Exception as task_error:
                         self.logger.error(f"等待重连任务完成时出错: {task_error}")
-                del self._reconnect_tasks[connection_key]
+                self._reconnect_tasks.pop(connection_key, None)
                 self.logger.debug(f"已清理重连任务: {connection_key}")
 
             if connection_key in self._heartbeat_tasks:
@@ -134,7 +134,7 @@ class LifecycleMixin:
                         self.logger.warning(f"心跳任务取消超时: {connection_key}")
                     except Exception as task_error:
                         self.logger.error(f"等待心跳任务完成时出错: {task_error}")
-                del self._heartbeat_tasks[connection_key]
+                self._heartbeat_tasks.pop(connection_key, None)
                 self.logger.debug(f"已清理心跳任务: {connection_key}")
 
             if connection_key in self._health_tasks:
@@ -149,7 +149,7 @@ class LifecycleMixin:
                         self.logger.warning(f"Cookie健康检查任务取消超时: {connection_key}")
                     except Exception as task_error:
                         self.logger.error(f"等待Cookie健康检查任务完成时出错: {task_error}")
-                del self._health_tasks[connection_key]
+                self._health_tasks.pop(connection_key, None)
                 self.logger.debug(f"已清理Cookie健康检查任务: {connection_key}")
 
             self.status_manager.update_status(shop_id, user_id, username, ConnectionState.DISCONNECTED)
@@ -392,7 +392,7 @@ class LifecycleMixin:
                         self.logger.debug(f"任务已取消或超时: {connection_key}")
                     except Exception as e:
                         self.logger.error(f"停止任务时出错: {connection_key}, {e}")
-                del self._reconnect_tasks[connection_key]
+                self._reconnect_tasks.pop(connection_key, None)
 
             for connection_key, task in list(self._heartbeat_tasks.items()):
                 if not task.done():
@@ -403,7 +403,7 @@ class LifecycleMixin:
                         self.logger.debug(f"心跳任务已取消或超时: {connection_key}")
                     except Exception as e:
                         self.logger.error(f"停止心跳任务时出错: {connection_key}, {e}")
-                del self._heartbeat_tasks[connection_key]
+                self._heartbeat_tasks.pop(connection_key, None)
 
             for connection_key, task in list(self._health_tasks.items()):
                 if not task.done():
@@ -414,7 +414,7 @@ class LifecycleMixin:
                         self.logger.debug(f"Cookie健康检查任务已取消或超时: {connection_key}")
                     except Exception as e:
                         self.logger.error(f"停止Cookie健康检查任务时出错: {connection_key}, {e}")
-                del self._health_tasks[connection_key]
+                self._health_tasks.pop(connection_key, None)
 
             if self.ws:
                 await self._safe_close_websocket(self.ws)
@@ -472,7 +472,7 @@ class LifecycleMixin:
             self.logger.error(f"心跳循环异常: {shop_id}-{username}, 错误: {str(e)}")
         finally:
             if connection_key in self._heartbeat_tasks:
-                del self._heartbeat_tasks[connection_key]
+                self._heartbeat_tasks.pop(connection_key, None)
             self.logger.debug(f"心跳循环已结束: {shop_id}-{username}")
 
     async def _cookie_health_loop(self, shop_id: str, user_id: str, username: str, on_failure=None):
@@ -567,7 +567,7 @@ class LifecycleMixin:
             self.logger.error(f"Cookie 健康检查循环异常: {shop_id}-{username}, {e}")
         finally:
             if connection_key in self._health_tasks:
-                del self._health_tasks[connection_key]
+                self._health_tasks.pop(connection_key, None)
             self.logger.debug(f"Cookie 健康检查循环已结束: {shop_id}-{username}")
 
     async def _message_loop(self, websocket, shop_id: str, user_id: str, username: str, queue_name: str):
@@ -622,17 +622,22 @@ class LifecycleMixin:
     async def _cleanup_reconnect_tasks(self):
         """清理所有重连任务"""
         try:
+            # 本方法由连接任务自身在收尾时调用（如 init 的取消/异常分支），
+            # 该任务也登记在本字典里。若把它一并取消，等于让清理者在自己
+            # 的 await 点上收到 CancelledError，清理流程会中途异常退出。
+            current = asyncio.current_task()
             for connection_key, task in list(self._reconnect_tasks.items()):
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await asyncio.wait_for(task, timeout=5.0)
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        pass
-                    except asyncio.InvalidStateError:
-                        self.logger.debug(f"重连任务在不同的的事件循环中: {connection_key}")
-                    except Exception as e:
-                        self.logger.error(f"清理重连任务失败: {connection_key}, {e}")
+                if task is current or task.done():
+                    continue
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=5.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except asyncio.InvalidStateError:
+                    self.logger.debug(f"重连任务在不同的的事件循环中: {connection_key}")
+                except Exception as e:
+                    self.logger.error(f"清理重连任务失败: {connection_key}, {e}")
             self._reconnect_tasks.clear()
         except Exception as e:
             self.logger.error(f"清理重连任务列表失败: {e}")
@@ -640,17 +645,19 @@ class LifecycleMixin:
     async def _cleanup_heartbeat_tasks(self):
         """清理所有心跳任务"""
         try:
+            current = asyncio.current_task()
             for connection_key, task in list(self._heartbeat_tasks.items()):
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await asyncio.wait_for(task, timeout=3.0)
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        pass
-                    except asyncio.InvalidStateError:
-                        self.logger.debug(f"心跳任务在不同的的事件循环中: {connection_key}")
-                    except Exception as e:
-                        self.logger.error(f"清理心跳任务失败: {connection_key}, {e}")
+                if task is current or task.done():
+                    continue
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=3.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except asyncio.InvalidStateError:
+                    self.logger.debug(f"心跳任务在不同的的事件循环中: {connection_key}")
+                except Exception as e:
+                    self.logger.error(f"清理心跳任务失败: {connection_key}, {e}")
             self._heartbeat_tasks.clear()
         except Exception as e:
             self.logger.error(f"清理心跳任务列表失败: {e}")
@@ -658,17 +665,19 @@ class LifecycleMixin:
     async def _cleanup_health_tasks(self):
         """清理所有 Cookie 健康检查任务"""
         try:
+            current = asyncio.current_task()
             for connection_key, task in list(self._health_tasks.items()):
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await asyncio.wait_for(task, timeout=3.0)
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        pass
-                    except asyncio.InvalidStateError:
-                        self.logger.debug(f"Cookie健康检查任务在不同的的事件循环中: {connection_key}")
-                    except Exception as e:
-                        self.logger.error(f"清理Cookie健康检查任务失败: {connection_key}, {e}")
+                if task is current or task.done():
+                    continue
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=3.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except asyncio.InvalidStateError:
+                    self.logger.debug(f"Cookie健康检查任务在不同的的事件循环中: {connection_key}")
+                except Exception as e:
+                    self.logger.error(f"清理Cookie健康检查任务失败: {connection_key}, {e}")
             self._health_tasks.clear()
         except Exception as e:
             self.logger.error(f"清理Cookie健康检查任务列表失败: {e}")

@@ -233,6 +233,8 @@ class CustomerAgent(Bot):
         self._agent: Optional[Agent] = None
         self.logger = get_logger("CustomerAgent")
         self._is_initialized = False
+        # 同一买家会话串行锁：防止同一买家消息并发交错进入 Agent（会话历史/工具调用互相污染）
+        self._conversation_locks: Dict[str, asyncio.Lock] = {}
 
     async def initialize_async(self) -> bool:
         """初始化CustomerAgent"""
@@ -319,7 +321,23 @@ class CustomerAgent(Bot):
                 return False
 
     async def async_reply(self, query: str, context: Optional[Context] = None) -> Reply:
-        """异步回复接口 - 确保返回Reply对象"""
+        """异步回复接口 - 确保返回Reply对象；同一买家会话串行处理，防止并发交错"""
+        if context is not None:
+            session_id = self._make_session_id(context)
+            lock = self._conversation_locks.setdefault(session_id, asyncio.Lock())
+            async with lock:
+                return await self._async_reply_locked(query, context)
+        return await self._async_reply_locked(query, context)
+
+    def _make_session_id(self, context: Context) -> str:
+        """会话键 = 渠道 + 客服账号 + 买家；避免同店多个买家共用同一份 AI 历史"""
+        from_uid = ""
+        if hasattr(context, "kwargs") and context.kwargs is not None:
+            from_uid = str(getattr(context.kwargs, "from_uid", "") or "")
+        return f"{context.channel_type}{context.kwargs.user_id}_{from_uid}"
+
+    async def _async_reply_locked(self, query: str, context: Optional[Context] = None) -> Reply:
+        """异步回复实现（在会话锁内执行）"""
         self.logger.info("[async_reply] 开始处理，进入初始化检查")
         if not self._agent:
             if not await self.initialize_async():
@@ -389,8 +407,8 @@ class CustomerAgent(Bot):
             if staff_context:
                 final_input = f"{query}{staff_context}"
 
-            # 确保session_id是字符串
-            session_id = f"{context.channel_type}{context.kwargs.user_id}"
+            # 会话键含买家 from_uid，避免同店多个买家共用历史（防串话）
+            session_id = self._make_session_id(context)
             # 确保dependencies中的值是安全的类型
             dependencies = {
                 "shop_name": str(context.kwargs.shop_name),

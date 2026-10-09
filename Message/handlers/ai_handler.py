@@ -156,11 +156,14 @@ class AIReplyHandler(BaseHandler):
                 return False
 
             # 尝试发送消息
-            # 使用 asyncio.to_thread 包装同步 requests 调用，避免阻塞事件循环
+            # 通过发送器抽象发送（同步 HTTP 放工作线程，避免阻塞事件循环）
             # （事件循环需保持响应，以便 staff_reply_task 的 event.set() 通知能及时投递）
-            from Channel.pinduoduo.utils.API.send_message import SendMessage
-            sender = SendMessage(str(shop_id), str(user_id))
-            result = await asyncio.to_thread(sender.send_text, str(from_uid), reply)
+            from bridge.sender import get_sender
+            sender = get_sender()
+            if not sender:
+                self.logger.warning("无可用的发送器")
+                return False
+            result = await asyncio.to_thread(sender.send_text, shop_id, user_id, str(from_uid), reply)
             if isinstance(result, dict) and result.get("success"):
                 # === 持久化回复消息（接入点B） ===
                 try:

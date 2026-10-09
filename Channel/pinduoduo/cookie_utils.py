@@ -61,9 +61,11 @@ def check_cookies_valid(
 
     try:
         from utils.proxy_config import get_proxies
+        # 与 GetToken.get_token 保持一致：用 data= 表单编码发送 version=3。
+        # 此前此处用 json= 会发送 {"version": "3"}，与真实请求语义不一致，可能漏检过期。
         response = requests.post(
             url,
-            json=payload,
+            data=payload,
             headers=_VALIDATION_HEADERS,
             cookies=cookies,
             timeout=timeout,
