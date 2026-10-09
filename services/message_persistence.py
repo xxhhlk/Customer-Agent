@@ -91,6 +91,31 @@ class MessagePersistenceService:
 
     # ==================== 写入方法 ====================
 
+    @staticmethod
+    def _parse_message_timestamp(ts_value) -> datetime:
+        """解析服务端消息时间戳：兼容毫秒（13 位）与秒（10 位）两种单位。
+
+        服务端 ts 字段实测为秒级 epoch（10 位，如 1791562961），而历史 time
+        字段为毫秒；原实现一律按毫秒 /1000，会把秒级 ts 解析成 1970 年。
+        另做合理性校验：明显异常（早于 2020 或晚于当前+1 天）时回退当前时间。
+        """
+        from datetime import timezone, timedelta
+        tz = timezone(timedelta(hours=8))
+        now = datetime.now(tz=tz)
+        ts_str = str(ts_value) if ts_value else None
+        try:
+            if ts_str and ts_str.isdigit():
+                ts_int = int(ts_str)
+                # >= 1e11 视为毫秒（13 位，约 1973 年起）；10 位视为秒
+                seconds = ts_int / 1000 if ts_int >= 100_000_000_000 else ts_int
+                dt = datetime.fromtimestamp(seconds, tz=tz)
+                if dt < datetime(2020, 1, 1, tzinfo=tz) or dt > now + timedelta(days=1):
+                    return now
+                return dt
+        except (ValueError, OSError):
+            pass
+        return now
+
     def save_inbound_message(self, context) -> Optional[Dict[str, Any]]:
         """保存入站消息（买家消息 + MALL_CS 平台客服消息）
 
@@ -176,17 +201,9 @@ class MessagePersistenceService:
             msg_type = str(kwargs.msg_type) if hasattr(kwargs, 'msg_type') and kwargs.msg_type else None
             context_type_str = str(context.type.value) if hasattr(context.type, 'value') else str(context.type)
 
-            # 解析时间戳
-            ts_str = str(kwargs.timestamp) if kwargs.timestamp else None
-            try:
-                if ts_str and ts_str.isdigit():
-                    from datetime import timezone, timedelta
-                    tz = timezone(timedelta(hours=8))
-                    timestamp = datetime.fromtimestamp(int(ts_str) / 1000, tz=tz)
-                else:
-                    timestamp = datetime.now()
-            except (ValueError, OSError):
-                timestamp = datetime.now()
+            # 解析时间戳（兼容毫秒/秒两种单位，及异常值回退），
+            # 服务端 ts 字段为秒级 epoch，历史 time 字段为毫秒
+            timestamp = self._parse_message_timestamp(kwargs.timestamp)
 
             reply_source = "staff" if direction == "outbound" else None
 
