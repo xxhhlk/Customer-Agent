@@ -156,7 +156,8 @@ class ProductKnowledge(Base):
     extracted_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment='LLM提取的详细产品知识')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment='创建时间')
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment='更新时间')
-    last_extracted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment='上次提取时间')
+    # 未成功提取时保持空；基本信息同步和降级均不能冒充成功提取。
+    last_extracted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment='上次提取时间（未成功提取时为空）')
 
     __table_args__ = (
         UniqueConstraint('shop_id', 'goods_id', name='uix_product_knowledge_shop_goods'),

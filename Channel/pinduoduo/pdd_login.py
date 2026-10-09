@@ -40,12 +40,55 @@ import requests
 import json
 import hashlib
 import asyncio
+import socket
+import subprocess
+import threading
+import urllib.request
 from typing import Optional, Dict, Any, Tuple
 import sys
 from database import db_manager
 from playwright.async_api import async_playwright
 from Channel.pinduoduo.utils.API.get_shop_info import GetShopInfo
 from Channel.pinduoduo.utils.API.get_user_info import GetUserInfo
+
+
+class _CdpContextHandle:
+    """包装 CDP 连接的 context，close() 时同时终止手动启动的浏览器进程。
+
+    connect_over_cdp 返回的 BrowserContext.close() 只断开 Playwright 连接，
+    不会关闭我们用 subprocess 拉起的浏览器进程，需在此兜底。
+
+    Edge 是多进程的，proc.terminate() 只杀主进程，渲染/GPU/网络等子进程会
+    残留为孤儿进程，浏览器窗口不关闭。改用 taskkill /T /F 杀整棵进程树。
+    """
+
+    def __init__(self, context, proc):
+        self._context = context
+        self._proc = proc
+
+    def __getattr__(self, name):
+        # new_page / cookies / pages 等方法透传给真实 context
+        return getattr(self._context, name)
+
+    async def close(self):
+        try:
+            await self._context.close()
+        except Exception:
+            pass
+        if self._proc and self._proc.poll() is None:
+            try:
+                # 杀整棵进程树（主进程 + 所有 Edge 子进程），
+                # 避免 terminate() 只杀主进程留下孤儿进程导致浏览器不关闭。
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(self._proc.pid)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+
 
 class PDDLogin():
     def __init__(self,name,password):
@@ -54,6 +97,254 @@ class PDDLogin():
         self.base_url = "https://mms.pinduoduo.com/login"
         self.name = name
         self.password = password
+
+    # 本地浏览器启动参数（Chrome/Edge 通用）
+    # 精简为对登录真正有用且兼容性好的参数；避免 --disable-web-security（登录用不到，
+    # 且会触发部分 Edge 版本安全检查导致启动后秒退）和 --disable-features=
+    # VizDisplayCompositor（新版浏览器无此特性，可能报错）。
+    _LAUNCH_ARGS = [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-notifications',
+        '--disable-dev-shm-usage',
+    ]
+
+    # 本地浏览器可执行文件的常见安装位置，用于显式定位（channel 方式在部分安装
+    # 下会找不到）。按优先级：Chrome > Edge。
+    _BROWSER_PATHS = [
+        # Google Chrome
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        # 用户级安装
+        r"{localappdata}\Google\Chrome\Application\chrome.exe",
+        # Microsoft Edge（Windows 自带）
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+
+    @staticmethod
+    def _resolve_browser_path():
+        """探测本地浏览器 exe 路径。返回 (path, channel_name) 或 (None, None)。"""
+        localappdata = os.getenv("LOCALAPPDATA", "")
+        for raw in PDDLogin._BROWSER_PATHS:
+            p = raw.replace("{localappdata}", localappdata)
+            if os.path.isfile(p):
+                # 从路径判断 channel：含 Edge 用 msedge，否则 chrome
+                channel = "msedge" if "Edge" in p else "chrome"
+                return p, channel
+        return None, None
+
+    def _clean_profile_locks(self, user_data_dir: str) -> None:
+        """启动前清理 user_data_dir 中 Chromium 的单例锁文件。
+
+        Edge/Chrome 异常退出后会残留 SingletonLock / SingletonCookie /
+        SingletonSocket，下次启动时浏览器检测到 "profile 被占用" 会立即秒退。
+        此处尽力清理；若文件被存活实例占用（删不掉）则静默跳过，不影响启动。
+        """
+        if not user_data_dir:
+            return
+        profile_dir = Path(user_data_dir)
+        removed = []
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            try:
+                (profile_dir / name).unlink(missing_ok=True)
+                removed.append(name)
+            except Exception:
+                # 文件不存在（missing_ok 已处理）或被占用，跳过
+                pass
+        if removed:
+            self.logger.debug(f"已清理 profile 锁文件 {removed}: {user_data_dir}")
+
+    async def _launch_context(self, playwright, user_data_dir: str, headless: bool):
+        """启动浏览器：优先本地 Chrome/Edge（免下载 Chromium），四级回退。
+
+        保留本仓库的 proxy 配置（SOCKS5 等，来自 utils.proxy_config）。
+        """
+        from utils.proxy_config import get_playwright_proxy
+        proxy = get_playwright_proxy()
+
+        exe_path, channel = self._resolve_browser_path()
+        attempts = []
+
+        # 启动前清理上次崩溃可能残留的 profile 锁，避免浏览器检测到
+        # "profile 被占用" 而秒退（本仓库历史上存在 Edge 秒退问题）
+        self._clean_profile_locks(user_data_dir)
+
+        # 1) 用探测到的真实路径启动本地浏览器（比 channel 更可靠）
+        if exe_path:
+            try:
+                return await playwright.chromium.launch_persistent_context(
+                    user_data_dir,
+                    executable_path=exe_path,
+                    headless=headless,
+                    proxy=proxy,
+                    args=self._LAUNCH_ARGS,
+                )
+            except Exception as e:
+                attempts.append(f"{channel}({exe_path}): {str(e).splitlines()[0][:100]}")
+                self.logger.warning(f"启动本地浏览器 {channel} 失败: {e}")
+
+        # 2) 回退：channel 方式（路径探测未命中时的兜底）。
+        # 级 1 已用 executable_path 试过同一浏览器（pipe 模式同样秒退），跳过。
+        tried_channel = channel if exe_path else None
+        for ch in ("chrome", "msedge"):
+            if ch == tried_channel:
+                continue
+            try:
+                return await playwright.chromium.launch_persistent_context(
+                    user_data_dir,
+                    channel=ch,
+                    headless=headless,
+                    proxy=proxy,
+                    args=self._LAUNCH_ARGS,
+                )
+            except Exception as e:
+                attempts.append(f"{ch}(channel): {str(e).splitlines()[0][:100]}")
+                self.logger.warning(f"启动本地浏览器 {ch} 失败: {e}")
+
+        # 3) 回退：手动启动浏览器用 remote-debugging-port，再 connect_over_cdp。
+        # 部分电脑 Edge 在 Playwright 的 --remote-debugging-pipe 下启动后秒退
+        # （Target page, context or browser has been closed），改用端口调试可绕过。
+        if exe_path:
+            handle = await self._launch_via_cdp(playwright, exe_path, user_data_dir, headless)
+            if handle is not None:
+                return handle
+            attempts.append(f"{channel}(cdp-over-port): 启动后未就绪")
+
+        # 4) 最后回退：Playwright 自带 Chromium（若已安装）
+        try:
+            return await playwright.chromium.launch_persistent_context(
+                user_data_dir,
+                headless=headless,
+                proxy=proxy,
+                args=self._LAUNCH_ARGS,
+            )
+        except Exception as e:
+            attempts.append(f"chromium(bundled): {str(e).splitlines()[0][:100]}")
+            self.logger.warning(f"启动 Playwright Chromium 失败: {e}")
+
+        raise RuntimeError(
+            "未找到可用的浏览器。尝试过的方案：\n  - " +
+            "\n  - ".join(attempts) +
+            "\n请安装 Google Chrome 或 Microsoft Edge 后重试。"
+        )
+
+    async def _launch_via_cdp(self, playwright, exe_path, user_data_dir, headless):
+        """手动启动浏览器（remote-debugging-port），再 connect_over_cdp 连接。
+
+        绕开 Playwright 默认的 --remote-debugging-pipe，解决部分电脑 Edge
+        在 pipe 模式下启动后秒退的问题。失败返回 None。
+        """
+        # 找一个空闲端口
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        args = [
+            exe_path,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data_dir}",
+            "--no-first-run", "--no-default-browser-check",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-notifications",
+        ]
+        if headless:
+            args.append("--headless=new")
+        # about:blank 作为初始页，避免打开默认主页
+        args.append("about:blank")
+
+        # 用 PIPE 捕获 stderr，后台线程持续排空避免管道写满阻塞浏览器；
+        # 进程退出后读取内容，用于诊断"秒退"的真正原因。
+        stderr_chunks: list = []
+        try:
+            proc = subprocess.Popen(
+                args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            )
+        except Exception as e:
+            self.logger.warning(f"手动启动浏览器失败: {e}")
+            return None
+
+        drain_thread = threading.Thread(
+            target=self._drain_proc_stderr, args=(proc, stderr_chunks), daemon=True
+        )
+        drain_thread.start()
+
+        self.logger.debug(f"CDP 回退：浏览器已启动 pid={proc.pid} port={port}")
+        # 等待 CDP 端点就绪（最多约 15 秒）
+        ready = False
+        for _ in range(50):
+            if proc.poll() is not None:
+                self._log_proc_stderr(
+                    stderr_chunks, drain_thread,
+                    f"CDP 回退：浏览器进程已退出 pid={proc.pid} port={port}",
+                )
+                return None
+            try:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/json/version", timeout=1
+                )
+                ready = True
+                break
+            except Exception:
+                await asyncio.sleep(0.3)
+
+        if not ready:
+            if proc.poll() is None:
+                proc.terminate()
+            self._log_proc_stderr(
+                stderr_chunks, drain_thread,
+                f"CDP 回退：等待 CDP 端点超时 port={port}",
+            )
+            return None
+
+        try:
+            browser = await playwright.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{port}"
+            )
+            # 手动启动的浏览器带 --user-data-dir，第一个 context 即持久化 context
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            self.logger.info(f"CDP 回退连接成功（端口 {port}）")
+            return _CdpContextHandle(context, proc)
+        except Exception as e:
+            if proc.poll() is None:
+                proc.terminate()
+            self._log_proc_stderr(
+                stderr_chunks, drain_thread,
+                f"CDP 回退连接失败: {e}",
+            )
+            return None
+
+    @staticmethod
+    def _drain_proc_stderr(proc, out_chunks: list) -> None:
+        """后台持续读取子进程 stderr，防止管道缓冲区写满阻塞浏览器进程。"""
+        try:
+            stream = proc.stderr
+            if stream is None:
+                return
+            # read1 只要有一丁点数据就返回，适合持续排空；EOF 时返回 b''
+            while True:
+                chunk = stream.read1(4096)
+                if not chunk:
+                    break
+                out_chunks.append(chunk)
+        except Exception:
+            pass
+
+    def _log_proc_stderr(self, stderr_chunks: list, drain_thread, headline: str) -> None:
+        """浏览器启动失败后读取并打印捕获的 stderr，定位秒退原因。"""
+        # 进程已退出，等排空线程读完残余数据（read1 随即返回 b''）
+        try:
+            drain_thread.join(timeout=2.0)
+        except Exception:
+            pass
+        raw = b"".join(stderr_chunks)
+        if not raw:
+            self.logger.warning(f"{headline}\n浏览器 stderr 为空（未输出任何错误信息）")
+            return
+        text = raw.decode("utf-8", errors="replace").strip()
+        if len(text) > 2000:
+            text = text[:2000] + "...(截断)"
+        self.logger.warning(f"{headline}\n浏览器 stderr:\n{text}")
+
     async def login(self, headless=False):
         """使用账号密码登录
 
@@ -71,23 +362,9 @@ class PDDLogin():
             user_data_dir = str(app_dir / "user_data" / self.name)
             self.logger.debug(f"使用用户数据目录: {user_data_dir}")
 
-            # 使用持久化上下文，自动处理用户数据目录。
-            # proxy=None 表示不代理；启用时走 SOCKS5（Chromium 的 SOCKS5 始终由代理服务端解析域名）
-            from utils.proxy_config import get_playwright_proxy
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir,
-                headless=headless,
-                proxy=get_playwright_proxy(),
-                args=[
-                    '--disable-gpu',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-notifications',  # 禁用通知
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor'
-                ]
-            )
+            # 使用本地浏览器（Chrome/Edge，四级回退），无需下载 Playwright 自带 Chromium。
+            # proxy 配置在 _launch_context 内部读取（SOCKS5 由代理服务端解析域名）
+            context = await self._launch_context(playwright, user_data_dir, headless=headless)
 
             page = await context.new_page()
 
@@ -153,22 +430,8 @@ class PDDLogin():
                 self.logger.error(f"用户数据目录不存在: {user_data_dir}，请先登录")
                 return False
 
-            # 使用持久化上下文，自动加载用户数据
-            from utils.proxy_config import get_playwright_proxy
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir,
-                headless=False,  # 所有浏览器操作均使用有头模式，方便用户观察
-                proxy=get_playwright_proxy(),
-                args=[
-                    '--disable-gpu',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-notifications',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor'
-                ]
-            )
+            # 使用本地浏览器（Chrome/Edge，四级回退），自动加载用户数据
+            context = await self._launch_context(playwright, user_data_dir, headless=False)
 
             page = await context.new_page()
 

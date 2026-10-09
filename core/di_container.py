@@ -339,6 +339,14 @@ def configure_standard_services(config_instance: Any = None) -> 'DIContainer':
             factory=lambda db_path=db_path: DatabaseManager(db_path=db_path)
         )
 
+    # 3. CustomerAgent（AI 客服代理，全局单例；重连不再重建实例、不丢内存态）
+    from Agent.CustomerAgent.agent import CustomerAgent
+    if not container.is_registered(CustomerAgent):
+        container.register_singleton(
+            CustomerAgent,
+            factory=lambda: CustomerAgent()
+        )
+
     # 注：QueueManager、MessageConsumerManager、CacheManager
     # 已在各自模块中定义了模块级单例实例（如 Message/core/queue.py 中的 queue_manager），
     # 代码中通过 `from Message import queue_manager` 直接使用，无需重复注册到 DI 容器，

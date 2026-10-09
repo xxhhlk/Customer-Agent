@@ -384,8 +384,17 @@ class Config:
         return self.get(key)
 
     def __contains__(self, key: str) -> bool:
-        """支持使用 in 操作符检查配置项"""
-        return self.get(key) is not None
+        """支持使用 in 操作符检查配置项是否存在"""
+        with self._lock:
+            if self._config is None:
+                return False
+            keys = key.split('.')
+            value = self._config
+            for k in keys:
+                if not isinstance(value, dict) or k not in value:
+                    return False
+                value = value[k]
+            return True
 
     def set(self, key: str, value: Any, save: bool = True) -> Any:
         """
@@ -454,21 +463,31 @@ class Config:
                 raise ConfigValidationError(f"批量更新配置失败: {e}")
 
     def save(self) -> bool:
-        """将当前配置保存到文件"""
+        """将当前配置原子性地保存到文件（临时文件+重命名）"""
         with self._lock:
             if self._config is None:
                 raise ConfigError("没有可保存的配置")
 
+            temp_path = self.config_path.with_suffix('.tmp')
             try:
                 # 创建目录（如果不存在）
                 self.config_path.parent.mkdir(parents=True, exist_ok=True)
 
-                with open(self.config_path, 'w', encoding='utf-8') as f:
+                # 使用临时文件 + 原子重命名，避免写入过程中崩溃导致配置文件损坏
+                with open(temp_path, 'w', encoding='utf-8') as f:
                     json.dump(self._config, f, ensure_ascii=False, indent=4)
 
+                # 原子重命名替换原文件
+                temp_path.replace(self.config_path)
                 return True
             except Exception as e:
                 print(f"保存配置文件失败: {e}")
+                # 清理临时文件（如果存在）
+                try:
+                    if temp_path.exists():
+                        temp_path.unlink()
+                except Exception:
+                    pass
                 return False
 
     def _deep_merge(self, base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
@@ -486,18 +505,17 @@ class Config:
     @contextmanager
     def atomic_update(self):
         """原子性更新配置的上下文管理器"""
-        original_config = self._config.copy() if self._config else None
+        import copy
+        original_config = copy.deepcopy(self._config) if self._config else None
+        original_validated = copy.deepcopy(self._validated_config)
         try:
             yield self
             self.save()
         except Exception:
             # 回滚到原始配置
-            if original_config:
+            if original_config is not None:
                 self._config = original_config
-                try:
-                    self._validated_config = ConfigModel(**original_config)
-                except Exception:
-                    pass
+                self._validated_config = original_validated
             raise
 
 # 创建全局配置实例

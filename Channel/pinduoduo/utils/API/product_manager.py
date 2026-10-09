@@ -135,13 +135,20 @@ class ProductManager(BaseRequest):
         # 构建请求数据
         data = {"goods_id": goods_id}
 
-        # TODO: 添加必要的headers，特别是anti-content
-        # headers = {
-        #     "anti-content": "需要动态获取anti-content值",
-        # }
+        # 构建请求头，添加anti-content（缺它易被风控拒绝；与列表接口保持一致）
+        anti_content = self.cookies.get('anti_content') or self.cookies.get('anti-content', '')
+        headers = {
+            "accept": "application/json, text/plain, */*",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "anti-content": anti_content,
+            "content-type": "application/json;charset=UTF-8",
+            "origin": "https://mms.pinduoduo.com",
+            "referer": "https://mms.pinduoduo.com/chat-merchant/index.html",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+        }
 
         # 发起请求
-        result = self.post(url, json_data=data)
+        result = self.post(url, json_data=data, headers=headers)
 
         if result and result.get("success") == True:
             # 解析商品详细信息

@@ -35,15 +35,21 @@ class WebSocketResourceManager:
             name: 连接名称（用于日志和调试）
         """
         def cleanup_callback(ref):
-            """弱引用回调，当WebSocket被垃圾回收时清理记录"""
-            asyncio.create_task(self._cleanup_reference(ref))
+            """弱引用回调：WebSocket 被 GC 时同步清理记录。
 
-        # 创建弱引用并设置回调
+            弱引用回调由 GC 在任意线程触发，无法保证当前线程有运行中的
+            事件循环，因此不能使用 asyncio.create_task（会抛 RuntimeError
+            导致清理永不执行）。这里直接做同步清理即可。
+            """
+            self._connections.discard(ref)
+            self._connection_names.pop(id(ref), None)
+
+        # 创建弱引用并设置回调；名称以 ref 的 id 为键，便于回调中清理
         ref = weakref.ref(websocket, cleanup_callback)
         self._connections.add(ref)
 
         if name:
-            self._connection_names[id(websocket)] = name
+            self._connection_names[id(ref)] = name
 
         self.logger.debug(f"已注册WebSocket连接: {name or '未命名'}")
 
@@ -89,17 +95,6 @@ class WebSocketResourceManager:
             else:
                 self.logger.info(f"所有WebSocket连接已清理，共 {cleaned_count} 个连接")
 
-    async def _cleanup_reference(self, ref: weakref.ref) -> None:
-        """
-        清理弱引用（内部方法）
-
-        Args:
-            ref: 要清理的弱引用
-        """
-        async with self._lock:
-            self._connections.discard(ref)
-            self.logger.debug("WebSocket连接已被垃圾回收，清理引用")
-
     def get_connection_count(self) -> int:
         """
         获取当前活跃连接数
@@ -119,26 +114,16 @@ class WebSocketResourceManager:
 
     def get_connection_names(self) -> List[str]:
         """
-        获取所有连接名称
+        获取所有活跃连接的名称
 
         Returns:
-            List[str]: 连接名称列表
+            List[str]: 活跃连接名称列表
         """
         names = []
-        active_websockets = set()
-
-        # 收集所有活跃的WebSocket
-        for ref in self._connections:
-            ws = ref()
-            if ws is not None:
-                active_websockets.add(ws)
-
-        # 获取对应名称
-        for ws_id, name in self._connection_names.items():
-            # 这里需要检查对应的WebSocket是否还存在
-            # 简化实现：返回所有名称
-            names.append(name)
-
+        for ref in self._connections.copy():
+            name = self._connection_names.get(id(ref))
+            if name and ref() is not None:
+                names.append(name)
         return names
 
     async def health_check(self) -> Dict[str, Any]:

@@ -289,9 +289,17 @@ class CustomerAgent(Bot):
                     extra_body["reasoning_effort"] = reasoning_effort
                 extra_body = extra_body or None
 
-                # 创建Agent实例
+                # 创建Agent实例；给 agno 的 SQLite 引擎补 WAL + busy_timeout，
+                # 缓解多账号并发写同一 db 时的 SQLITE_BUSY 争用
+                _agent_db = SqliteDb(db_file=db_path)
+                try:
+                    from utils.db_pragma import setup_sqlite_pragmas
+                    setup_sqlite_pragmas(_agent_db.db_engine)
+                except Exception:
+                    pass
+
                 self._agent = Agent(
-                    db=SqliteDb(db_file=db_path),
+                    db=_agent_db,
                     knowledge=self.knowledge_manager.knowledge,
                     model=OpenAILike(
                         id=model_name,
@@ -335,6 +343,36 @@ class CustomerAgent(Bot):
         if hasattr(context, "kwargs") and context.kwargs is not None:
             from_uid = str(getattr(context.kwargs, "from_uid", "") or "")
         return f"{context.channel_type}{context.kwargs.user_id}_{from_uid}"
+
+    @staticmethod
+    def _is_safe_media_url(url: str) -> bool:
+        """校验媒体 URL：仅允许 http(s) 且指向公网地址（防 SSRF）。
+
+        视觉模型/agno 会主动抓取该 URL，必须拒绝内网 / 回环 / 链路本地 /
+        元数据地址，以及带凭据的 URL。
+        """
+        try:
+            import ipaddress
+            from urllib.parse import urlsplit
+            parts = urlsplit(url)
+            if parts.scheme not in ("http", "https"):
+                return False
+            if parts.username or parts.password:
+                return False
+            host = parts.hostname
+            if not host:
+                return False
+            try:
+                ip = ipaddress.ip_address(host)
+            except ValueError:
+                # 域名场景放行（DNS 层防护不在本层职责内）
+                return True
+            return not (
+                ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+            )
+        except Exception:
+            return False
 
     async def _async_reply_locked(self, query: str, context: Optional[Context] = None) -> Reply:
         """异步回复实现（在会话锁内执行）"""
@@ -430,8 +468,13 @@ class CustomerAgent(Bot):
             if context.type == ContextType.IMAGE and _send_media and context.content:
                 _img = str(context.content).strip()
                 if _img.startswith(("http://", "https://")):
-                    images = [Image(url=_img)]
-                    image_url = _img
+                    if self._is_safe_media_url(_img):
+                        images = [Image(url=_img)]
+                        image_url = _img
+                    else:
+                        self.logger.warning(
+                            f"[async_reply] 图片 URL 未通过安全校验，改为纯文本处理: {_img[:100]}"
+                        )
                 elif _img.startswith("data:image"):
                     # 已是 base64 编码的 data URL，直接走 agno 的 base64 通道
                     images = [Image(url=_img)]
@@ -492,9 +535,19 @@ class CustomerAgent(Bot):
                     )
                     if b64_image is not None:
                         self.logger.info("[async_reply] 图片 URL 直传失败，改用 base64 重试")
-                        response = await _arun(run_input, [Image(url=b64_image)])
+                        try:
+                            response = await _arun(run_input, [Image(url=b64_image)])
+                        except Exception:
+                            # 模型仍然拒绝图片：单次降级为纯文本，保证买家仍能收到回复。
+                            # 不预判、不缓存"该模型不支持图片"——错误码无法区分
+                            # "模型不接受"与"这张图抓不到"，缓存会让偶发失败静默降级到重启。
+                            self.logger.warning(
+                                "[async_reply] base64 重试仍失败，降级为纯文本重试"
+                            )
+                            response = await _arun(run_input, None)
                     else:
-                        raise
+                        self.logger.warning("[async_reply] 图片下载失败，降级为纯文本重试")
+                        response = await _arun(run_input, None)
                 elif video_url and video_url.startswith(("http://", "https://")):
                     b64_video = await self._download_media_as_base64(
                         video_url, 45 * 1024 * 1024, "video/mp4"
