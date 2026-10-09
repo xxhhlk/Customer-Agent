@@ -47,6 +47,49 @@ if TYPE_CHECKING:
 
 _agno_patched = False  # 全局标志，确保只 patch 一次
 
+# 历史图片重放上限：只把最近 N 条带图历史消息的图片还原给模型，更早的剥离。
+# 对应 JC0v0「仅还原最近若干条历史图」的取舍：买家发图后追问时 AI 仍能引用
+# 最近的图，但不会让 8 轮窗口内所有旧图随每轮请求重复携带（token 成本线性增长）。
+_HISTORY_MEDIA_KEEP_RECENT = 2
+
+
+def _strip_old_history_images(messages, keep_recent: int = _HISTORY_MEDIA_KEEP_RECENT) -> None:
+    """剥离较旧历史消息里的图片（原地修改），只保留最近 keep_recent 条带图消息。"""
+    with_images = [m for m in messages if getattr(m, "images", None)]
+    for msg in with_images[:-keep_recent]:
+        msg.images = None
+
+
+def _patch_agno_history_media() -> None:
+    """Patch AgentSession.get_messages：历史消息只保留最近 N 张图片。
+
+    背景（实测，agno 2.3.4）：get_messages 装载的历史 Message 若带 images，
+    会被 OpenAIChat._format_message 无条件转成 image_url 内容块发给模型，
+    且不受 send_media_to_model 控制（后者只管当前轮与工具产出媒体）；
+    配合 add_history_to_context + num_history_runs=8，每轮请求都会重放
+    窗口内所有历史图片。此补丁幂等。
+    """
+    try:
+        from agno.session.agent import AgentSession
+    except Exception:
+        return
+    if getattr(AgentSession.get_messages, "_cb_history_media_patched", False):
+        return
+
+    _orig_get_messages = AgentSession.get_messages
+
+    def _get_messages_patched(self, *args, **kwargs):
+        messages = _orig_get_messages(self, *args, **kwargs)
+        try:
+            _strip_old_history_images(messages)
+        except Exception:
+            # 剥离失败不影响主流程（代价只是多带几张旧图）
+            pass
+        return messages
+
+    _get_messages_patched._cb_history_media_patched = True  # type: ignore[attr-defined]
+    AgentSession.get_messages = _get_messages_patched  # type: ignore[method-assign]
+
 
 def _patch_agno_async_db():
     """Patch agno Agent 实例方法，让同步 DB 操作走 to_thread()"""
@@ -243,6 +286,8 @@ class CustomerAgent(Bot):
 
         # Patch agno 框架的 async DB 函数（幂等，全局只执行一次）
         _patch_agno_async_db()
+        # Patch 历史图片重放（幂等；只保留最近 N 条历史图，防每轮重复携带）
+        _patch_agno_history_media()
 
         # 线程锁：防止重连时多个 AutoReplyThread 并发初始化 Agent/LanceDB
         # 在锁内完成所有可能操作向量数据库的操作（KnowledgeManager + Agent 创建）
