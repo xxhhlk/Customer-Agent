@@ -152,26 +152,36 @@ def get_database_path(db_name: str = "agent.db") -> Path:
     return db_dir / db_name
 
 
+def get_data_dir() -> Path:
+    """
+    获取知识库数据目录（与 KnowledgeManager 的默认目录保持一致：项目根 data/）
+
+    Returns:
+        Path: 数据目录的绝对路径
+    """
+    data_dir = get_base_path() / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
 def get_vector_db_path() -> Path:
     """
-    获取向量数据库路径
+    获取向量数据库路径（config 缺省时的注入默认值）
 
     Returns:
         Path: 向量数据库的绝对路径
     """
-    return ensure_temp_dir("vector_db")
+    return get_data_dir() / "vector_db"
 
 
 def get_contents_db_path() -> Path:
     """
-    获取内容数据库路径
+    获取内容数据库路径（config 缺省时的注入默认值）
 
     Returns:
         Path: 内容数据库的绝对路径（文件路径，非目录）
     """
-    # 确保父目录存在，返回文件路径
-    db_dir = ensure_temp_dir()
-    return db_dir / "contents.db"
+    return get_data_dir() / "contents.db"
 
 
 

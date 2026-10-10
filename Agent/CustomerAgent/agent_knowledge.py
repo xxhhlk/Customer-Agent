@@ -81,17 +81,34 @@ class KnowledgeManager:
         print(f"[DEBUG] 开始初始化 KnowledgeManager")
         print(f"[DEBUG] 脚本位置: {__file__}")
         print(f"[DEBUG] 当前目录: {os.getcwd()}")
-        
-        # 默认使用 data 目录，避免 temp 权限问题！
+
+        # 知识库数据目录：config 指定则使用（"指哪用哪"，与 db_path 语义一致），
+        # 未配置或读取失败时回退项目根 data/ 目录（历史默认值，规避 temp 权限问题）。
         project_root = Path(__file__).resolve().parent.parent.parent
         data_dir = project_root / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[DEBUG] 使用 data 目录: {data_dir}")
-        
-        contents_path = data_dir / "contents.db"
-        vector_path = data_dir / "vector_db"
+        print(f"[DEBUG] 默认数据目录: {data_dir}")
+
+        default_contents = data_dir / "contents.db"
+        default_vector = data_dir / "vector_db"
+
+        contents_path = default_contents
+        vector_path = default_vector
+        try:
+            _cfg = Config()
+            _c = (_cfg.get("knowledge_base.contents_db_path", "") or "").strip()
+            _v = (_cfg.get("knowledge_base.vector_db_path", "") or "").strip()
+            if _c:
+                contents_path = Path(_c)
+            if _v:
+                vector_path = Path(_v)
+            if _c or _v:
+                print(f"[DEBUG] 使用 config 知识库路径: {contents_path} | {vector_path}")
+        except Exception as e:
+            print(f"[DEBUG] 读取知识库路径配置失败: {e}，使用默认 data/ 目录")
+        Path(contents_path).parent.mkdir(parents=True, exist_ok=True)
         vector_path.mkdir(parents=True, exist_ok=True)
-        
+
         print(f"[DEBUG] 内容数据库: {contents_path}")
         print(f"[DEBUG] 向量数据库目录: {vector_path}")
         
