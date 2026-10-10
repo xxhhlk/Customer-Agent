@@ -1,12 +1,21 @@
 """上线历史消息同步
 
 账号连接建立后，从拼多多商家后台补拉最近会话的历史聊天记录，
-按 msg_id 去重落库，补齐本地聊天记录在重启、换机后缺失的部分。
+补齐本地聊天记录在重启、换机后缺失的部分。
+
+两级去重：
+1. 按 msg_id 去重——历史接口的消息 ID 与实时推送同源，可直接比对。
+2. 跳过"自身回复回显"——商家侧接口会把本系统自己发出的回复（AI / 人工 /
+   关键词 / 兜底）一并返回，但换了一条全新的 msg_id，且 from 角色是 mall_cs。
+   这类消息本地已按真实来源记录过一次，msg_id 比对拦不住，只能靠
+   "内容相同 + 时间相近"识别后丢弃，否则会把自己的回复伪装成
+   人工客服回复重复入库（实测重复率约 9 成）。
 """
 
 import asyncio
 import json
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from bridge.context import ChannelType, Context
@@ -21,14 +30,20 @@ logger = get_logger("HistorySync")
 
 # 单次上线最多补拉的会话数（会话列表按最近活跃排序）
 MAX_CONVERSATIONS = 50
-# 单会话最多翻页数
-MAX_PAGES_PER_CONVERSATION = 2
+# 单会话最多翻页数（通常第一页即追上本地进度，无需翻更多）
+MAX_PAGES_PER_CONVERSATION = 3
 # 单页条数
 PAGE_SIZE = 50
 # 同一账号两次同步的最小间隔（秒），避免重连时重复拉取
 SYNC_INTERVAL_SECONDS = 600
 # 连接建立后的等待时间（秒），先让实时消息流稳定
 START_DELAY_SECONDS = 5
+# 相邻会话之间的间隔（秒），避免一次性打出过多请求触发风控
+CONVERSATION_INTERVAL = 0.3
+# 自身回复回显的判定窗口（秒）：与本地记录内容相同且时间差在此范围内，视为同一条
+SELF_ECHO_WINDOW_SECONDS = 120
+# 由本系统发出的回复来源，用于识别服务端回显
+SELF_REPLY_SOURCES = ("ai", "manual", "keyword", "fallback")
 
 
 class HistorySyncService:
@@ -78,34 +93,77 @@ class HistorySyncService:
         shop_name = self._get_shop_name(shop_id)
 
         total = 0
-        for conversation in conversations:
+        for index, conversation in enumerate(conversations):
             buyer_uid = conversation.get("buyer_uid")
             if not buyer_uid:
                 continue
-
-            existing = self._load_existing_msg_ids(shop_id, buyer_uid)
-            last_msg_id = str(conversation.get("last_msg_id") or "")
-            # 本地已含该会话最新一条消息，说明无新增，无需再占用接口
-            if existing and last_msg_id and last_msg_id in existing:
-                continue
-
-            messages = client.fetch_history(
-                buyer_uid, max_pages=MAX_PAGES_PER_CONVERSATION, page_size=PAGE_SIZE
-            )
-            if not messages:
-                continue
-            total += self._persist(
-                shop_id,
-                user_id,
-                buyer_uid,
-                conversation.get("nickname") or "",
-                shop_name,
-                messages,
-                existing,
-            )
+            if index > 0:
+                time.sleep(CONVERSATION_INTERVAL)
+            try:
+                total += self._sync_conversation(
+                    client,
+                    shop_id,
+                    user_id,
+                    buyer_uid,
+                    conversation.get("nickname") or "",
+                    shop_name,
+                )
+            except Exception as e:
+                logger.warning(f"会话历史补拉失败: {shop_id}/{buyer_uid}, {e}")
 
         logger.info(f"历史消息同步完成: {username}, 新增 {total} 条")
         return total
+
+    def _sync_conversation(
+        self,
+        client: GetChatHistory,
+        shop_id: str,
+        user_id: str,
+        buyer_uid: str,
+        nickname: str,
+        shop_name: str,
+    ) -> int:
+        """逐页补拉单个会话，直到追上本地进度或触达页数上限"""
+        existing = self._load_existing_msg_ids(shop_id, buyer_uid)
+        self_replies = self._load_self_reply_index(shop_id, buyer_uid)
+
+        added_total = 0
+        start_msg_id: Optional[str] = None
+
+        for page_no in range(MAX_PAGES_PER_CONVERSATION):
+            if page_no > 0:
+                time.sleep(client.PAGE_INTERVAL)
+
+            page = client.fetch_messages(buyer_uid, start_msg_id=start_msg_id, size=PAGE_SIZE)
+            if page is None:
+                break
+
+            batch = [item for item in (page.get("messages") or []) if isinstance(item, dict)]
+            if not batch:
+                break
+
+            added = self._persist(
+                shop_id,
+                user_id,
+                buyer_uid,
+                nickname,
+                shop_name,
+                batch,
+                existing,
+                self_replies,
+            )
+            added_total += added
+
+            # 本页没有新消息，说明已追上本地进度，更早的页不必再拉
+            if added == 0:
+                break
+
+            oldest_msg_id = str(batch[-1].get("msg_id") or "")
+            if not page.get("has_more") or not oldest_msg_id:
+                break
+            start_msg_id = oldest_msg_id
+
+        return added_total
 
     def _persist(
         self,
@@ -116,8 +174,9 @@ class HistorySyncService:
         shop_name: str,
         messages: List[Dict[str, Any]],
         existing: Set[str],
+        self_replies: Dict[str, List[float]],
     ) -> int:
-        """将历史消息落库，返回新增条数"""
+        """将一页历史消息落库，返回新增条数"""
         added = 0
 
         for raw in messages:
@@ -128,11 +187,61 @@ class HistorySyncService:
             if context is None:
                 continue
             existing.add(msg_id)
+
+            if self._is_self_echo(context, self_replies):
+                preview = str(context.content or "")[:30]
+                logger.debug(f"跳过我方回复回显: buyer={buyer_uid}, content={preview}")
+                continue
+
             # 不触发新消息通知：历史回填不应产生未读提示
             if message_persistence_service.save_inbound_message(context):
                 added += 1
 
         return added
+
+    @staticmethod
+    def _is_self_echo(context: Context, self_replies: Dict[str, List[float]]) -> bool:
+        """判断出站历史消息是否为本系统自己发出的回复在服务端的回显
+
+        回显消息的 msg_id 与本地记录不同，但内容一致、时间相差通常在秒级，
+        因此按"内容 + 时间窗"识别；时间不可解析时按不匹配处理（保持原有行为）。
+        """
+        kwargs = getattr(context, "kwargs", None)
+        if kwargs is None:
+            return False
+        # 方向判定口径与持久化层一致：from 角色为 user 才是买家消息
+        if str(getattr(kwargs, "from_user", "") or "user") == "user":
+            return False
+
+        same_content = self_replies.get(str(context.content or ""))
+        if not same_content:
+            return False
+
+        ts_epoch = HistorySyncService._to_epoch(getattr(kwargs, "timestamp", None))
+        if ts_epoch is None:
+            return False
+
+        return any(abs(ts_epoch - local_ts) <= SELF_ECHO_WINDOW_SECONDS for local_ts in same_content)
+
+    @staticmethod
+    def _to_epoch(value: Any) -> Optional[float]:
+        """服务端时间戳（秒级 / 毫秒级 epoch 或 ISO 串）转为 epoch 秒"""
+        if value is None:
+            return None
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            text = str(value).strip()
+            if not text:
+                return None
+            try:
+                return datetime.fromisoformat(text).timestamp()
+            except ValueError:
+                return None
+        if num <= 0:
+            return None
+        # >= 1e11 视为毫秒（与持久化层口径一致）
+        return num / 1000 if num >= 100_000_000_000 else num
 
     @staticmethod
     def _build_context(
@@ -209,6 +318,43 @@ class HistorySyncService:
             return set()
         finally:
             session.close()
+
+    @staticmethod
+    def _load_self_reply_index(shop_id: str, buyer_uid: str) -> Dict[str, List[float]]:
+        """取该会话中由本系统发出的回复指纹：内容 -> 发送时间列表（epoch 秒）
+
+        只索引 ai / 人工 / 关键词 / 兜底 四类回复，人工客服在网页端的回复
+        属于历史回填的目标，不能进索引，否则会被误判成回显而丢弃。
+        """
+        db_manager = get_db_manager()
+        session = db_manager.Session()
+        try:
+            rows = (
+                session.query(ChatMessageRecord.content, ChatMessageRecord.timestamp)
+                .filter(
+                    ChatMessageRecord.shop_id == str(shop_id),
+                    ChatMessageRecord.buyer_uid == str(buyer_uid),
+                    ChatMessageRecord.direction == "outbound",
+                    ChatMessageRecord.reply_source.in_(SELF_REPLY_SOURCES),
+                )
+                .all()
+            )
+        except Exception as e:
+            logger.debug(f"读取本地回复指纹失败: {e}")
+            return {}
+        finally:
+            session.close()
+
+        index: Dict[str, List[float]] = {}
+        for content, ts in rows:
+            if not content or ts is None:
+                continue
+            try:
+                epoch = ts.timestamp()
+            except (AttributeError, OSError, ValueError):
+                continue
+            index.setdefault(str(content), []).append(epoch)
+        return index
 
     @staticmethod
     def _get_shop_name(shop_id: str) -> str:
