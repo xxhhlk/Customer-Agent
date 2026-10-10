@@ -35,8 +35,9 @@ _LIST_DIR_ID: Dict[str, Optional[int]] = {
 # 该文件夹名各店可能不同（本店实测为「客服专用」），故按关键字匹配而非写死 id。
 CS_DIR_NAME_KEYWORD = "客服"
 
-# shop_id -> (timestamp, dir_id|None)，避免每次翻页都重新拉文件夹列表
-_CS_DIR_CACHE: Dict[str, Tuple[float, Optional[int]]] = {}
+# (shop_id, user_id) -> (timestamp, dir_id|None)，避免每次翻页都重新拉文件夹列表
+# ★ 带上 user_id：素材空间按账号（cookies）隔离，缓存不能只按店铺区分
+_CS_DIR_CACHE: Dict[Tuple[str, str], Tuple[float, Optional[int]]] = {}
 _CS_DIR_CACHE_TTL = 600.0
 
 # 空间 → 容量接口 dir_id（sumSize 只认具体值）
@@ -185,7 +186,8 @@ class MaterialSpace(BaseRequest):
 
         图片空间只展示该文件夹下的图片（不展示全店素材）。文件夹名各店可能
         不同，因此按名称关键字 :data:`CS_DIR_NAME_KEYWORD` 匹配，而非写死 id；
-        结果按 ``shop_id`` 缓存 :data:`_CS_DIR_CACHE_TTL` 秒。
+        结果按 ``(shop_id, user_id)`` 缓存 :data:`_CS_DIR_CACHE_TTL` 秒
+        （素材空间按账号隔离，不能只按店铺区分）。
 
         Args:
             force: 为 True 时忽略缓存，重新拉取文件夹列表
@@ -193,8 +195,8 @@ class MaterialSpace(BaseRequest):
         Returns:
             文件夹 id；未找到符合条件的文件夹时返回 ``None``
         """
-        key = str(self.shop_id or "")
-        if not force and key:
+        key = (str(self.shop_id or ""), str(self.user_id or ""))
+        if not force and key[0]:
             cached = _CS_DIR_CACHE.get(key)
             if cached and (time.time() - cached[0]) < _CS_DIR_CACHE_TTL:
                 return cached[1]
@@ -211,11 +213,12 @@ class MaterialSpace(BaseRequest):
                 dir_id = did
                 break
 
-        if key:
+        if key[0]:
             _CS_DIR_CACHE[key] = (time.time(), dir_id)
         if dir_id is None:
             self.logger.warning(
-                "图片空间未找到名称含 %r 的文件夹 (shop_id=%s)", CS_DIR_NAME_KEYWORD, key
+                "图片空间未找到名称含 %r 的文件夹 (shop_id=%s, user_id=%s)",
+                CS_DIR_NAME_KEYWORD, key[0], key[1],
             )
         return dir_id
 

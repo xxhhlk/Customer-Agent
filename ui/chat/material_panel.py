@@ -30,8 +30,10 @@ logger = get_logger("MaterialPanel")
 # 列表缓存 TTL（秒）：避免每次打开面板都打接口
 _CACHE_TTL = 180
 
-# (space, page, keyword) -> (timestamp, data)
-_LIST_CACHE: Dict[Tuple[str, int, str], Tuple[float, Dict[str, Any]]] = {}
+# (shop_id, user_id, space, page, keyword) -> (timestamp, data)
+# ★ 必须带账号：素材空间按店铺（账号）隔离，各店素材库互不相同；
+#   缓存/在途请求若不含账号，切会话时会造成 A 店素材显示到 B 店。
+_LIST_CACHE: Dict[Tuple[str, str, str, int, str], Tuple[float, Dict[str, Any]]] = {}
 
 _GRID_COLS = 4
 _PAGE_SIZE = 24
@@ -51,7 +53,8 @@ def _clear_cache() -> None:
 class _MaterialLoader(QThread):
     """后台拉取素材列表（含 cookie 读取，禁止在 UI 线程执行）"""
 
-    result = pyqtSignal(str, int, str, object, str)  # space, page, keyword, data|None, error
+    # shop_id, user_id, space, page, keyword, data|None, error
+    result = pyqtSignal(str, str, str, int, str, object, str)
 
     def __init__(self, shop_id: str, user_id: str, space: str, page: int,
                  page_size: int, keyword: str, parent=None):
@@ -64,11 +67,12 @@ class _MaterialLoader(QThread):
         self._keyword = keyword
 
     @property
-    def key(self) -> Tuple[str, int, str]:
-        """本次请求的标识，用于判断"同一请求是否已在飞行中" """
-        return (self._space, self._page, self._keyword)
+    def key(self) -> Tuple[str, str, str, int, str]:
+        """本次请求的标识（**含账号**），用于判断"同一请求是否已在飞行中" """
+        return (self._shop_id, self._user_id, self._space, self._page, self._keyword)
 
     def run(self):
+        emit = self.result.emit
         try:
             from Channel.pinduoduo.utils.API.material_space import (
                 CS_DIR_NAME_KEYWORD, MaterialSpace,
@@ -80,10 +84,8 @@ class _MaterialLoader(QThread):
                 # 图片空间只取「客服专用」文件夹（按文件夹名解析，不写死 id）
                 dir_id = ms.get_cs_dir_id()
                 if dir_id is None:
-                    self.result.emit(
-                        self._space, self._page, self._keyword, None,
-                        f"图片空间未找到「{CS_DIR_NAME_KEYWORD}专用」文件夹",
-                    )
+                    emit(*self.key, None,
+                         f"图片空间未找到「{CS_DIR_NAME_KEYWORD}专用」文件夹")
                     return
 
             data = ms.list_files(
@@ -95,14 +97,14 @@ class _MaterialLoader(QThread):
             )
             if not data.get("success"):
                 msg = data.get("error_msg") or "未知错误"
-                self.result.emit(self._space, self._page, self._keyword, None,
-                                 f"获取素材失败：{msg}")
+                emit(*self.key, None, f"获取素材失败：{msg}")
                 return
-            _LIST_CACHE[(self._space, self._page, self._keyword)] = (time.time(), data)
-            self.result.emit(self._space, self._page, self._keyword, data, "")
+            # 缓存按账号分桶：即便本请求在切会话后才返回，也只写进自己账号的格子
+            _LIST_CACHE[self.key] = (time.time(), data)
+            emit(*self.key, data, "")
         except Exception as e:  # noqa: BLE001
             logger.error(f"拉取素材列表异常: {e}", exc_info=True)
-            self.result.emit(self._space, self._page, self._keyword, None, f"加载异常：{e}")
+            emit(*self.key, None, f"加载异常：{e}")
 
 
 class MaterialCard(QFrame):
@@ -390,9 +392,14 @@ class MaterialPopup(QFrame):
         """设置当前店铺/账号；切换账号时清空缓存"""
         new_shop, new_user = str(shop_id or ""), str(user_id or "")
         if (new_shop, new_user) != (self._shop_id, self._user_id):
+            # 缓存本身已按账号分桶，这里再清一次纯属防御；同时清掉文件夹 id 缓存
             _clear_cache()
             self._shop_id, self._user_id = new_shop, new_user
             self._reset_state()
+
+    def _cache_key(self) -> Tuple[str, str, str, int, str]:
+        """列表缓存 / 在途请求标识：**含账号**，避免跨账号串数据"""
+        return (self._shop_id, self._user_id, self._space, self._page, self._keyword)
 
     def open_for(self, shop_id: str, user_id: str) -> None:
         """打开面板：设置账号并加载当前页"""
@@ -468,7 +475,7 @@ class MaterialPopup(QFrame):
             self._set_status("缺少账号信息，无法加载素材")
             return
 
-        key = (self._space, self._page, self._keyword)
+        key = self._cache_key()
         if use_cache:
             cached = _LIST_CACHE.get(key)
             if cached and (time.time() - cached[0]) < _CACHE_TTL:
@@ -520,9 +527,10 @@ class MaterialPopup(QFrame):
         except RuntimeError:
             pass
 
-    def _on_loaded(self, space: str, page: int, keyword: str, data: object, error: str):
-        # 丢弃过期结果（用户已切换空间/页码/搜索词）
-        if (space, page, keyword) != (self._space, self._page, self._keyword):
+    def _on_loaded(self, shop_id: str, user_id: str, space: str, page: int,
+                   keyword: str, data: object, error: str):
+        # 丢弃过期结果（账号 / 空间 / 页码 / 搜索词任一变化）
+        if (shop_id, user_id, space, page, keyword) != self._cache_key():
             return
         if not data:
             self._set_status((error or "加载失败")[:80])
