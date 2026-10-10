@@ -660,3 +660,22 @@ class MaterialPopup(QFrame):
         """收起时把未完成的缩略图队列丢掉，避免无意义下载"""
         self._pending = []
         super().hideEvent(event)
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        # Windows 上 Qt::Popup 窗口显示时**不会**成为 Win32 前台窗口
+        # （GetForegroundWindow 仍是主窗口），于是中文输入法（IME）仍把
+        # 组合输入送给主窗口里持有焦点的控件 —— 现象就是「在搜索框里打字，
+        # 字却出现在消息输入框」。这里等窗口显示完成后显式激活自己，
+        # 并把键盘焦点收进面板（搜索框），让「前台窗口 / 焦点控件」保持一致，
+        # IME 才会正确落在搜索框；hide() 后前台窗口与焦点自动回到主窗口。
+        QTimer.singleShot(0, self._activate_self)
+
+    def _activate_self(self) -> None:
+        """把本面板设为前台窗口并聚焦搜索框（失败也无害）"""
+        try:
+            if self.isVisible():
+                self.activateWindow()
+                self._search.setFocus(Qt.FocusReason.OtherFocusReason)
+        except RuntimeError:
+            pass

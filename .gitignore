@@ -186,6 +186,8 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 *.lnk
+# 本地一键启动脚本（含本机 venv 路径，不入库）
+start_agent.bat
 
 # ====================
 # Agent/AI 生成文件
