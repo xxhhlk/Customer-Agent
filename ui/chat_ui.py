@@ -3,6 +3,8 @@
 双栏布局：左侧会话列表 + 右侧聊天区域，顶部店铺筛选
 """
 
+from datetime import date
+
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QTimer, QThread
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSplitter, QComboBox,
@@ -171,7 +173,25 @@ class ChatUI(QFrame):
         # 恢复在 __init__ 里提前加载数据（500ms 延迟让 UI 先渲染）。
         self._data_loaded = False
         QTimer.singleShot(500, self._initial_load)
+        # 跨天检测：常驻期间日期变化时刷新聊天内日期标签与会话列表时间
+        self._seen_date: date = date.today()
+        self._day_watch_timer = QTimer(self)
+        self._day_watch_timer.setInterval(60000)
+        self._day_watch_timer.timeout.connect(self._on_day_watch)
+        self._day_watch_timer.start()
         logger.info("[ChatUI] __init__ 完成，已安排 500ms 后加载数据")
+
+    def _on_day_watch(self):
+        """每分钟检查一次系统日期，跨天则重算相对时间文案"""
+        today = date.today()
+        if today == self._seen_date:
+            return
+        self._seen_date = today
+        try:
+            self.chat_area.refresh_day_labels()
+            self.conversation_list.refresh_times()
+        except RuntimeError:
+            pass
 
     def _initial_load(self):
         """首次加载: 同时加载店铺列表和会话列表"""
@@ -641,6 +661,10 @@ class ChatUI(QFrame):
 
     def cleanup(self):
         """清理资源"""
+        try:
+            self._day_watch_timer.stop()
+        except Exception:
+            pass
         try:
             from services.message_persistence import message_persistence_service
             message_persistence_service.signals.new_message.disconnect(self._on_new_message)

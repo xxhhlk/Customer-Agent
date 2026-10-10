@@ -36,10 +36,8 @@ def format_day_label(dt: datetime, now: datetime | None = None) -> str:
 
 
 def format_time_label(dt: datetime) -> str:
-    """消息流时间标签（微信 12 小时制）：上午8:30 / 下午3:45"""
-    period = "上午" if dt.hour < 12 else "下午"
-    hour = dt.hour % 12 or 12
-    return f"{period}{hour}:{dt.minute:02d}"
+    """消息流时间标签（24 小时制）：08:30 / 20:45"""
+    return dt.strftime("%H:%M")
 
 
 def needs_time_separator(prev_dt: datetime | None, dt: datetime) -> bool:

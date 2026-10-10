@@ -22,8 +22,10 @@ logger = get_logger("ChatArea")
 class TimeSeparator(QLabel):
     """居中时间/日期分隔标签（微信风格）：跨天插日期，同天间隔超阈值插时间"""
 
-    def __init__(self, text: str, parent=None):
+    def __init__(self, text: str, dt: datetime | None = None, is_day: bool = False, parent=None):
         super().__init__(text, parent)
+        self._dt = dt
+        self._is_day = is_day
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         dark = isDarkTheme()
@@ -36,6 +38,11 @@ class TimeSeparator(QLabel):
             padding: 2px 10px;
             font-size: 11px;
         """)
+
+    def refresh(self):
+        """日期标签按当前系统日期重算（今天 → 昨天）"""
+        if self._is_day and self._dt is not None:
+            self.setText(format_day_label(self._dt))
 
 
 class _MessageLoader(QThread):
@@ -74,6 +81,7 @@ class ChatAreaPanel(QWidget):
         self._current_shop_id: str = ""
         self._current_user_id: str = ""
         self._current_buyer_uid: str = ""
+        self._active_key: tuple[str, str] = ("", "")  # 已加载会话标识，重复点击直接复用
         self._loader: _MessageLoader | None = None
         self._load_token: int = 0  # 每次加载递增，用于区分过期回调
         self._user_scrolled_up: bool = False  # 用户是否手动向上滚动（浏览历史）
@@ -160,6 +168,11 @@ class ChatAreaPanel(QWidget):
     def load_messages(self, shop_id: str, buyer_uid: str):
         """加载指定买家在指定店铺的消息（异步后台加载）"""
         logger.info(f"[ChatArea] load_messages: shop_id={shop_id}, buyer_uid={buyer_uid}")
+        # 同一会话重复点击不重载，保留当前滚动位置与已渲染气泡
+        if (shop_id, buyer_uid) == self._active_key:
+            logger.info("[ChatArea] load_messages: 会话未变化，跳过重载")
+            return
+        self._active_key = (shop_id, buyer_uid)
         # 缓存 shop_id/buyer_uid 用于手动发送
         self._current_shop_id = shop_id
         self._current_buyer_uid = buyer_uid
@@ -305,13 +318,20 @@ class ChatAreaPanel(QWidget):
         if not needs_time_separator(prev_dt, dt):
             return
         if prev_dt is None or prev_dt.date() != dt.date():
-            text = format_day_label(dt)
+            sep = TimeSeparator(format_day_label(dt), dt=dt, is_day=True)
         else:
-            text = format_time_label(dt)
-        sep = TimeSeparator(text)
+            sep = TimeSeparator(format_time_label(dt))
         self._msg_layout.insertWidget(
             self._msg_layout.count() - 1, sep, alignment=Qt.AlignmentFlag.AlignHCenter
         )
+
+    def refresh_day_labels(self):
+        """系统日期跨天后刷新已渲染的日期分隔标签"""
+        for i in range(self._msg_layout.count()):
+            item = self._msg_layout.itemAt(i)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, TimeSeparator):
+                widget.refresh()
 
     def _clear_messages(self):
         """清空消息气泡"""

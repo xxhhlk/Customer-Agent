@@ -201,7 +201,11 @@ class ConversationCard(QFrame):
         if len(content) > 30:
             content = content[:28] + "..."
         self._preview_label.setText(content)
-        dt = parse_dt(conv_data.get("last_time", ""))
+        self.refresh_time()
+
+    def refresh_time(self):
+        """按当前系统日期重算右侧时间（今天 HH:MM → 昨天 → 星期X）"""
+        dt = parse_dt(self.conv_data.get("last_time", ""))
         self._time_label.setText(format_list_time(dt) if dt is not None else "")
 
     def changeEvent(self, event):
@@ -308,6 +312,11 @@ class ConversationListPanel(QWidget):
         """后台线程加载完成后在主线程更新 UI"""
         self._all_data = convs
         self._rebuild_cards(convs)
+
+    def refresh_times(self):
+        """系统日期跨天后刷新所有卡片的时间显示"""
+        for card in self._cards:
+            card.refresh_time()
 
     def on_new_message(self, msg_data: dict):
         """新消息到达时增量更新 — 不重建全部卡片"""
