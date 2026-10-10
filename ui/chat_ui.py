@@ -341,8 +341,17 @@ class ChatUI(QFrame):
     def _on_conversation_selected(self, shop_id: str, buyer_uid: str):
         """选中会话"""
         logger.info(f"[ChatUI] _on_conversation_selected: shop_id={shop_id}, buyer_uid={buyer_uid}")
-        self.chat_area.load_messages(shop_id, buyer_uid)
+        # 一并下发店铺名，供素材面板标注「当前是哪个账号的素材库」
+        self.chat_area.load_messages(shop_id, buyer_uid, shop_name=self._shop_name_of(shop_id))
         logger.info("[ChatUI] _on_conversation_selected: chat_area.load_messages 返回")
+
+    def _shop_name_of(self, shop_id: str) -> str:
+        """从已加载的店铺列表取店铺名（纯内存，不查库，避免阻塞 UI 线程）"""
+        sid = str(shop_id or "")
+        for s in (self._shops or []):
+            if str(s.get("shop_id")) == sid:
+                return str(s.get("shop_name") or "")
+        return ""
 
     def _on_new_message(self, msg_data: dict):
         """收到新消息"""

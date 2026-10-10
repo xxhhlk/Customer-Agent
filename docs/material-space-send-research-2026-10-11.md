@@ -20,6 +20,7 @@
 | 6 | 素材**文件夹**、容量、删除/移动/重命名接口也一并拿到 | 见 §2 |
 | 7 | ★ **图片空间业务上只取「客服专用」文件夹**（按文件夹名解析；两账号实测 `182454400` / `190003343`） | 见 §1 / §5.1 |
 | 8 | ★ **素材空间按账号隔离**；缓存与在途请求必须带 `(shop_id, user_id)`，否则会跨账号串数据 | 见 §5.1「账号隔离」 |
+| 9 | **面板顶部标注当前账号（店铺名）**，避免多账号下看错库 | 见 §5.1「账号隔离 · 可见性」 |
 
 ---
 
@@ -283,9 +284,9 @@ POST /garner/mms/file/createVideo                             # 登记到素材�
 
 | 文件 | 改动 |
 |---|---|
-| `ui/chat/input_area.py` | 新增「素材」按钮（`FluentIcon.PHOTO`）与 `material_selected` 信号；`set_account(shop_id,user_id)`；面板定位做屏幕边界收敛；点外/发消息/切会话自动收起；主题切换同步刷新 |
-| `ui/chat/chat_area.py` | 新增 `send_material(shop_id, user_id, item, buyer_uid)` 信号；会话加载完成后把账号同步给输入区 |
-| `ui/chat_ui.py` | 新增 `_MaterialSendWorker(QThread)` + `_on_send_material` / `_on_material_send_done`；**视频转发 info 改为原样回传 `media_meta.raw_info`** |
+| `ui/chat/input_area.py` | 新增「素材」按钮（`FluentIcon.PHOTO`）与 `material_selected` 信号；`set_account(shop_id, user_id, shop_name)`（刷新按钮 tooltip）；面板定位做屏幕边界收敛；点外/发消息/切会话自动收起；主题切换同步刷新 |
+| `ui/chat/chat_area.py` | 新增 `send_material(...)` 信号；`load_messages(..., shop_name)` 记录店铺名；会话加载完成后把账号+店铺名同步给输入区 |
+| `ui/chat_ui.py` | `_shop_name_of(shop_id)`（纯内存取店铺名）并在选中会话时下发；新增 `_MaterialSendWorker(QThread)` + `_on_send_material` / `_on_material_send_done`；**视频转发 info 改为原样回传 `media_meta.raw_info`** |
 | `bridge/sender.py` | `ReplySender` / `PinduoduoSender` 新增 `send_video(...)` |
 | `ui/chat/message_bubble.py` | 解禁视频「转发消息」菜单（原文案：视频暂不支持转发） |
 
@@ -331,6 +332,21 @@ POST /garner/mms/file/createVideo                             # 登记到素材�
 迟到的结果只会落进**自己账号的桶**，既不会渲染到别的账号，也不会污染缓存。
 `set_account` 仍保留一次 `_clear_cache()` 作防御，但正确性已由分桶保证。
 确定性复现脚本：`temp/repro_cross_account_cache.py`；修复后验证：`temp/test_account_isolation.py`（8/8 通过）。
+
+**可见性（避免人在界面上看错库）**：面板顶部常驻一行账号标注
+「**素材 · <店铺名>**」（`MaterialPopup._account_label`，tooltip 含 店铺名 / shop_id / user_id）；
+素材按钮 tooltip 同步带上店铺名。店铺名走 **纯内存** 传递，不查库：
+
+```
+ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下拉框同源）
+  → ChatArea.load_messages(shop_id, buyer_uid, shop_name=…)
+  → ChatArea._current_shop_name
+  → InputArea.set_account(shop_id, user_id, shop_name=…)   # 同时刷新按钮 tooltip
+  → MaterialPopup.set_account(…, shop_name) / open_for(…, shop_name)
+```
+
+店铺名缺失时回退显示「店铺 <shop_id>」；未选会话时整行隐藏。
+验证：`temp/test_account_label.py`（10/10 通过）+ 真渲染截图。面板高度 460 → **488** 以容纳该行，网格可视区不被压缩。
 
 ### 复现过的坑（重要）
 

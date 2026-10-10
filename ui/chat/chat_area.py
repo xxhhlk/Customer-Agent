@@ -80,6 +80,7 @@ class ChatAreaPanel(QWidget):
         self.setObjectName("ChatAreaPanel")
         self._current_shop_id: str = ""
         self._current_user_id: str = ""
+        self._current_shop_name: str = ""  # 店铺名（仅用于素材面板标注当前账号）
         self._current_buyer_uid: str = ""
         self._active_key: tuple[str, str] = ("", "")  # 已加载会话标识，重复点击直接复用
         self._loader: _MessageLoader | None = None
@@ -165,8 +166,12 @@ class ChatAreaPanel(QWidget):
         self.input_area.set_enabled(False)
         layout.addWidget(self.input_area)
 
-    def load_messages(self, shop_id: str, buyer_uid: str):
-        """加载指定买家在指定店铺的消息（异步后台加载）"""
+    def load_messages(self, shop_id: str, buyer_uid: str, shop_name: str = ""):
+        """加载指定买家在指定店铺的消息（异步后台加载）
+
+        Args:
+            shop_name: 店铺名（仅用于素材面板标注当前账号，可为空）
+        """
         logger.info(f"[ChatArea] load_messages: shop_id={shop_id}, buyer_uid={buyer_uid}")
         # 同一会话重复点击不重载，保留当前滚动位置与已渲染气泡
         if (shop_id, buyer_uid) == self._active_key:
@@ -176,6 +181,7 @@ class ChatAreaPanel(QWidget):
         # 缓存 shop_id/buyer_uid 用于手动发送
         self._current_shop_id = shop_id
         self._current_buyer_uid = buyer_uid
+        self._current_shop_name = shop_name or ""
         # 递增 token，让旧的 loader 回调过期
         self._load_token += 1
         token = self._load_token
@@ -239,8 +245,11 @@ class ChatAreaPanel(QWidget):
         self.header_title.setText(nickname or buyer_uid)
         self.header_detail.setText(f"({buyer_uid})")
         self.input_area.set_enabled(True)
-        # 同步账号给素材面板（素材空间接口需要 shop_id/user_id 取 cookies）
-        self.input_area.set_account(self._current_shop_id, self._current_user_id)
+        # 同步账号给素材面板（素材空间接口需要 shop_id/user_id 取 cookies；
+        # 素材空间按账号隔离，面板顶部据此显示店铺名，避免看错库）
+        self.input_area.set_account(
+            self._current_shop_id, self._current_user_id, self._current_shop_name
+        )
 
         # 分批渲染（旧批次由 token 拦截）
         logger.info("[ChatArea] _on_messages_loaded: 开始渲染气泡")

@@ -4,6 +4,7 @@
 由上层（ChatArea → ChatUI）直接发给当前会话买家。
 
 - 双 Tab：图片空间（**仅「客服专用」文件夹**，按文件夹名解析 dir_id）/ 视频空间（`dir_id=-1`，客服专用视频）
+- 顶部标注**当前账号（店铺名）**：素材空间按账号隔离，避免看错/发错库
 - 支持文件名搜索、分页、审核状态标记
 - 列表拉取全部在 QThread 后台完成（含 MaterialSpace 的 cookie 读取，禁止在 UI 线程建）
 - 缩略图复用 `ui.chat.media.image_loader.ImageLoaderManager`（QPixmap 仅在主线程创建）
@@ -285,11 +286,13 @@ class MaterialPopup(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setObjectName("MaterialPopup")
-        self.setFixedSize(560, 460)
+        # 高度额外留出顶部账号行（26px），保证网格可视区不被压缩
+        self.setFixedSize(560, 488)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self._shop_id = ""
         self._user_id = ""
+        self._shop_name = ""
         self._space = "image"
         self._page = 1
         self._keyword = ""
@@ -312,7 +315,13 @@ class MaterialPopup(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        # ---- 顶部：空间切换 + 搜索 + 刷新 ----
+        # ---- 顶部：当前账号（素材空间按账号隔离，必须让用户看清是哪个库）----
+        self._account_label = QLabel("")
+        self._account_label.setObjectName("MaterialAccount")
+        self._account_label.setVisible(False)
+        layout.addWidget(self._account_label)
+
+        # ---- 空间切换 + 搜索 + 刷新 ----
         top = QHBoxLayout()
         top.setSpacing(6)
 
@@ -388,22 +397,43 @@ class MaterialPopup(QFrame):
     # 对外接口
     # ------------------------------------------------------------------ #
 
-    def set_account(self, shop_id: str, user_id: str) -> None:
-        """设置当前店铺/账号；切换账号时清空缓存"""
+    def set_account(self, shop_id: str, user_id: str, shop_name: str = "") -> None:
+        """设置当前店铺/账号；切换账号时清空缓存
+
+        Args:
+            shop_name: 店铺名，显示在面板顶部（素材空间按账号隔离）
+        """
         new_shop, new_user = str(shop_id or ""), str(user_id or "")
+        self._shop_name = str(shop_name or "")
         if (new_shop, new_user) != (self._shop_id, self._user_id):
             # 缓存本身已按账号分桶，这里再清一次纯属防御；同时清掉文件夹 id 缓存
             _clear_cache()
             self._shop_id, self._user_id = new_shop, new_user
             self._reset_state()
+        self._update_account_label()
+
+    def _update_account_label(self) -> None:
+        """刷新顶部账号标注：素材空间随账号而变，避免看错库"""
+        try:
+            if not self._shop_id:
+                self._account_label.setVisible(False)
+                return
+            name = self._shop_name or f"店铺 {self._shop_id}"
+            self._account_label.setText(f"素材 · {name}")
+            self._account_label.setToolTip(
+                f"当前素材库归属：{name}\n店铺 {self._shop_id}\n账号 {self._user_id}"
+            )
+            self._account_label.setVisible(True)
+        except RuntimeError:
+            pass
 
     def _cache_key(self) -> Tuple[str, str, str, int, str]:
         """列表缓存 / 在途请求标识：**含账号**，避免跨账号串数据"""
         return (self._shop_id, self._user_id, self._space, self._page, self._keyword)
 
-    def open_for(self, shop_id: str, user_id: str) -> None:
+    def open_for(self, shop_id: str, user_id: str, shop_name: str = "") -> None:
         """打开面板：设置账号并加载当前页"""
-        self.set_account(shop_id, user_id)
+        self.set_account(shop_id, user_id, shop_name)
         if not self._shop_id or not self._user_id:
             self._set_status("未选择会话或账号信息缺失")
             return
@@ -653,6 +683,13 @@ class MaterialPopup(QFrame):
                 background-color: {bg};
                 border: 1px solid {border};
                 border-radius: 8px;
+            }}
+            #MaterialAccount {{
+                color: {text};
+                font-size: 12px;
+                font-weight: 600;
+                padding-left: 4px;
+                background: transparent;
             }}
             #MaterialStatus {{
                 color: {sub};

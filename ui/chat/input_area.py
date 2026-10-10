@@ -33,6 +33,7 @@ class InputArea(QWidget):
         self._max_query_len = 12  # 参与匹配的查询长度（取末尾片段）
         self._shop_id = ""  # 当前会话店铺 id（素材面板用）
         self._user_id = ""  # 当前会话登录账号 id（素材面板用）
+        self._shop_name = ""  # 当前会话店铺名（素材面板标注用）
         self._init_ui()
         self._init_slash_popup()
         self._init_emoji_panel()
@@ -158,18 +159,35 @@ class InputArea(QWidget):
         self._material_popup = MaterialPopup(self)
         self._material_popup.material_selected.connect(self._on_material_selected)
 
-    def set_account(self, shop_id: str, user_id: str):
-        """同步当前会话账号，供素材面板调用接口"""
+    def set_account(self, shop_id: str, user_id: str, shop_name: str = ""):
+        """同步当前会话账号，供素材面板调用接口
+
+        Args:
+            shop_name: 店铺名；素材空间按账号隔离，面板顶部据此标注当前素材库归属
+        """
         new_shop, new_user = str(shop_id or ""), str(user_id or "")
         changed = (new_shop, new_user) != (self._shop_id, self._user_id)
         self._shop_id, self._user_id = new_shop, new_user
+        self._shop_name = str(shop_name or "")
         try:
+            self._update_material_tooltip()
             if changed:
                 # 切会话时收起面板，避免展示上一个账号的素材
                 self._material_popup.hide()
-            self._material_popup.set_account(new_shop, new_user)
+            self._material_popup.set_account(new_shop, new_user, self._shop_name)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"设置素材面板账号失败: {e}")
+
+    def _update_material_tooltip(self):
+        """素材按钮 tooltip 标注当前账号（多账号下避免发错库）"""
+        try:
+            label = self._shop_name or (f"店铺 {self._shop_id}" if self._shop_id else "")
+            self.material_btn.setToolTip(
+                f"素材（图片空间 / 视频空间）\n{label}" if label
+                else "素材（图片空间 / 视频空间）"
+            )
+        except RuntimeError:
+            pass
 
     def _toggle_material_panel(self):
         """显示/收起素材面板并定位到输入框上方"""
@@ -179,7 +197,7 @@ class InputArea(QWidget):
         # 收起其它浮层，避免叠在一起
         self._cancel_slash()
         self._emoji_popup.hide()
-        self._material_popup.open_for(self._shop_id, self._user_id)
+        self._material_popup.open_for(self._shop_id, self._user_id, self._shop_name)
         self._position_material_popup()
         self._material_popup.show()
         self._material_popup.raise_()
@@ -189,7 +207,7 @@ class InputArea(QWidget):
         bottom_left = self.text_edit.mapToGlobal(self.text_edit.rect().bottomLeft())
         h = self._material_popup.height()
         if h <= 0:
-            h = 460
+            h = 488  # 与 MaterialPopup 的固定高度保持一致（含顶部账号行）
         x = bottom_left.x()
         y = bottom_left.y() - h - 4
 
