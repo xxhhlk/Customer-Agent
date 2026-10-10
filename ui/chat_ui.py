@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QWidget,
 )
 from PyQt6.QtGui import QFont
-from qfluentwidgets import BodyLabel, isDarkTheme
+from qfluentwidgets import BodyLabel, InfoBar, InfoBarPosition, isDarkTheme
 
 from ui.chat.conversation_list import ConversationListPanel
 from ui.chat.chat_area import ChatAreaPanel
@@ -50,6 +50,105 @@ class _ConversationLoader(QThread):
         self.result.emit(convs)
 
 
+class _MaterialSendWorker(QThread):
+    """后台发送素材空间中的图片/视频，并持久化到消息库。
+
+    - 图片：`send_image(uid, url)`（type=1，content=图片 URL）
+    - 视频：`send_video(uid, download_url, info)`，info 由
+      `MaterialSpace.build_video_info()` 生成（含 file_id/download_url/size/status，
+      缺这些字段会 result=ok 但静默不投递）
+    """
+
+    done = pyqtSignal(bool, str, dict)  # success, error_msg, msg_dict|None
+
+    def __init__(self, shop_id, user_id, buyer_uid, item: dict, parent=None):
+        super().__init__(parent)
+        self._sid = shop_id
+        self._uid = user_id
+        self._buid = buyer_uid
+        self._item = item
+
+    def run(self):
+        try:
+            from Channel.pinduoduo.utils.API.material_space import MaterialSpace
+            from Channel.pinduoduo.utils.API.send_message import SendMessage
+
+            payload = MaterialSpace.build_send_payload(self._item)
+            ctx_type = payload["context_type"]
+            url = payload["url"]
+            info = payload["info"]
+
+            if not url:
+                self.done.emit(False, "素材没有可用的 URL", None)
+                return
+
+            sender = SendMessage(str(self._sid), str(self._uid))
+            if ctx_type == "video":
+                logger.info("[MATERIAL] 发送视频: file_id=%s, has_info=%s",
+                            (info or {}).get("file_id"), bool(info))
+                result = sender.send_video(str(self._buid), url, info=info)
+            else:
+                logger.info("[MATERIAL] 发送图片: name=%s", self._item.get("name"))
+                result = sender.send_image(str(self._buid), url)
+
+            ok, err = self._judge(result)
+            if not ok:
+                self.done.emit(False, err, None)
+                return
+
+            self._notify_staff_intervention(ctx_type)
+
+            msg_dict = self._persist(ctx_type, url, payload.get("media_meta"))
+            self.done.emit(True, "", msg_dict or {})
+        except Exception as e:
+            logger.error(f"[MATERIAL] 发送素材异常: {e}", exc_info=True)
+            self.done.emit(False, str(e), None)
+
+    @staticmethod
+    def _judge(result) -> tuple[bool, str]:
+        """判定发送是否成功：success + result.result != fail + 无 error_code"""
+        if not isinstance(result, dict) or not result.get("success"):
+            return False, str(result)
+        inner = result.get("result") or {}
+        if inner.get("result") == "fail":
+            return False, f"param error: {inner.get('reason')}"
+        if inner.get("error_code") and inner.get("error_code") != 0:
+            return False, f"error_code={inner.get('error_code')} {inner.get('error', '')}"
+        return True, ""
+
+    def _notify_staff_intervention(self, ctx_type: str):
+        """发送素材属人工介入：取消正在等待的 AI 流程 + 写入人工消息缓存"""
+        try:
+            from Message.handlers.staff_reply_event import staff_reply_event_manager
+            staff_reply_event_manager.notify_staff_reply(self._buid)
+        except Exception:
+            pass
+        try:
+            from Message.handlers.staff_message_cache import staff_message_cache
+            staff_message_cache.add_message(
+                self._buid, "[图片]" if ctx_type == "image" else "[视频]"
+            )
+        except Exception:
+            pass
+
+    def _persist(self, ctx_type: str, url: str, media_meta):
+        """写入消息库（成功后 UI 立即显示气泡）"""
+        try:
+            from services.message_persistence import message_persistence_service
+            return message_persistence_service.save_outbound_message(
+                shop_id=self._sid,
+                user_id=self._uid,
+                buyer_uid=self._buid,
+                reply_content=url,
+                reply_source="manual",
+                context_type=ctx_type,
+                media_meta=media_meta,
+            )
+        except Exception as e:
+            logger.error(f"[MATERIAL] 持久化失败: {e}")
+            return None
+
+
 class ChatUI(QFrame):
     """聊天记录页面"""
 
@@ -62,6 +161,7 @@ class ChatUI(QFrame):
         self._shops_loaded = False  # 店铺列表是否已加载过
         self._persist_workers: list = []  # 持久化 worker 列表（支持并发）
         self._forward_workers: list = []  # 转发 worker 列表（支持并发）
+        self._material_workers: list = []  # 素材发送 worker 列表（支持并发）
         logger.info("[ChatUI] __init__ 开始")
         self._init_ui()
         logger.info("[ChatUI] _init_ui 完成")
@@ -201,6 +301,7 @@ class ChatUI(QFrame):
         self.chat_area = ChatAreaPanel()
         self.chat_area.send_manual_reply.connect(self._send_manual_reply)
         self.chat_area.forward_message.connect(self._on_forward_message)
+        self.chat_area.send_material.connect(self._on_send_material)
         splitter.addWidget(self.chat_area)
 
         # 初始比例 1:3
@@ -357,28 +458,27 @@ class ChatUI(QFrame):
                         logger.info(f"[FORWARD] 调用 send_image: target={self._target_uid}")
                         result = sender.send_image(str(self._target_uid), self._cnt)
                     elif self._ctx_type == "video":
-                        # 从 media_meta 构造 PDD 要求的 info 字段
+                        # 从 media_meta 还原 PDD 要求的 info 字段。
+                        # 实测结论（docs/material-space-send-research-2026-10-11.md §3.2）：
+                        # info 必须含 download_url / file_id / size / status，
+                        # 只传 preview+duration 时 result=ok 但消息静默不投递。
                         info = None
                         if self._media_meta:
                             try:
                                 import json
                                 meta = json.loads(self._media_meta) if isinstance(self._media_meta, str) else self._media_meta
-                                raw_info = meta.get("raw_info")
-                                if raw_info and isinstance(raw_info, dict):
-                                    # PDD send_video 需要的 info 字段: preview + duration
-                                    # 注意: download_url 会导致 40003；仅 preview+duration 时
-                                    # result=ok 但视频静默不投递，因此视频转发按钮已禁用
-                                    info = {}
-                                    preview = raw_info.get("preview")
-                                    if preview:
-                                        info["preview"] = preview
-                                    if raw_info.get("duration") is not None:
-                                        info["duration"] = raw_info["duration"]
-                                    logger.info(f"[FORWARD] 视频 info（preview+duration）: "
-                                                f"duration={info.get('duration')}, "
-                                                f"has_preview={bool(info.get('preview'))}")
+                                raw_info = meta.get("raw_info") if isinstance(meta, dict) else None
+                                if raw_info and isinstance(raw_info, dict) and raw_info.get("file_id"):
+                                    # 最优路径：原样回传历史消息的 info（含它自己的 file_id）
+                                    info = dict(raw_info)
+                                    logger.info(
+                                        "[FORWARD] 视频 info 原样回传: file_id=%s, "
+                                        "has_download_url=%s, size=%s, status=%s",
+                                        info.get("file_id"), bool(info.get("download_url")),
+                                        info.get("size"), info.get("status"),
+                                    )
                                 else:
-                                    # 回退：用旧字段拼凑（老版本入库的没有 raw_info）
+                                    # 回退：老版本入库缺少完整 raw_info，尽力用 cover/duration 拼装
                                     cover_url = meta.get("cover_url")
                                     cover_size = meta.get("cover_size")
                                     duration = meta.get("duration")
@@ -390,10 +490,13 @@ class ChatUI(QFrame):
                                         info["preview"] = preview
                                         if duration is not None:
                                             info["duration"] = duration
-                                        logger.warning(f"[FORWARD] 视频 info 用旧字段拼凑（缺少 raw_info）: "
-                                                       f"cover_url={cover_url[:80]}..., duration={duration}")
+                                        logger.warning(
+                                            "[FORWARD] 视频 info 用旧字段拼凑（缺少完整 raw_info，"
+                                            "可能静默不投递）: cover_url=%s..., duration=%s",
+                                            cover_url[:80], duration,
+                                        )
                                     else:
-                                        logger.warning(f"[FORWARD] media_meta 缺少 cover_url: {list(meta.keys())}")
+                                        logger.warning("[FORWARD] media_meta 缺少 cover_url: %s", list(meta.keys()))
                             except Exception as e:
                                 logger.warning(f"构造视频 info 失败: {e}")
                         else:
@@ -482,6 +585,59 @@ class ChatUI(QFrame):
             except Exception:
                 pass
         worker.done.connect(lambda *_: _cleanup_forward())
+
+    # ------------------------------------------------------------------ #
+    # 素材空间发送（图片空间 / 视频空间）
+    # ------------------------------------------------------------------ #
+
+    def _on_send_material(self, shop_id: str, user_id: str, item: dict, buyer_uid: str):
+        """从素材空间选中素材 → 发送给当前买家（后台线程执行）"""
+        if not item:
+            return
+        if not shop_id or not user_id or not buyer_uid:
+            logger.warning("[MATERIAL] 缺少必要参数，取消发送")
+            return
+
+        worker = _MaterialSendWorker(shop_id, user_id, buyer_uid, item)
+        worker.done.connect(self._on_material_send_done)
+        worker.start()
+        self._material_workers.append(worker)
+
+        def _cleanup_material(_w=worker):
+            try:
+                if _w in self._material_workers:
+                    self._material_workers.remove(_w)
+                _w.deleteLater()
+            except Exception:
+                pass
+
+        worker.done.connect(lambda *_: _cleanup_material())
+
+    def _on_material_send_done(self, success: bool, err: str, msg_dict: dict):
+        """素材发送结果回调（主线程）"""
+        if success:
+            logger.info("[MATERIAL] 素材发送成功")
+            if msg_dict:
+                try:
+                    from services.message_persistence import message_persistence_service
+                    message_persistence_service.notify_new_message(msg_dict)
+                except Exception as e:
+                    logger.warning(f"[MATERIAL] 通知新消息失败: {e}")
+            return
+
+        logger.error(f"[MATERIAL] 素材发送失败: {err}")
+        try:
+            InfoBar.error(
+                title="素材发送失败",
+                content=f"图片/视频未能发出：{err[:200]}",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=6000,
+                parent=self,
+            )
+        except Exception:
+            pass
 
     def cleanup(self):
         """清理资源"""

@@ -10,6 +10,7 @@ from qfluentwidgets import PrimaryPushButton, isDarkTheme, TransparentToolButton
 
 from ui.chat.slash_popup import SlashKnowledgePopup
 from ui.chat.emoji_panel import EmojiPopup
+from ui.chat.material_panel import MaterialPopup
 from utils.logger_loguru import get_logger
 
 logger = get_logger("InputArea")
@@ -19,6 +20,7 @@ class InputArea(QWidget):
     """聊天输入区域"""
 
     send_message = pyqtSignal(str)  # 发送消息信号
+    material_selected = pyqtSignal(dict)  # 从素材空间选中素材（图片/视频）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -29,9 +31,12 @@ class InputArea(QWidget):
         self._query_start_pos = 0  # 当前联想片段起始位置（替换时用）
         self._min_query_len = 1  # 触发联想的最小字符数
         self._max_query_len = 12  # 参与匹配的查询长度（取末尾片段）
+        self._shop_id = ""  # 当前会话店铺 id（素材面板用）
+        self._user_id = ""  # 当前会话登录账号 id（素材面板用）
         self._init_ui()
         self._init_slash_popup()
         self._init_emoji_panel()
+        self._init_material_panel()
         self._apply_theme()
 
     def _apply_theme(self):
@@ -89,6 +94,12 @@ class InputArea(QWidget):
         self.emoji_btn.clicked.connect(self._toggle_emoji_panel)
         btn_layout.addWidget(self.emoji_btn)
 
+        self.material_btn = TransparentToolButton(FluentIcon.PHOTO)
+        self.material_btn.setToolTip("素材（图片空间 / 视频空间）")
+        self.material_btn.setFixedSize(32, 32)
+        self.material_btn.clicked.connect(self._toggle_material_panel)
+        btn_layout.addWidget(self.material_btn)
+
         btn_layout.addStretch()
 
         self.send_btn = PrimaryPushButton("发送 (Enter)")
@@ -138,6 +149,63 @@ class InputArea(QWidget):
         cursor = self.text_edit.textCursor()
         cursor.insertText(text)                      # text 形如 "[玫瑰]"
         self._slash_popup.suppress(text)             # 防止刚插入内容触发快捷语录联想
+        self.text_edit.setFocus()
+
+    # ========== 素材面板 ==========
+
+    def _init_material_panel(self):
+        """初始化素材浮窗（Popup，跟随输入框定位）"""
+        self._material_popup = MaterialPopup(self)
+        self._material_popup.material_selected.connect(self._on_material_selected)
+
+    def set_account(self, shop_id: str, user_id: str):
+        """同步当前会话账号，供素材面板调用接口"""
+        new_shop, new_user = str(shop_id or ""), str(user_id or "")
+        changed = (new_shop, new_user) != (self._shop_id, self._user_id)
+        self._shop_id, self._user_id = new_shop, new_user
+        try:
+            if changed:
+                # 切会话时收起面板，避免展示上一个账号的素材
+                self._material_popup.hide()
+            self._material_popup.set_account(new_shop, new_user)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"设置素材面板账号失败: {e}")
+
+    def _toggle_material_panel(self):
+        """显示/收起素材面板并定位到输入框上方"""
+        if self._material_popup.isVisible():
+            self._material_popup.hide()
+            return
+        # 收起其它浮层，避免叠在一起
+        self._cancel_slash()
+        self._emoji_popup.hide()
+        self._material_popup.open_for(self._shop_id, self._user_id)
+        self._position_material_popup()
+        self._material_popup.show()
+        self._material_popup.raise_()
+
+    def _position_material_popup(self):
+        """将素材浮窗定位到输入框上方（照抄表情面板算法，并做屏幕边界收敛）"""
+        bottom_left = self.text_edit.mapToGlobal(self.text_edit.rect().bottomLeft())
+        h = self._material_popup.height()
+        if h <= 0:
+            h = 460
+        x = bottom_left.x()
+        y = bottom_left.y() - h - 4
+
+        # 收敛到屏幕内：窗口较矮时避免面板顶到屏幕外
+        screen = self.text_edit.screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            if y < avail.top() + 4:
+                y = avail.top() + 4
+            if x + self._material_popup.width() > avail.right():
+                x = max(avail.left() + 4, avail.right() - self._material_popup.width())
+        self._material_popup.move(x, y)
+
+    def _on_material_selected(self, item: dict):
+        """选中素材：交给上层发送（图片/视频走不同通道）"""
+        self.material_selected.emit(item)
         self.text_edit.setFocus()
 
     # ========== 斜杠检索逻辑 ==========
@@ -275,6 +343,11 @@ class InputArea(QWidget):
                 popup_rect = self._emoji_popup.geometry()
                 if not popup_rect.contains(event.globalPosition().toPoint()):
                     self._emoji_popup.hide()
+            if self._material_popup.isVisible():
+                # 检查点击是否在素材面板外
+                popup_rect = self._material_popup.geometry()
+                if not popup_rect.contains(event.globalPosition().toPoint()):
+                    self._material_popup.hide()
             return False
 
         # 处理输入法事件（中文输入法候选词确认后触发）
@@ -348,9 +421,10 @@ class InputArea(QWidget):
 
     def _on_send_clicked(self):
         """发送按钮 / Enter 触发"""
-        # 发送前关闭联想浮窗与表情面板
+        # 发送前关闭联想浮窗与表情/素材面板
         self._cancel_slash()
         self._emoji_popup.hide()
+        self._material_popup.hide()
 
         text = self.text_edit.toPlainText().strip()
         if not text:
@@ -362,7 +436,10 @@ class InputArea(QWidget):
         """启用/禁用输入框"""
         self.text_edit.setEnabled(enabled)
         self.send_btn.setEnabled(enabled)
+        self.emoji_btn.setEnabled(enabled)
+        self.material_btn.setEnabled(enabled)
         if not enabled:
+            self._material_popup.hide()
             self.hint_label.setText("请先选择一个会话")
         else:
             self.hint_label.setText("")
@@ -382,6 +459,9 @@ class InputArea(QWidget):
         if getattr(self, "_emoji_popup", None) is not None:
             self._emoji_popup.hide()
             self._emoji_popup.deleteLater()
+        if getattr(self, "_material_popup", None) is not None:
+            self._material_popup.hide()
+            self._material_popup.deleteLater()
         self._remove_global_click_filter()
 
     def changeEvent(self, event):
@@ -399,6 +479,7 @@ class InputArea(QWidget):
             self._apply_theme()
             self._slash_popup.refresh_theme()
             self._emoji_popup.refresh_theme()
+            self._material_popup.refresh_theme()
         finally:
             QTimer.singleShot(200, self._reset_palette_pending)
 

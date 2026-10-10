@@ -63,6 +63,7 @@ class ChatAreaPanel(QWidget):
 
     send_manual_reply = pyqtSignal(str, str, str, str)  # shop_id, user_id, text, buyer_uid
     forward_message = pyqtSignal(dict, str)  # msg_data, target_buyer_uid
+    send_material = pyqtSignal(str, str, object, str)  # shop_id, user_id, 素材项, buyer_uid
 
     # 判断"在底部"的像素容差
     _BOTTOM_THRESHOLD = 60
@@ -152,6 +153,7 @@ class ChatAreaPanel(QWidget):
         # 输入区域
         self.input_area = InputArea()
         self.input_area.send_message.connect(self._on_input_message)
+        self.input_area.material_selected.connect(self._on_material_selected)
         self.input_area.set_enabled(False)
         layout.addWidget(self.input_area)
 
@@ -224,6 +226,8 @@ class ChatAreaPanel(QWidget):
         self.header_title.setText(nickname or buyer_uid)
         self.header_detail.setText(f"({buyer_uid})")
         self.input_area.set_enabled(True)
+        # 同步账号给素材面板（素材空间接口需要 shop_id/user_id 取 cookies）
+        self.input_area.set_account(self._current_shop_id, self._current_user_id)
 
         # 分批渲染（旧批次由 token 拦截）
         logger.info("[ChatArea] _on_messages_loaded: 开始渲染气泡")
@@ -349,6 +353,19 @@ class ChatAreaPanel(QWidget):
     def _connect_bubble_signal(self, bubble: MessageBubble):
         """连接 bubble 的转发信号"""
         bubble.forward_requested.connect(self._on_forward_requested)
+
+    def _on_material_selected(self, item: dict):
+        """素材面板选中 → 上抛给 ChatUI 走发送链路"""
+        if not self._current_shop_id or not self._current_user_id or not self._current_buyer_uid:
+            logger.warning("未选择会话，忽略素材发送")
+            return
+        logger.info(
+            "[ChatArea] 素材待发送: id=%s, type=%s, buyer=%s",
+            (item or {}).get("id"), (item or {}).get("file_type"), self._current_buyer_uid,
+        )
+        self.send_material.emit(
+            self._current_shop_id, self._current_user_id, item, self._current_buyer_uid
+        )
 
     def _on_forward_requested(self, msg_data: dict):
         """右键点击「转发消息」→ 弹出目标选择弹窗"""

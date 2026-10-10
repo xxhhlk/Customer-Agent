@@ -22,6 +22,15 @@ class ReplySender:
     def send_image(self, shop_id, user_id, recipient_uid, image_url: str) -> Any:
         raise NotImplementedError
 
+    def send_video(self, shop_id, user_id, recipient_uid, video_url: str, info: Optional[dict] = None) -> Any:
+        """发送视频消息。
+
+        info 为 PDD 要求的视频元数据（download_url/file_id/size/status/preview），
+        缺失会导致 ``result=ok`` 但静默不投递；素材发送请用
+        ``MaterialSpace.build_video_info(item)`` 生成。
+        """
+        raise NotImplementedError
+
     def send_product_card(self, shop_id, user_id, recipient_uid, goods_id, biz_type: int = 2) -> Any:
         raise NotImplementedError
 
@@ -42,6 +51,10 @@ class PinduoduoSender(ReplySender):
     def send_image(self, shop_id, user_id, recipient_uid, image_url):
         from Channel.pinduoduo.utils.API.send_message import SendMessage
         return SendMessage(str(shop_id), str(user_id)).send_image(recipient_uid, image_url)
+
+    def send_video(self, shop_id, user_id, recipient_uid, video_url, info=None):
+        from Channel.pinduoduo.utils.API.send_message import SendMessage
+        return SendMessage(str(shop_id), str(user_id)).send_video(recipient_uid, video_url, info=info)
 
     def send_product_card(self, shop_id, user_id, recipient_uid, goods_id, biz_type=2):
         from Channel.pinduoduo.utils.API.send_message import SendMessage

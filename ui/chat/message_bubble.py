@@ -213,12 +213,12 @@ class MessageBubble(QFrame):
         menu.addSeparator()
 
         forward_action = QAction("转发消息", self)
-        # 视频消息 PDD API 不支持直接转发（result=ok 但静默不投递）
+        # 视频转发已解禁：转发时原样回传 media_meta.raw_info（含 file_id/download_url/
+        # size/status），实测这是 PDD 能成功投递的 info 完整形态
+        # （见 docs/material-space-send-research-2026-10-11.md §3.2）。
+        forward_action.triggered.connect(self._on_forward)
         if context_type == "video":
-            forward_action.setEnabled(False)
-            forward_action.setToolTip("视频消息暂不支持直接转发，可通过复制链接发送")
-        else:
-            forward_action.triggered.connect(self._on_forward)
+            forward_action.setToolTip("转发视频（需该消息带有完整的视频信息）")
         menu.addAction(forward_action)
 
         menu.exec(QCursor.pos())
