@@ -277,6 +277,13 @@ class LifecycleMixin:
                     self._message_loop(websocket, shop_id, user_id, username, queue_name)
                 )
 
+                # 上线补拉历史消息：独立任务，不参与连接存活判定
+                history_task = asyncio.create_task(
+                    self._sync_history_on_connect(shop_id, user_id, username)
+                )
+                self.processing_tasks.add(history_task)
+                history_task.add_done_callback(self.processing_tasks.discard)
+
                 stop_task = asyncio.create_task(self._stop_event.wait())
 
                 try:
@@ -569,6 +576,19 @@ class LifecycleMixin:
             if connection_key in self._health_tasks:
                 self._health_tasks.pop(connection_key, None)
             self.logger.debug(f"Cookie 健康检查循环已结束: {shop_id}-{username}")
+
+    async def _sync_history_on_connect(self, shop_id: str, user_id: str, username: str):
+        """连接建立后补拉最近会话的历史消息"""
+        try:
+            from services.history_sync import history_sync_service
+
+            added = await history_sync_service.sync_on_start(shop_id, user_id, username)
+            if added:
+                self.logger.info(f"历史消息已补拉: {shop_id}-{username}, 新增 {added} 条")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.warning(f"历史消息补拉失败: {shop_id}-{username}, {e}")
 
     async def _message_loop(self, websocket, shop_id: str, user_id: str, username: str, queue_name: str):
         """消息接收循环"""
