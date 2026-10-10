@@ -156,6 +156,9 @@ class DebounceProcessorAdapter:
                                 user_key = self._extract_user_id(wrapper.context)
                                 if user_key in self._last_message_time:
                                     del self._last_message_time[user_key]
+                                # 已收集的其余消息并入首条：取消后它们不会被处理，
+                                # 但内容仍需留给上层补写进会话历史
+                                self._absorb_dropped(wrapper, messages_to_merge[1:])
                                 return None
                         except Exception as e:
                             self.logger.error(f"检查人工回复结果时出错: {e}")
@@ -226,6 +229,23 @@ class DebounceProcessorAdapter:
                 except Exception:
                     pass
             return wrapper
+
+    @staticmethod
+    def _absorb_dropped(wrapper: MessageWrapper, dropped: list) -> None:
+        """把因人工接管而不再处理的已收集消息并入首条。
+
+        取消分支只把首条 wrapper 交给上层，其余消息若不并入就会随取消消失；
+        它们承载的是人工回复前买家发出的内容，必须能在会话历史中留痕。
+        """
+        context = wrapper.context
+        if context.type.name != "TEXT":
+            return
+        texts = [str(context.content)] if context.content else []
+        for item in dropped:
+            if item.context.type.name == "TEXT" and item.context.content:
+                texts.append(str(item.context.content))
+        if texts:
+            context.content = "\n".join(texts)
 
     def _merge_messages(self, wrappers: list) -> MessageWrapper:
         """合并多条消息"""

@@ -52,6 +52,10 @@ _agno_patched = False  # 全局标志，确保只 patch 一次
 # 最近的图，但不会让 8 轮窗口内所有旧图随每轮请求重复携带（token 成本线性增长）。
 _HISTORY_MEDIA_KEEP_RECENT = 2
 
+# 人工接管轮次在会话历史中的占位回复：这类轮次不经模型，但买家消息必须留在
+# 历史里，否则买家已提供过的机器码、订单号等关键信息在后续轮次中缺失。
+_STAFF_TAKEOVER_CONTENT = "（本轮由人工客服直接回复）"
+
 
 def _strip_old_history_images(messages, keep_recent: int = _HISTORY_MEDIA_KEEP_RECENT) -> None:
     """剥离较旧历史消息里的图片（原地修改），只保留最近 keep_recent 条带图消息。"""
@@ -392,6 +396,56 @@ class CustomerAgent(Bot):
         if hasattr(context, "kwargs") and context.kwargs is not None:
             from_uid = str(getattr(context.kwargs, "from_uid", "") or "")
         return f"{context.channel_type}{context.kwargs.user_id}_{from_uid}"
+
+    async def record_staff_turn(self, query: str, context: Optional[Context] = None) -> None:
+        """人工接管本轮时，把买家消息补写进会话历史。
+
+        被人接管的轮次不走模型，历史里只会留下 AI 参与过的对话。若不补写，
+        买家已发出的机器码、订单号、图片等关键信息对后续每轮都不可见，
+        AI 会重复索要买家已经提供过的内容。
+        """
+        if self._agent is None or context is None:
+            return
+        text = (query or "").strip()
+        if not text:
+            return
+
+        session_id = self._make_session_id(context)
+        user_id = str(context.kwargs.user_id)
+        lock = self._conversation_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            try:
+                from uuid import uuid4
+                from agno.run.base import RunStatus
+
+                assert self._agent is not None
+                session = cast(
+                    AgentSession,
+                    await self._agent._aread_or_create_session(
+                        session_id=session_id, user_id=user_id
+                    ),
+                )
+                session.upsert_run(
+                    RunOutput(
+                        run_id=str(uuid4()),
+                        session_id=session_id,
+                        agent_id=self._agent.id,
+                        agent_name=self._agent.name,
+                        user_id=user_id,
+                        content=_STAFF_TAKEOVER_CONTENT,
+                        status=RunStatus.completed,
+                        messages=[
+                            Message(role="user", content=text),
+                            Message(
+                                role=getattr(self._agent.model, "assistant_message_role", "assistant"),
+                                content=_STAFF_TAKEOVER_CONTENT,
+                            ),
+                        ],
+                    )
+                )
+                await self._agent.asave_session(session)
+            except Exception as e:
+                self.logger.warning(f"[record_staff_turn] 补写人工接管轮次失败: {e}")
 
     @staticmethod
     def _is_safe_media_url(url: str) -> bool:

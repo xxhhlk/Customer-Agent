@@ -273,6 +273,13 @@ class ChatUI(QFrame):
                         except Exception:
                             pass
 
+                        # 缓存客服消息，供AI后续轮次作为上下文
+                        try:
+                            from Message.handlers.staff_message_cache import staff_message_cache
+                            staff_message_cache.add_message(self._buid, self._txt)
+                        except Exception:
+                            pass
+
                         # 持久化
                         try:
                             from services.message_persistence import message_persistence_service

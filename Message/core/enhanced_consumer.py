@@ -174,7 +174,10 @@ class EnhancedMessageConsumer:
                     if from_uid and isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
                         # 人工回复取消防抖，清空该用户队列中的待处理消息
                         # 这些消息是客服回复前买家发的，客服已看到并回复，不需要AI再处理
-                        self._clear_pending_user_messages(user_key)
+                        dropped = self._clear_pending_user_messages(user_key)
+                        await self._record_staff_takeover(
+                            [wrapper.context] + [w.context for w in dropped]
+                        )
                     return
 
                 # 2. 关键词预处理：检查是否命中关键词
@@ -199,14 +202,20 @@ class EnhancedMessageConsumer:
                             if staff_replied:
                                 self.logger.info(f"pass_to_ai 关键词后人工客服已回复，跳过AI处理")
                                 # 人工回复了，清空队列中待处理的旧消息
-                                self._clear_pending_user_messages(user_key)
+                                dropped = self._clear_pending_user_messages(user_key)
+                                await self._record_staff_takeover(
+                                    [merged_wrapper.context] + [w.context for w in dropped]
+                                )
                                 return
                         else:
                             staff_replied = await self._check_staff_reply(merged_wrapper.context)
                             if staff_replied:
                                 self.logger.info(f"pass_to_ai 关键词后人工客服已回复，跳过AI处理")
                                 # 人工回复了，清空队列中待处理的旧消息
-                                self._clear_pending_user_messages(user_key)
+                                dropped = self._clear_pending_user_messages(user_key)
+                                await self._record_staff_takeover(
+                                    [merged_wrapper.context] + [w.context for w in dropped]
+                                )
                                 return
 
                         # 人工未回复，检查是否有有意义的内容传递给AI
@@ -299,7 +308,10 @@ class EnhancedMessageConsumer:
                         if staff_replied:
                             self.logger.info(f"User {user_key} staff replied, skip AI")
                             # 人工回复了，清空队列中待处理的旧消息
-                            self._clear_pending_user_messages(user_key)
+                            dropped = self._clear_pending_user_messages(user_key)
+                            await self._record_staff_takeover(
+                                [merged_wrapper.context] + [w.context for w in dropped]
+                            )
                             return
                         else:
                             # 等待超时，检查队列中是否有冷却期内被跳过的消息
@@ -324,7 +336,10 @@ class EnhancedMessageConsumer:
                         if staff_replied:
                             self.logger.info(f"User {user_key} staff replied, skip AI")
                             # 人工回复了，清空队列中待处理的旧消息
-                            self._clear_pending_user_messages(user_key)
+                            dropped = self._clear_pending_user_messages(user_key)
+                            await self._record_staff_takeover(
+                                [merged_wrapper.context] + [w.context for w in dropped]
+                            )
                             return
 
                     # 3. 处理消息（带AI超时中断）
@@ -514,25 +529,48 @@ class EnhancedMessageConsumer:
 
         return last_wrapper
 
-    def _clear_pending_user_messages(self, user_key: str):
+    def _clear_pending_user_messages(self, user_key: str) -> list:
         """清空用户队列中待处理的消息
-        
+
         当人工客服已经回复时，队列中旧消息是客服回复前买家发的，不需要AI再处理。
+        返回被丢弃的消息，供上层补写进会话历史。
         """
         if not user_key:
-            return
+            return []
         user_queue = self._user_queues.get(user_key)
         if not user_queue:
-            return
-        drained = 0
+            return []
+        drained = []
         while True:
             try:
-                user_queue.get_nowait()
-                drained += 1
+                drained.append(user_queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
-        if drained > 0:
-            self.logger.info(f"清空用户 {user_key} 队列中 {drained} 条待处理消息")
+        if drained:
+            self.logger.info(f"清空用户 {user_key} 队列中 {len(drained)} 条待处理消息")
+        return drained
+
+    async def _record_staff_takeover(self, contexts: list) -> None:
+        """人工接管导致本轮不走 AI 时，把买家消息补写进 AI 会话历史。
+
+        这些消息既不过模型也不进 session，若不补写则对 AI 永久不可见，
+        买家已发出的机器码、订单号等关键信息缺失，AI 会重复索要。
+        """
+        bot = None
+        for handler in self.handlers:
+            candidate = getattr(handler, "bot", None)
+            if candidate is not None and hasattr(candidate, "record_staff_turn"):
+                bot = candidate
+                break
+        if bot is None:
+            return
+        for context in contexts:
+            if context is None:
+                continue
+            try:
+                await bot.record_staff_turn(str(context.content or ""), context)
+            except Exception as e:
+                self.logger.warning(f"补写人工接管轮次失败: {e}")
 
     async def _process_message_with_ai_timeout(self, wrapper: MessageWrapper, prebuilt_metadata: Optional[Dict[str, Any]] = None):
         """带AI超时中断的消息处理
