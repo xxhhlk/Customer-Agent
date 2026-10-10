@@ -354,7 +354,11 @@ class CustomerAgent(Bot):
                         extra_body=extra_body,
                     ),
                     tools=[transfer_conversation, send_goods_link],
-                    search_knowledge= True,
+                    # search_knowledge: 给模型挂 search_knowledge_base 工具（模型自主决定是否调用）
+                    # add_knowledge_to_context: 每轮无条件检索并在用户消息中注入 <references> 保底，
+                    # 实测模型会漏调工具（2026-10-10 排查），双通道并存互不冲突
+                    search_knowledge=True,
+                    add_knowledge_to_context=True,
                     description=description,
                     instructions=instructions,
                     additional_context=additional_context,
