@@ -6,6 +6,7 @@
 - 「图片空间」与「视频空间」是同一套 `garner` 服务下的两个独立库，靠 `dir_id` 区分，
   容量各自独立计算（图片空间 10GB / 视频空间 20GB）。
 - 图片空间：`dir_id` **省略** = 全店素材（含各文件夹）；`dir_id=0` = 仅根目录。
+  业务上图片空间**只取「客服专用」文件夹**，由 `get_cs_dir_id()` 按文件夹名解析。
 - 视频空间（客服专用视频）：**`dir_id = -1`**（不在文件夹列表 `dirListV2` 里的隐藏目录）。
 - 列表接口 **不需要 anti-content**，仅需 cookies。
 - 素材项 `id` == 消息 `info.file_id`；发视频的 `download_url` 取素材 `transcode_url`（`.f30.mp4`）。
@@ -13,7 +14,8 @@
 所有请求均为只读（list / dir / sumSize），不会改动素材库。
 """
 
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..base_request import BaseRequest
 
@@ -28,6 +30,14 @@ _LIST_DIR_ID: Dict[str, Optional[int]] = {
     SPACE_IMAGE: None,
     SPACE_VIDEO: -1,
 }
+
+# 图片空间只展示「客服专用」文件夹下的素材：
+# 该文件夹名各店可能不同（本店实测为「客服专用」），故按关键字匹配而非写死 id。
+CS_DIR_NAME_KEYWORD = "客服"
+
+# shop_id -> (timestamp, dir_id|None)，避免每次翻页都重新拉文件夹列表
+_CS_DIR_CACHE: Dict[str, Tuple[float, Optional[int]]] = {}
+_CS_DIR_CACHE_TTL = 600.0
 
 # 空间 → 容量接口 dir_id（sumSize 只认具体值）
 _SUM_SIZE_DIR_ID: Dict[str, int] = {
@@ -47,6 +57,11 @@ _REQUEST_HEADERS = {
 }
 
 _BYTES_PER_MB = 1048576.0
+
+
+def clear_dir_cache() -> None:
+    """清空「客服专用」文件夹 id 缓存（刷新按钮 / 改文件夹后调用）"""
+    _CS_DIR_CACHE.clear()
 
 
 class MaterialSpace(BaseRequest):
@@ -164,6 +179,45 @@ class MaterialSpace(BaseRequest):
     # ------------------------------------------------------------------ #
     # 文件夹 / 容量
     # ------------------------------------------------------------------ #
+
+    def get_cs_dir_id(self, force: bool = False) -> Optional[int]:
+        """解析图片空间里「客服专用」文件夹的 ``dir_id``。
+
+        图片空间只展示该文件夹下的图片（不展示全店素材）。文件夹名各店可能
+        不同，因此按名称关键字 :data:`CS_DIR_NAME_KEYWORD` 匹配，而非写死 id；
+        结果按 ``shop_id`` 缓存 :data:`_CS_DIR_CACHE_TTL` 秒。
+
+        Args:
+            force: 为 True 时忽略缓存，重新拉取文件夹列表
+
+        Returns:
+            文件夹 id；未找到符合条件的文件夹时返回 ``None``
+        """
+        key = str(self.shop_id or "")
+        if not force and key:
+            cached = _CS_DIR_CACHE.get(key)
+            if cached and (time.time() - cached[0]) < _CS_DIR_CACHE_TTL:
+                return cached[1]
+
+        dir_id: Optional[int] = None
+        for d in self.list_dirs():
+            name = str(d.get("name") or "")
+            try:
+                did = int(d.get("id"))
+            except (TypeError, ValueError):
+                continue
+            # 只认正数（0=根目录，-1=视频空间，均非普通文件夹）
+            if did > 0 and CS_DIR_NAME_KEYWORD in name:
+                dir_id = did
+                break
+
+        if key:
+            _CS_DIR_CACHE[key] = (time.time(), dir_id)
+        if dir_id is None:
+            self.logger.warning(
+                "图片空间未找到名称含 %r 的文件夹 (shop_id=%s)", CS_DIR_NAME_KEYWORD, key
+            )
+        return dir_id
 
     def list_dirs(self) -> List[Dict[str, Any]]:
         """拉取文件夹清单。
@@ -363,4 +417,11 @@ class MaterialSpace(BaseRequest):
         }
 
 
-__all__ = ["MaterialSpace", "SPACE_IMAGE", "SPACE_VIDEO", "CHECK_STATUS_PASSED"]
+__all__ = [
+    "MaterialSpace",
+    "SPACE_IMAGE",
+    "SPACE_VIDEO",
+    "CHECK_STATUS_PASSED",
+    "CS_DIR_NAME_KEYWORD",
+    "clear_dir_cache",
+]

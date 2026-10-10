@@ -3,7 +3,7 @@
 浮层，挂在聊天输入框上方。从拼多多「图片空间 / 视频空间」挑选素材，点击后
 由上层（ChatArea → ChatUI）直接发给当前会话买家。
 
-- 双 Tab：图片空间（`dir_id` 省略=全店）/ 视频空间（`dir_id=-1`，客服专用视频）
+- 双 Tab：图片空间（**仅「客服专用」文件夹**，按文件夹名解析 dir_id）/ 视频空间（`dir_id=-1`，客服专用视频）
 - 支持文件名搜索、分页、审核状态标记
 - 列表拉取全部在 QThread 后台完成（含 MaterialSpace 的 cookie 读取，禁止在 UI 线程建）
 - 缩略图复用 `ui.chat.media.image_loader.ImageLoaderManager`（QPixmap 仅在主线程创建）
@@ -41,6 +41,11 @@ _THUMB_SIZE = 96
 def _clear_cache() -> None:
     """清空素材列表缓存（刷新按钮 / 账号切换时调用）"""
     _LIST_CACHE.clear()
+    try:
+        from Channel.pinduoduo.utils.API.material_space import clear_dir_cache
+        clear_dir_cache()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class _MaterialLoader(QThread):
@@ -65,23 +70,39 @@ class _MaterialLoader(QThread):
 
     def run(self):
         try:
-            from Channel.pinduoduo.utils.API.material_space import MaterialSpace
+            from Channel.pinduoduo.utils.API.material_space import (
+                CS_DIR_NAME_KEYWORD, MaterialSpace,
+            )
             ms = MaterialSpace(str(self._shop_id), str(self._user_id))
+
+            dir_id = None
+            if self._space == MaterialSpace.SPACE_IMAGE:
+                # 图片空间只取「客服专用」文件夹（按文件夹名解析，不写死 id）
+                dir_id = ms.get_cs_dir_id()
+                if dir_id is None:
+                    self.result.emit(
+                        self._space, self._page, self._keyword, None,
+                        f"图片空间未找到「{CS_DIR_NAME_KEYWORD}专用」文件夹",
+                    )
+                    return
+
             data = ms.list_files(
                 space=self._space,
                 page=self._page,
                 page_size=self._page_size,
                 keyword=self._keyword,
+                dir_id=dir_id,
             )
             if not data.get("success"):
+                msg = data.get("error_msg") or "未知错误"
                 self.result.emit(self._space, self._page, self._keyword, None,
-                                 data.get("error_msg") or "获取素材失败")
+                                 f"获取素材失败：{msg}")
                 return
             _LIST_CACHE[(self._space, self._page, self._keyword)] = (time.time(), data)
             self.result.emit(self._space, self._page, self._keyword, data, "")
         except Exception as e:  # noqa: BLE001
             logger.error(f"拉取素材列表异常: {e}", exc_info=True)
-            self.result.emit(self._space, self._page, self._keyword, None, str(e))
+            self.result.emit(self._space, self._page, self._keyword, None, f"加载异常：{e}")
 
 
 class MaterialCard(QFrame):
@@ -297,6 +318,8 @@ class MaterialPopup(QFrame):
         self._tab_bar.setObjectName("MaterialTabBar")
         self._tab_bar.addTab("图片空间")
         self._tab_bar.addTab("视频空间")
+        self._tab_bar.setTabToolTip(0, "仅显示图片空间「客服专用」文件夹下的图片")
+        self._tab_bar.setTabToolTip(1, "客服专用视频库")
         self._tab_bar.setExpanding(False)
         self._tab_bar.setDrawBase(False)
         self._tab_bar.currentChanged.connect(self._on_space_changed)
@@ -434,6 +457,9 @@ class MaterialPopup(QFrame):
     def _goto_page(self, page: int):
         if page < 1:
             return
+        pages = max(1, (self._total + _PAGE_SIZE - 1) // _PAGE_SIZE)
+        if page > pages:
+            return
         self._page = page
         self._reload(use_cache=True)
 
@@ -499,7 +525,7 @@ class MaterialPopup(QFrame):
         if (space, page, keyword) != (self._space, self._page, self._keyword):
             return
         if not data:
-            self._set_status(f"加载失败：{error[:60]}")
+            self._set_status((error or "加载失败")[:80])
             return
         self._render(data)  # type: ignore[arg-type]
 
@@ -530,7 +556,7 @@ class MaterialPopup(QFrame):
         self._total = int(data.get("total") or len(items))
 
         self._update_pager()
-        space_label = "图片空间" if self._space == "image" else "视频空间"
+        space_label = "图片空间·客服专用" if self._space == "image" else "视频空间"
 
         if not items:
             self._set_status(f"{space_label}：无素材" + (f"（关键词「{self._keyword}」）" if self._keyword else ""))
