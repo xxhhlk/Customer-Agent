@@ -311,7 +311,7 @@ class CustomerAgent(Bot):
                         with CustomerAgent._km_lock:
                             if CustomerAgent._shared_knowledge_manager is None:
                                 from Agent.CustomerAgent.lancedb_proxy import get_knowledge_manager_proxy
-                                CustomerAgent._shared_knowledge_manager = get_knowledge_manager_proxy()
+                                CustomerAgent._shared_knowledge_manager = cast('KnowledgeManager', get_knowledge_manager_proxy())
                             self.knowledge_manager = CustomerAgent._shared_knowledge_manager
 
                 # 获取配置

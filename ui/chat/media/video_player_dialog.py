@@ -10,7 +10,7 @@
 
 import hashlib
 import os
-from typing import Optional
+from typing import Optional, cast
 
 import requests
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QRectF, QSizeF
@@ -240,7 +240,7 @@ class VideoPlayerDialog(QDialog):
         """绑定视频尺寸信号（必须在 setVideoOutput 之后调用，幂等）"""
         if self._sink_bound:
             return
-        sink = self._play_bar.player.videoSink()
+        sink = cast(QMediaPlayer, self._play_bar.player).videoSink()
         if sink is not None:
             sink.videoSizeChanged.connect(self._on_video_size_changed)
             self._sink_bound = True
@@ -271,7 +271,7 @@ class VideoPlayerDialog(QDialog):
     def _poll_video_size(self):
         """轮询读取当前视频尺寸，有效则应用并停止轮询"""
         try:
-            sink = self._play_bar.player.videoSink()
+            sink = cast(QMediaPlayer, self._play_bar.player).videoSink()
             if sink is None:
                 return
             size = sink.videoSize()

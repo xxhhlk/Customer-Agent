@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, List
+from typing import TYPE_CHECKING, Optional, List, cast
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QScrollArea, QFrame, QGridLayout, QFileDialog, QDialog,
@@ -859,7 +859,7 @@ class KnowledgeUI(QWidget):
         if self.knowledge_manager is None:
             try:
                 from Agent.CustomerAgent.lancedb_proxy import get_knowledge_manager_proxy
-                self.knowledge_manager = get_knowledge_manager_proxy()
+                self.knowledge_manager = cast('KnowledgeManager', get_knowledge_manager_proxy())
                 logger.info("✅ 知识库管理器代理初始化成功（lancedb 子进程模式）")
             except Exception as e:
                 logger.error(f"❌ 知识库管理器初始化失败: {e}")
@@ -876,14 +876,14 @@ class KnowledgeUI(QWidget):
 
         class _KMStarter(QThread):
             done = pyqtSignal(bool)
-            def __init__(self, parent):
+            def __init__(self, parent: 'KnowledgeUI'):
                 super().__init__(parent)
                 self._parent = parent
             def run(self):
                 try:
                     from Agent.CustomerAgent.lancedb_proxy import get_knowledge_manager_proxy
                     km = get_knowledge_manager_proxy()
-                    self._parent.knowledge_manager = km
+                    self._parent.knowledge_manager = cast('KnowledgeManager', km)
                     self.done.emit(True)
                 except Exception as e:
                     logger.error(f"❌ 后台启动 lancedb 子进程失败: {e}")

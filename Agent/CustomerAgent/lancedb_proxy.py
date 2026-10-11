@@ -133,7 +133,7 @@ class KnowledgeProxy(Knowledge):
         self._ipc = ipc_client
         # Knowledge 基类需要的属性
         self.contents_db = None  # contents_db 在子进程中，主进程不直接访问
-        self.readers = []
+        self.readers = {}
         # 与子进程侧 KnowledgeManager 保持一致：从 config 读取 knowledge_base.max_results。
         # agno Agent 的检索条数由本属性决定（工具搜索 + 每轮 <references> 注入），
         # 此前硬编码 3 导致 config 里配的值对 AI 检索不生效（仅 UI 搜索生效）。

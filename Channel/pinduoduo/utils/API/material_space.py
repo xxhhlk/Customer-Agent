@@ -205,7 +205,7 @@ class MaterialSpace(BaseRequest):
         for d in self.list_dirs():
             name = str(d.get("name") or "")
             try:
-                did = int(d.get("id"))
+                did = int(d.get("id") or 0)
             except (TypeError, ValueError):
                 continue
             # 只认正数（0=根目录，-1=视频空间，均非普通文件夹）
