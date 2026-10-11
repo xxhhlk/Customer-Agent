@@ -448,6 +448,36 @@ class CustomerAgent(Bot):
                 self.logger.warning(f"[record_staff_turn] 补写人工接管轮次失败: {e}")
 
     @staticmethod
+    def _load_recent_history_block(shop_id: str, buyer_uid: str, current_content: str, limit: int = 30) -> str:
+        """读取该买家近期聊天记录并格式化为上下文块；无记录时返回空串。
+
+        同步 DB 访问，调用方需用 asyncio.to_thread 包装。
+        """
+        from services.message_persistence import message_persistence_service
+
+        rows = message_persistence_service.get_messages_by_uid(shop_id, buyer_uid, limit=limit + 5)
+        if not rows:
+            return ""
+        current = (current_content or "").strip()
+        lines = []
+        for row in rows[-limit:]:
+            msg_type = row.get("msg_type") or ""
+            if msg_type == "image":
+                content = "[图片]"
+            elif msg_type == "video":
+                content = "[视频]"
+            else:
+                content = (row.get("content") or "").strip()
+            if not content or (current and content == current):
+                continue
+            ts = (row.get("timestamp") or "")[:16].replace("T", " ")
+            who = "买家" if row.get("direction") == "inbound" else "客服"
+            lines.append(f"{who}({ts}): {content[:200]}")
+        if not lines:
+            return ""
+        return "[历史聊天记录]\n" + "\n".join(lines) + "\n"
+
+    @staticmethod
     def _is_safe_media_url(url: str) -> bool:
         """校验媒体 URL：仅允许 http(s) 且指向公网地址（防 SSRF）。
 
@@ -559,6 +589,44 @@ class CustomerAgent(Bot):
                 "from_uid": str(context.kwargs.from_uid),
             }
 
+            # 预读 session 到缓存，避免 _aread_or_create_session 中的同步 DB 读取阻塞事件循环
+            # arun() → _arun() → _aread_or_create_session() 在同步 DB 路径上会通过
+            # asyncio.to_thread 读取，这里在线程池中预读并设置 agent._cached_session，
+            # 让后续 _aread_or_create_session 命中缓存直接返回，省一次线程池调度。
+            self.logger.info("[async_reply] 开始预读 session")
+            _pre_session: Optional[AgentSession] = None
+            try:
+                if self._agent.db is not None:
+                    # 使用同步的 _read_session 在线程池中读取（注意：_read_or_create_session 已被 patch 为 async，
+                    # 不能在线程池中直接调用；_read_session 仍是同步方法）
+                    _pre_session = cast(Optional[AgentSession], await asyncio.to_thread(
+                        self._agent._read_session, session_id=session_id
+                    ))
+                    # 设置缓存，让 _aread_or_create_session 命中缓存
+                    # _read_session 返回类型是 Union[AgentSession, TeamSession, WorkflowSession, None]，
+                    # 但我们用的是单 agent 模式，实际只会返回 AgentSession，用 cast 安抚类型检查器
+                    self._agent._cached_session = _pre_session
+                    self.logger.info("[async_reply] 预读 session 完成")
+            except Exception as e:
+                self.logger.warning(f"[async_reply] 预读 session 失败（将继续）: {e}")
+
+            # 会话还没有任何 run（首次 AI 介入）时，从消息库补近期聊天记录：
+            # 早期人工/网页端的沟通（已下单、已授权、买家发过的机器码等）不在
+            # agno session 里，不补的话模型会当作从未发生过
+            if not getattr(_pre_session, "runs", None):
+                try:
+                    _history_block = await asyncio.to_thread(
+                        self._load_recent_history_block,
+                        str(context.kwargs.shop_id),
+                        str(context.kwargs.from_uid),
+                        str(context.content or ""),
+                    )
+                    if _history_block:
+                        final_input = _history_block + final_input
+                        self.logger.info("[async_reply] 已注入近期聊天记录")
+                except Exception as e:
+                    self.logger.warning(f"[async_reply] 加载历史聊天记录失败（将继续）: {e}")
+
             # 图片/视频消息传给视觉大模型（llm.send_image_to_ai 开关实时读取，免重启热开关）
             # 图片：URL 直传优先，走 agno images 参数（自动转 image_url 内容块）；
             # 视频：agno OpenAILike 不支持 videos 参数，构造带 video_url 内容块的 Message 原样透传。
@@ -590,26 +658,6 @@ class CustomerAgent(Bot):
                         {"type": "text", "text": final_input},
                         {"type": "video_url", "video_url": {"url": _video, "fps": _fps}},
                     ])
-
-            # 预读 session 到缓存，避免 _aread_or_create_session 中的同步 DB 读取阻塞事件循环
-            # arun() → _arun() → _aread_or_create_session() 在同步 DB 路径上会通过
-            # asyncio.to_thread 读取，这里在线程池中预读并设置 agent._cached_session，
-            # 让后续 _aread_or_create_session 命中缓存直接返回，省一次线程池调度。
-            self.logger.info("[async_reply] 开始预读 session")
-            try:
-                if self._agent.db is not None:
-                    # 使用同步的 _read_session 在线程池中读取（注意：_read_or_create_session 已被 patch 为 async，
-                    # 不能在线程池中直接调用；_read_session 仍是同步方法）
-                    _pre_session = await asyncio.to_thread(
-                        self._agent._read_session, session_id=session_id
-                    )
-                    # 设置缓存，让 _aread_or_create_session 命中缓存
-                    # _read_session 返回类型是 Union[AgentSession, TeamSession, WorkflowSession, None]，
-                    # 但我们用的是单 agent 模式，实际只会返回 AgentSession，用 cast 安抚类型检查器
-                    self._agent._cached_session = cast(Optional[AgentSession], _pre_session)
-                    self.logger.info("[async_reply] 预读 session 完成")
-            except Exception as e:
-                self.logger.warning(f"[async_reply] 预读 session 失败（将继续）: {e}")
 
             self.logger.info("[async_reply] 开始调用 arun")
             # 给 arun 加 60 秒超时，避免某个步骤无限挂起导致事件循环冻结

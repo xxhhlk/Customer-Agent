@@ -231,6 +231,21 @@ class DebounceProcessorAdapter:
             return wrapper
 
     @staticmethod
+    def _context_line(context: Context) -> str:
+        """把任意类型消息压成一行文本；非文本类型带类型标记，避免合并时静默丢失。"""
+        content = str(context.content or "").strip()
+        name = context.type.name
+        if name == "TEXT":
+            return content
+        if name == "IMAGE":
+            return f"[图片] {content}".rstrip()
+        if name == "VIDEO":
+            return f"[视频] {content}".rstrip()
+        if name == "EMOTION":
+            return content or "[表情]"
+        return f"[{name}] {content}".rstrip() if content else f"[{name}]"
+
+    @staticmethod
     def _absorb_dropped(wrapper: MessageWrapper, dropped: list) -> None:
         """把因人工接管而不再处理的已收集消息并入首条。
 
@@ -242,8 +257,9 @@ class DebounceProcessorAdapter:
             return
         texts = [str(context.content)] if context.content else []
         for item in dropped:
-            if item.context.type.name == "TEXT" and item.context.content:
-                texts.append(str(item.context.content))
+            line = DebounceProcessorAdapter._context_line(item.context)
+            if line:
+                texts.append(line)
         if texts:
             context.content = "\n".join(texts)
 
@@ -253,13 +269,14 @@ class DebounceProcessorAdapter:
         last_wrapper = wrappers[-1]
         merged_context = last_wrapper.context
 
-        # 合并消息内容
+        # 合并消息内容（非文本类型降级为带标记的一行，不丢弃）
         if merged_context.type.name == "TEXT":
             texts = []
             for w in wrappers:
-                if w.context.type.name == "TEXT" and w.context.content:
-                    texts.append(w.context.content)
-            
+                line = self._context_line(w.context)
+                if line:
+                    texts.append(line)
+
             if texts:
                 merged_context.content = "\n".join(texts)
 

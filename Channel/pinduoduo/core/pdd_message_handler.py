@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 class MessageHandlerMixin:
     """消息处理 Mixin"""
 
+    # 平台侧系统提示（风控提醒等）：不是人工回复，既不该触发 60s cooldown，
+    # 也不该作为「客服消息」注入 AI 上下文
+    _PLATFORM_NOTICE_KEYWORDS = (
+        "发送站外链接存在风险",
+        "请设置【商品说明书】",
+    )
+
     # Attributes provided by PDDChannel host class
     channel_name: str
     logger: Any
@@ -191,6 +198,11 @@ class MessageHandlerMixin:
 
         注意：人工客服消息的 from_uid 是店铺侧账号，to_uid 才是买家。
         """
+        content = str(context.content or "")
+        if any(k in content for k in self._PLATFORM_NOTICE_KEYWORDS):
+            self.logger.info(f"平台系统提示，不按人工回复处理: {content[:80]}")
+            return
+
         buyer_uid = context.kwargs.to_uid
         if buyer_uid:
             try:
