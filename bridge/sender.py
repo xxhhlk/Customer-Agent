@@ -22,12 +22,11 @@ class ReplySender:
     def send_image(self, shop_id, user_id, recipient_uid, image_url: str) -> Any:
         raise NotImplementedError
 
-    def send_video(self, shop_id, user_id, recipient_uid, video_url: str, info: Optional[dict] = None) -> Any:
-        """发送视频消息。
+    def send_library_file(self, shop_id, user_id, recipient_uid, file_url: str) -> Any:
+        """发送素材库文件（服务端构造并投递消息，视频/图片均可）。
 
-        info 为 PDD 要求的视频元数据（download_url/file_id/size/status/preview），
-        缺失会导致 ``result=ok`` 但静默不投递；素材发送请用
-        ``MaterialSpace.build_video_info(item)`` 生成。
+        ``file_url`` 需为素材库条目的原片 url（``MaterialSpace`` 列表的 ``url``），
+        转码地址（``.f30.mp4``）不被接受；转发历史消息需先用 ``file_id`` 回查。
         """
         raise NotImplementedError
 
@@ -52,9 +51,9 @@ class PinduoduoSender(ReplySender):
         from Channel.pinduoduo.utils.API.send_message import SendMessage
         return SendMessage(str(shop_id), str(user_id)).send_image(recipient_uid, image_url)
 
-    def send_video(self, shop_id, user_id, recipient_uid, video_url, info=None):
+    def send_library_file(self, shop_id, user_id, recipient_uid, file_url):
         from Channel.pinduoduo.utils.API.send_message import SendMessage
-        return SendMessage(str(shop_id), str(user_id)).send_video(recipient_uid, video_url, info=info)
+        return SendMessage(str(shop_id), str(user_id)).send_library_file(recipient_uid, file_url)
 
     def send_product_card(self, shop_id, user_id, recipient_uid, goods_id, biz_type=2):
         from Channel.pinduoduo.utils.API.send_message import SendMessage

@@ -1,5 +1,5 @@
 from ..base_request import BaseRequest
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 class SendMessage(BaseRequest):
@@ -84,76 +84,23 @@ class SendMessage(BaseRequest):
             self.logger.debug(f"发送图片消息成功: {result}")
             return result
 
-    def send_video(self, recipient_uid, video_url, info: Optional[dict] = None):
+    def send_library_file(self, recipient_uid, file_url):
         """
-        发送视频消息（type=14）
+        发送素材库文件（服务端构造消息后投递）
 
-        Args:
-            recipient_uid: 接收方 UID
-            video_url: 视频 URL
-            info: 视频元数据，需包含 preview.url / duration 等，
-                  缺少该字段时 PDD 会返回 error_code=30000 系统错误
+        网页工作台「素材选择」面板使用的接口：仅需买家 uid 与素材库文件的
+        url（素材列表返回的原片地址），服务端据此构造并投递消息
+        （视频 type=14 / 图片 type=1）。
         """
-        url = "https://mms.pinduoduo.com/plateau/chat/send_message"
-        message = {
-            "to": {"role": "user", "uid": recipient_uid},
-            "from": {
-                "role": "mall_cs"
-            },
-            "content": video_url,
-            "msg_id": None,
-            "type": 14,
-            "is_aut": 0,
-            "manual_reply": 1,
+        url = "https://mms.pinduoduo.com/plateau/message/library_file/send"
+        data = {
+            "uid": recipient_uid,
+            "url": file_url,
         }
-        # 注意：不传 chat_type 字段，与 send_text 保持一致
-        # 之前传 "chat_type": "cs" 时，API 返回 success:True 但消息实际未送达
-        # download_url 由服务端下发，提交时携带会导致 error_code=40003「视频参数错误」
-        if info and isinstance(info, dict):
-            message["info"] = {k: v for k, v in info.items() if k != "download_url"}
-
-        import json
-        payload = {
-            "data": {
-                "cmd": "send_message",
-                "request_id": self.generate_request_id(),
-                "message": message,
-            },
-            "client": "WEB"
-        }
-        self.logger.info(f"[SEND_VIDEO] ===== 发送视频消息 PAYLOAD =====")
-        self.logger.info(f"[SEND_VIDEO] recipient={recipient_uid}, "
-                        f"video_url={video_url[:120]}..., "
-                        f"video_url_len={len(video_url) if video_url else 0}, "
-                        f"has_info={'YES' if info else 'NO'}")
-        self.logger.info(f"[SEND_VIDEO] 完整 message: {json.dumps(message, ensure_ascii=False, default=str)}")
-        self.logger.info(f"[SEND_VIDEO] 完整 payload: {json.dumps(payload, ensure_ascii=False, default=str)}")
-
-        data = payload
-
         result = self.post(url, json_data=data)
         if result:
-            self.logger.info(f"[SEND_VIDEO] ===== 发送视频消息 RESPONSE =====")
-            self.logger.info(f"[SEND_VIDEO] 完整响应: {json.dumps(result, ensure_ascii=False, default=str)}")
-            if result.get("success") == True:
-                inner = result.get("result", {})
-                # PDD 视频消息额外校验：result.result 为 "fail" 时表示参数错误等
-                if inner.get("result") == "fail":
-                    reason = inner.get("reason", "未知错误")
-                    self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: result=fail, reason={reason}")
-                    return result
-                error_code = inner.get("error_code")
-                if error_code and error_code != 0:
-                    error_msg = inner.get("error", "未知错误")
-                    self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: error_code={error_code}, error={error_msg}")
-                    return result
-                self.logger.info(f"[SEND_VIDEO] 发送视频消息成功: msg_id={inner.get('msg_id')}")
-            else:
-                self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: success=False, result={result}")
-            return result
-        else:
-            self.logger.error(f"[SEND_VIDEO] 发送视频消息失败: 请求返回None")
-            return None
+            self.logger.debug(f"发送素材库文件: {result}")
+        return result
 
 
     def send_mallGoodsCard(self, recipient_uid, goods_id, biz_type: int = 2):

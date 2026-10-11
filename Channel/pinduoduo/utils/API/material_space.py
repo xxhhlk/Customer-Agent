@@ -9,7 +9,8 @@
   业务上图片空间**只取「客服专用」文件夹**，由 `get_cs_dir_id()` 按文件夹名解析。
 - 视频空间（客服专用视频）：**`dir_id = -1`**（不在文件夹列表 `dirListV2` 里的隐藏目录）。
 - 列表接口 **不需要 anti-content**，仅需 cookies。
-- 素材项 `id` == 消息 `info.file_id`；发视频的 `download_url` 取素材 `transcode_url`（`.f30.mp4`）。
+- 素材项 `id` == 消息 `info.file_id`；发送素材走 `/plateau/message/library_file/send`
+  （传素材原片 url，服务端构造并投递消息）。
 
 所有请求均为只读（list / dir / sumSize），不会改动素材库。
 """
@@ -176,6 +177,32 @@ class MaterialSpace(BaseRequest):
             "page_size": page_size,
             "error_msg": "",
         }
+
+    def find_file(self, file_id, space: str = SPACE_VIDEO) -> Optional[Dict[str, Any]]:
+        """按素材 id 查找素材条目（转发历史消息时用它反查原片 url）。
+
+        先查指定空间，未命中再查全店（``dir_id`` 省略），翻页至取尽。
+        未找到（素材已删除等）返回 ``None``。
+        """
+        target = str(file_id or "")
+        if not target:
+            return None
+        spaces = [self._normalize_space(space)]
+        if spaces[0] != SPACE_IMAGE:
+            spaces.append(SPACE_IMAGE)
+        for sp in spaces:
+            page = 1
+            while page <= 10:
+                data = self.list_files(space=sp, page=page, page_size=100)
+                if not data.get("success"):
+                    break
+                for it in data.get("items") or []:
+                    if str(it.get("id")) == target:
+                        return it
+                if page * 100 >= int(data.get("total") or 0):
+                    break
+                page += 1
+        return None
 
     # ------------------------------------------------------------------ #
     # 文件夹 / 容量
@@ -348,7 +375,7 @@ class MaterialSpace(BaseRequest):
 
     @staticmethod
     def build_video_info(item: Dict[str, Any]) -> Dict[str, Any]:
-        """从素材项构造 PDD `send_message` 的视频 ``info`` 字段。
+        """从素材项构造视频消息的 ``info`` 字段（入库快照，与服务端消息同构）。
 
         映射规则（逐字段实测，见调研文档 §3.2）：
             file_id      ← 素材 id
@@ -381,10 +408,11 @@ class MaterialSpace(BaseRequest):
         """给出「发送该素材」所需的字段集合，供发送层直接消费。
 
         Returns:
-            ``{"context_type": "image"|"video", "url": str, "info": dict|None,
+            ``{"context_type": "image"|"video", "url": str, "content": str,
                "media_meta": str|None}``
-            - 图片：``url`` = 素材 url，``info`` = None（PDD 图片消息非必需）
-            - 视频：``url`` = download_url，``info`` = 完整 info，
+            - 图片：``url`` = 发送地址（同 ``content``）
+            - 视频：``url`` = 素材原片 url（发送用，服务端不接受转码地址）；
+              ``content`` = 转码地址（入库用，与服务端投递的消息一致）；
               ``media_meta`` = 供入库/转发的 JSON（含 raw_info）
         """
         if str(item.get("file_type") or "").lower() == "video":
@@ -407,15 +435,16 @@ class MaterialSpace(BaseRequest):
                 media_meta = None
             return {
                 "context_type": "video",
-                "url": info["download_url"],
-                "info": info,
+                "url": item.get("url") or "",
+                "content": info["download_url"],
                 "media_meta": media_meta,
             }
 
+        url = item.get("url") or item.get("transcode_url") or ""
         return {
             "context_type": "image",
-            "url": item.get("url") or item.get("transcode_url") or "",
-            "info": None,
+            "url": url,
+            "content": url,
             "media_meta": None,
         }
 

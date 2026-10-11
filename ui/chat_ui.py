@@ -56,9 +56,7 @@ class _MaterialSendWorker(QThread):
     """后台发送素材空间中的图片/视频，并持久化到消息库。
 
     - 图片：`send_image(uid, url)`（type=1，content=图片 URL）
-    - 视频：`send_video(uid, download_url, info)`，info 由
-      `MaterialSpace.build_video_info()` 生成（含 file_id/download_url/size/status，
-      缺这些字段会 result=ok 但静默不投递）
+    - 视频：`send_library_file(uid, url)`（传素材原片地址，由服务端构造并投递消息）
     """
 
     done = pyqtSignal(bool, str, object)  # success, error_msg, msg_dict|None
@@ -78,7 +76,7 @@ class _MaterialSendWorker(QThread):
             payload = MaterialSpace.build_send_payload(self._item)
             ctx_type = payload["context_type"]
             url = payload["url"]
-            info = payload["info"]
+            content = payload.get("content") or url
 
             if not url:
                 self.done.emit(False, "素材没有可用的 URL", None)
@@ -86,9 +84,8 @@ class _MaterialSendWorker(QThread):
 
             sender = SendMessage(str(self._sid), str(self._uid))
             if ctx_type == "video":
-                logger.info("[MATERIAL] 发送视频: file_id=%s, has_info=%s",
-                            (info or {}).get("file_id"), bool(info))
-                result = sender.send_video(str(self._buid), url, info=info)
+                logger.info("[MATERIAL] 发送视频: file_id=%s", self._item.get("id"))
+                result = sender.send_library_file(str(self._buid), url)
             else:
                 logger.info("[MATERIAL] 发送图片: name=%s", self._item.get("name"))
                 result = sender.send_image(str(self._buid), url)
@@ -100,7 +97,7 @@ class _MaterialSendWorker(QThread):
 
             self._notify_staff_intervention(ctx_type)
 
-            msg_dict = self._persist(ctx_type, url, payload.get("media_meta"))
+            msg_dict = self._persist(ctx_type, content, payload.get("media_meta"))
             self.done.emit(True, "", msg_dict or {})
         except Exception as e:
             logger.error(f"[MATERIAL] 发送素材异常: {e}", exc_info=True)
@@ -489,51 +486,27 @@ class ChatUI(QFrame):
                         logger.info(f"[FORWARD] 调用 send_image: target={self._target_uid}")
                         result = sender.send_image(str(self._target_uid), self._cnt)
                     elif self._ctx_type == "video":
-                        # 从 media_meta 还原 PDD 要求的 info 字段。
-                        # 实测结论（docs/material-space-send-research-2026-10-11.md §3.2）：
-                        # info 必须含 download_url / file_id / size / status，
-                        # 只传 preview+duration 时 result=ok 但消息静默不投递。
-                        info = None
+                        # 素材库文件发送接口只接受素材原片 url；历史消息只存了
+                        # 转码地址，先用 file_id 回查素材库换取原片 url
+                        file_id = ""
                         if self._media_meta:
                             try:
                                 import json
                                 meta = json.loads(self._media_meta) if isinstance(self._media_meta, str) else self._media_meta
                                 raw_info = meta.get("raw_info") if isinstance(meta, dict) else None
-                                if raw_info and isinstance(raw_info, dict) and raw_info.get("file_id"):
-                                    # 最优路径：原样回传历史消息的 info（含它自己的 file_id）
-                                    info = dict(raw_info)
-                                    logger.info(
-                                        "[FORWARD] 视频 info 原样回传: file_id=%s, "
-                                        "has_download_url=%s, size=%s, status=%s",
-                                        info.get("file_id"), bool(info.get("download_url")),
-                                        info.get("size"), info.get("status"),
-                                    )
-                                else:
-                                    # 回退：老版本入库缺少完整 raw_info，尽力用 cover/duration 拼装
-                                    cover_url = meta.get("cover_url")
-                                    cover_size = meta.get("cover_size")
-                                    duration = meta.get("duration")
-                                    if cover_url:
-                                        info = {}
-                                        preview = {"url": cover_url}
-                                        if cover_size:
-                                            preview["size"] = cover_size
-                                        info["preview"] = preview
-                                        if duration is not None:
-                                            info["duration"] = duration
-                                        logger.warning(
-                                            "[FORWARD] 视频 info 用旧字段拼凑（缺少完整 raw_info，"
-                                            "可能静默不投递）: cover_url=%s..., duration=%s",
-                                            cover_url[:80], duration,
-                                        )
-                                    else:
-                                        logger.warning("[FORWARD] media_meta 缺少 cover_url: %s", list(meta.keys()))
+                                file_id = str((raw_info or {}).get("file_id") or meta.get("file_id") or "")
                             except Exception as e:
-                                logger.warning(f"构造视频 info 失败: {e}")
-                        else:
-                            logger.warning("[FORWARD] 视频消息缺少 media_meta，将不带 info 字段发送")
-                        logger.info(f"[FORWARD] 调用 send_video: target={self._target_uid}, has_info={bool(info)}")
-                        result = sender.send_video(str(self._target_uid), self._cnt, info=info)
+                                logger.warning(f"[FORWARD] 解析 media_meta 失败: {e}")
+                        item = None
+                        if file_id:
+                            from Channel.pinduoduo.utils.API.material_space import MaterialSpace
+                            item = MaterialSpace(str(self._sid), str(self._uid)).find_file(file_id)
+                        if not item or not item.get("url"):
+                            logger.warning("[FORWARD] 视频原素材不存在或已删除: file_id=%s", file_id)
+                            self.done.emit(False, "原视频素材已不存在，无法转发")
+                            return
+                        logger.info(f"[FORWARD] 发送视频: target={self._target_uid}, file_id={file_id}")
+                        result = sender.send_library_file(str(self._target_uid), item["url"])
                     elif self._ctx_type == "goods_card":
                         # 商品卡片尝试提取 goods_id
                         try:

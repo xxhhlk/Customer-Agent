@@ -2,7 +2,7 @@
 
 > 调研日期：2026-10-11
 > 目标：让客服助手在聊天窗口从拼多多「图片空间 / 视频空间」挑选素材，直接发给当前会话买家
-> 状态：**接口已实测跑通**（用库里已存登录态直连，只读 GET/POST，未发消息、未改库）
+> 状态：**全链路已实测闭环**（2026-10-12 00:2x：发送通道 `library_file/send` 打通，买家实收；历史验证过程与踩坑记录保留于文中）
 > 方法：不启动浏览器、不抢 profile —— 用 `Account.cookies` 直连商家后台，拉真实页面与其前端 JS bundle，
 > 从中还原接口，再用同源请求验证。工具脚本：`scripts/pdd_web_probe.py`
 
@@ -14,13 +14,14 @@
 |---|---|---|
 | 1 | **素材列表接口已找到并实测可用**：`POST /garner/mms/file/list`，**不需要 anti-content** | 实调返回 `success:true`，本店 226 条素材 |
 | 2 | **图片通道现在就能做**：素材项的 `url` 直接喂 `send_image(uid, url)` | `send_image` 线上已跑通（聊天窗转发在用） |
-| 3 | **视频通道的 `info` 结构已解出并逐字段验证**（`file_id` = 素材 `id`、`download_url` = 素材 `transcode_url`、其余映射见 §3.2），现有代码只传了 `preview`+`duration`，正是静默失败的根因 | 库里真实「客服发出」的视频消息 `media_meta.raw_info`，与素材库同名条目逐字段比对 |
+| 3 | ★ **视频发送通道 = `POST /plateau/message/library_file/send`**（body 仅 `{"uid","url"}`，`url` 取素材**原片**地址），服务端构造并投递消息（`template_name=library_video`）。旧的 `send_message` 直发 `type=14` 无论字段怎么拼都被服务端**静默丢弃**（探索过程见 §3.2，已作废） | 2026-10-12 网页面板抓包 + 本系统 HTTP 直调 + `chat/list` 投递闭环 |
 | 4 | **无需浏览器抓包**：图片空间是独立微前端（`mms.pinduoduo.com/material/`，代号 galerie-go），但列表能力由 `garner` 接口提供，纯 HTTP 可调 | 前端 JS 还原 + 实调 |
 | 5 | ★ **「视频空间」= `dir_id: -1`**，与图片空间同一接口、独立计容（20GB vs 10GB） | `/material/service` 页面默认参数 + 实调（5 条视频、含已知 `file_id`） |
 | 6 | 素材**文件夹**、容量、删除/移动/重命名接口也一并拿到 | 见 §2 |
 | 7 | ★ **图片空间业务上只取「客服专用」文件夹**（按文件夹名解析；两账号实测 `182454400` / `190003343`） | 见 §1 / §5.1 |
 | 8 | ★ **素材空间按账号隔离**；缓存与在途请求必须带 `(shop_id, user_id)`，否则会跨账号串数据 | 见 §5.1「账号隔离」 |
 | 9 | **面板顶部标注当前账号（店铺名）**，避免多账号下看错库 | 见 §5.1「账号隔离 · 可见性」 |
+| 10 | 官方网页「请选择视频」面板的**列表接口** = `POST /latitude/user/file/list`（`{file_type_desc:"video", check_status_list:[2], page, page_size}`，无 `dir_id`）——与 `garner` 是两套；本系统素材面板数据源仍用 `garner`（支持文件夹过滤与账号隔离） | 网页面板抓包 |
 
 ---
 
@@ -70,7 +71,7 @@ dir_id = 0   →  sum_size=63,203,902 (60MB)  max_size=10,737,418,240 (10GB)   �
 
 - `https://img.pddpic.com/mms-goods-image/<date>/<uuid>.jpeg` — 商品图
 - `https://img.pddpic.com/mms-material-img/<date>/<uuid>.png` — 素材空间图
-- `https://video5.pddpic.com/i1/.../<hash>.mp4` — 视频源；`.f30.mp4` = 转码后（发送用这个）
+- `https://video5.pddpic.com/i1/.../<hash>.mp4` — 视频原片（发送素材时提交这个）；`.f30.mp4` = 转码版（服务端投递消息的 `content`）
 - `https://img.pddpic.com/mms-material-img/.../<hash>.mp4.pdd.000001.jpeg` — 视频封面
 
 ---
@@ -132,7 +133,7 @@ body: {
 
 要点：
 - `file_type` 取值为 **`"pic"` / `"video"`**（不是 image/video）；
-- 发视频用 `transcode_url`（`.f30.mp4`），封面用 `extra_info.video_cover_url`，时长/宽高在 `extra_info`；
+- 发送用 `url`（原片）；`transcode_url`（`.f30.mp4`）由服务端在投递消息时使用（入库对齐用），封面用 `extra_info.video_cover_url`，时长/宽高在 `extra_info`；
 - `check_status` 2 = 已通过（`-1`/`-2` 为不可用，前端会过滤）。
 
 ### 2.2 其余接口（同一族，已从 JS 还原）
@@ -154,6 +155,42 @@ body: {
 
 ## 3. 发送通道
 
+### 3.0 最终方案：素材库文件发送接口（2026-10-12 实测闭环）
+
+**官方网页工作台「请选择视频」面板使用的接口**（一次性解决视频通道）：
+
+```
+POST https://mms.pinduoduo.com/plateau/message/library_file/send
+body: {"uid": "<买家 uid>", "url": "<素材列表返回的原片 url>"}
+
+→ {"success": true, "error_code": 1000000}
+```
+
+要点：
+
+- **服务端构造并投递消息**：客户端不拼 `info`；服务端补全 `file_id / 转码地址 / 封面 / 时长 / size` 等全部字段。
+  服务端实际投递的消息（titan push 抓包，`template_name = "library_video"`）：
+  ```json
+  {
+    "content": "<素材 transcode_url 即 .f30.mp4>", "type": 14,
+    "info": { "preview": {"url": "<封面>", "size": {"width":1080,"height":1920}},
+              "duration": 106, "size": 35, "download_url": "<.f30.mp4>",
+              "status": 0, "file_id": "46393494801", "url_id": "" },
+    "msg_id": "1791735448521", "template_name": "library_video",
+    "cs_type": 2, "manual_reply": 1
+  }
+  ```
+- **`url` 只接受素材原片地址**（素材列表的 `url` 字段）：
+  - 传 `.f30.mp4` 转码地址 → `{"success": false, "error_code": 40000, "error_msg": "系统错误"}`（实测拒绝）。
+- **投递判定**：该接口响应不含 `msg_id`；以 `plateau/chat/list` 能否拉到该消息为唯一可靠判据（实测多次全部入流）。
+- **转发历史视频**：历史消息只存了转码地址（`content` / `download_url`），无法直接提交；
+  用消息 `info.file_id` 反查素材列表（`MaterialSpace.find_file`）换取原片 `url` 再发送。
+  素材已删除（不在列表）时无法转发，界面明确提示。
+
+> **旧路线（§3.2 / §3.2.1）已作废**：`POST /plateau/chat/send_message` 手工拼 `info` 直发 `type=14`，
+> 穷举 6 组字段（含 `ts/status/is_read/random/client_msg_id/download_url/size 全精度`）全部"成功"但**静默不投递**，
+> 服务端随手丢弃 —— 该现象最终解释为「**通道不对**」而非「字段不对」。保留该节仅作踩坑记录。
+
 ### 3.1 图片（可直接落地）
 
 ```
@@ -165,7 +202,10 @@ message: { to:{role:"user",uid:<买家>}, from:{role:"mall_cs"},
 即现有 `send_image()`（`Channel/pinduoduo/utils/API/send_message.py:55`），**线上已跑通**，素材项 `url` 直接可用。
 （官方前端另会带 `info:{file_id,...}` 做本地占位替换，但实测非必需。）
 
-### 3.2 视频（本仓库的硬阻塞，现已解出）
+### 3.2 视频（旧路线记录，已作废 → 见 §3.0）
+
+> ⚠️ 本节记录的 `send_message` 手工直发 `type=14` 路线最终被证伪：所有字段组合均被服务端静默丢弃（通道不对）。
+> 最终方案是 §3.0 的 `library_file/send`。本节保留仅作踩坑与字段映射参考。
 
 真实「客服发出」的视频消息（库内 `chat_message_records`，`media_meta.raw_info` 即原始 `info`）：
 
@@ -319,7 +359,8 @@ POST /garner/mms/file/createVideo                             # 登记到素材�
 ### 发送行为
 
 - 图片：`send_image(uid, 素材.url)` → `type=1`
-- 视频：`send_video(uid, 素材.transcode_url, info=build_video_info(item))` → `type=14`，info 含 `download_url/file_id/size/status/preview`
+- 视频：`send_library_file(uid, 素材.url)`（**原片地址**；服务端构造并投递，见 §3.0）；入库 content 用 `transcode_url`（与服务端消息一致）
+- 转发视频：`info.file_id` → `MaterialSpace.find_file()` → 原片 `url` → `send_library_file`
 - 成功后按 `reply_source="manual"`、`context_type=image|video` 写入 `chat_message_records`（视频带 `media_meta.raw_info`，便于后续转发），并 `notify_new_message` 让聊天气泡立即出现
 - 发送素材同样视为**人工介入**：`staff_reply_event_manager.notify_staff_reply()` 取消等待中的 AI 流程；`staff_message_cache` 写入 `[图片]` / `[视频]`
 - 失败走 `InfoBar.error` 提示（项目禁 `QMessageBox`）
@@ -332,7 +373,7 @@ POST /garner/mms/file/createVideo                             # 登记到素材�
 | **账号隔离** | 缓存与在途请求 key 含 `(shop_id, user_id)`；修复前存在跨账号串数据竞态（见 §5.1） |
 | 列表缓存 | 采用进程内内存缓存（TTL 180s，切账号即清空）+ 刷新按钮，**未新增 DB 表**（原 §5 阶段 3 的本地缓存表暂缓）；文件夹 id 另有 600s 独立缓存，刷新按钮会一并清空 |
 | 加速器 | 未做；图片空间 9 条单页加载，视频空间 5 条，实测首屏可接受 |
-| 真机发送验证 | 图片链路复用线上已跑通的 `send_image`；**视频链路已用真实代码路径拿到 `result=ok` + `msg_id`**（见 §3.2.1，含素材发送与历史转发两种 info）；剩余未闭环项仅为「投递到真实买家并确认买家可见」 |
+| 真机发送验证 | **全链路已闭环（2026-10-12）**：网页面板实物发送 → 买家手机实收；本系统 HTTP 直调 `library_file/send` → `chat/list` 确认入流（`msg_id=1791735541958` / `1791735820773`） |
 
 ### 账号隔离（2026-10-11 修复）
 
@@ -419,9 +460,10 @@ ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下�
 | # | 操作 | 状态 |
 |---|---|---|
 | V1a | 确认 `file_id = 素材项 id` | ✅ **已完成**（2026-10-11 03:33，用真实消息 `46393494801` 与 `dir_id=-1` 素材库双向比对） |
-| V1b | 用 §3.2 拼装的 `info` 真发一条视频给测试买家 | ⏳ 待做（需发消息，用户配合或夜间窗口执行） |
+| V1b | 视频真机投递端到端 | ✅ **已完成**（2026-10-12 00:2x）：网页面板发送买家实收；`library_file/send` 直调 3 条全部经 `chat/list` 确认入流 |
+| V1c | 转发历史视频（`file_id` 回查原片 url） | ✅ 回查路径已验证（`find_file` 命中 / 不存在返回 `None`）；发送复用 V1b 同一接口 |
 
-V1a 已完成；视频链路只剩「真发一次」的端到端验证。注意：用户 `2026-10-11 03:22` 发出的视频 `file_id=47267892229`（`3c3b67a5…mp4`）**已不在**当前 `dir_id=-1` 列表中（现有 5 条），推测为审核驳回/超期清理（页面文案：驳回未申诉或上传失败的文件 15 天内删除）；同批次的 `46393494801` 仍在库。
+注意：用户 `2026-10-11 03:22` 发出的视频 `file_id=47267892229`（`3c3b67a5…mp4`）**不在**当前 `dir_id=-1` 列表中（现有 5 条），推测为审核驳回/超期清理（页面文案：驳回未申诉或上传失败的文件 15 天内删除）；同批次的 `46393494801` 仍在库 —— 这也是「转发前需 `find_file` 回查、查不到即提示」的原因。
 
 ---
 
@@ -441,3 +483,9 @@ V1a 已完成；视频链路只剩「真发一次」的端到端验证。注意�
   - `temp/importmap.py` / `temp/find_importmap.py` / `temp/scan_mf.py` — 客服微前端（import map 来自
     `https://apistatic.pddpic.com/api-static/faas/chat-eva/dynamic-material-dispatch/26`，其中**不含**素材能力，
     已排除）→ `mf_report.txt`
+- 第三轮（2026-10-11 深夜 ~ 10-12 凌晨：网页面板抓包 + 通道验证）：
+  - `temp/pw_web_probe3.py` — Playwright 探测 v3（CDP 网络捕获 HTTP body/WS 帧 + JS 层 XHR/WS/fetch 挂钩；加载完成后再启用捕获并设缓冲限额，规避低内存 OOM）
+  - `temp/pw_batch.py` + `temp/pw_batch.json` — 命令桥批量下发（点击/求值/截图/网络转储）
+  - `temp/pw_netlog.json` / `pw_jsnet.json` — 抓包产物（含 `library_file/send` 原始请求与 titan push 的服务端消息全文）
+  - `temp/test_library_send.py` / `test_library_send2.py` — HTTP 直调验证（原片 url ✅ / f30 转码地址 ❌ `40000`）
+  - `temp/test_product_send.py` — 改造后产品代码端到端（素材发送 + `find_file` 回查）
