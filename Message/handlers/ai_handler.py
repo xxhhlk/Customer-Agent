@@ -32,6 +32,9 @@ class AIReplyHandler(BaseHandler):
         self.preprocessor = MessagePreprocessor()
         self.auto_reply_types = auto_reply_types or self._default_reply_types()
 
+        # 加载限流配置（消费者层 is_rate_limited 检查依赖此配置）
+        self._load_rate_limit_config()
+
     @staticmethod
     def _default_reply_types() -> set:
         """默认白名单，来自拼多多动作表（单一事实来源）。
@@ -54,9 +57,6 @@ class AIReplyHandler(BaseHandler):
                 ContextType.VIDEO,
                 ContextType.EMOTION,
             }
-
-        # 加载限流配置（消费者层 is_rate_limited 检查依赖此配置）
-        self._load_rate_limit_config()
 
     def _load_rate_limit_config(self):
         """从 config 加载限流配置到全局限流器"""

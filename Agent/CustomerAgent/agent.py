@@ -518,46 +518,6 @@ class CustomerAgent(Bot):
         if context is None:
             return Reply(ReplyType.TEXT, "缺少上下文信息")
 
-        # 限流检查 - 在处理AI请求之前检查用户是否超出限流阈值
-        try:
-            from_uid = context.kwargs.from_uid if hasattr(context, 'kwargs') else None
-            if from_uid:
-                # 获取限流器实例
-                from Message.handlers.rate_limiter import coze_rate_limiter
-                if coze_rate_limiter.is_rate_limited(from_uid):
-                    self.logger.warning(f"用户 {from_uid} 已超出限流阈值，等待人工回复")
-
-                    # 等待人工客服回复，与普通消息一致
-                    from Message.handlers.staff_reply_event import staff_reply_event_manager
-
-                    staff_wait_config = get_config("staff_reply_wait", {})
-                    enable_staff_wait = staff_wait_config.get("enable", True)
-                    wait_seconds = staff_wait_config.get("wait_seconds", 30)
-
-                    if enable_staff_wait and isinstance(from_uid, str):
-                        event_id = staff_reply_event_manager.start_waiting(from_uid)
-                        try:
-                            staff_replied = await staff_reply_event_manager.wait_for_staff_reply(
-                                from_uid, event_id, timeout=wait_seconds
-                            )
-                            if staff_replied:
-                                self.logger.info(f"用户 {from_uid} 限流期间人工客服已回复，跳过兜底回复")
-                                return Reply(ReplyType.TEXT, "")  # 返回空内容跳过后续处理
-                        finally:
-                            staff_reply_event_manager.stop_waiting(from_uid, event_id)
-
-                    # 人工回复超时，发送兜底回复
-                    rate_limit_config = get_config("rate_limit", {})
-                    fallback_replies = rate_limit_config.get("fallback_reply", [])
-
-                    if not fallback_replies:
-                        fallback_replies = ["亲，感谢您的咨询！客服正在为您处理，请稍等片刻。"]
-
-                    reply_text = random.choice(fallback_replies)
-                    return Reply(ReplyType.TEXT, reply_text)
-        except Exception as e:
-            self.logger.error(f"限流检查时出错: {e}")
-
         try:
             assert self._agent is not None, "Agent未初始化"
 
