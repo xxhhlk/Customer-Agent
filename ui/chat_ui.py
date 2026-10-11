@@ -61,7 +61,7 @@ class _MaterialSendWorker(QThread):
       缺这些字段会 result=ok 但静默不投递）
     """
 
-    done = pyqtSignal(bool, str, dict)  # success, error_msg, msg_dict|None
+    done = pyqtSignal(bool, str, object)  # success, error_msg, msg_dict|None
 
     def __init__(self, shop_id, user_id, buyer_uid, item: dict, parent=None):
         super().__init__(parent)
@@ -113,7 +113,9 @@ class _MaterialSendWorker(QThread):
             return False, str(result)
         inner = result.get("result") or {}
         if inner.get("result") == "fail":
-            return False, f"param error: {inner.get('reason')}"
+            code = inner.get("error_code")
+            detail = inner.get("error") or inner.get("reason") or "未知错误"
+            return False, f"{detail}（error_code={code}）" if code else detail
         if inner.get("error_code") and inner.get("error_code") != 0:
             return False, f"error_code={inner.get('error_code')} {inner.get('error', '')}"
         return True, ""

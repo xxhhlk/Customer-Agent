@@ -197,6 +197,32 @@ message: { to:{role:"user",uid:<买家>}, from:{role:"mall_cs"},
 
 > **「素材项 id = 消息 info.file_id」至此确认为真**（§7 的 V1 已验证一半）。
 
+### 3.2.1 ★ 提交时必须剔除 `download_url`（2026-10-11 真机实测修正）
+
+**上面的 `info` 结构是服务端「下发」的形态，不是客户端「提交」的形态。**
+真机发送时携带 `download_url` → `error_code = 40003「视频参数错误」`。
+
+实测矩阵（`temp/probe_40003.py`，向不存在的 uid 发送，不打扰真人）：
+
+| # | 提交的 `info` | 响应 |
+|---|---|---|
+| A | `{download_url, duration, file_id, preview, size, status}` | ❌ `result=fail`（`20010`） |
+| B | **去掉 `download_url`**，其余不变（`size=35.29`） | ✅ **`result=ok`** + `msg_id` |
+| C | 去掉 `download_url` + `size` 全精度 | ✅ **`result=ok`** + `msg_id` |
+
+→ **`download_url` 是 40003 的唯一诱因；`size` 精度无关**（`35.29` 同样通过，故保留 `round(…, 2)`）。
+→ 服务端返回的 `msg_info` 是**回显**的简版（同样不含 `download_url`），可用于核对。
+
+**修法**：在 `SendMessage.send_video()` 里统一剔除 —— 一处生效，覆盖「素材发送」与「历史消息转发」两条路径：
+
+```python
+message["info"] = {k: v for k, v in info.items() if k != "download_url"}
+```
+
+`content` 仍用 `.f30.mp4`（= 素材 `transcode_url`），**不要**改成原片 `url`。
+
+> 历史踩坑备份：该结论与旧代码注释「`download_url` 会导致 40003」一致，此前因只比对「服务端下发」的 `info` 而误判为可提交字段。
+
 **与现有代码的差异（根因）** —— `ui/chat_ui.py:356-402` 转发视频时只构造了：
 
 ```python
@@ -306,7 +332,7 @@ POST /garner/mms/file/createVideo                             # 登记到素材�
 | **账号隔离** | 缓存与在途请求 key 含 `(shop_id, user_id)`；修复前存在跨账号串数据竞态（见 §5.1） |
 | 列表缓存 | 采用进程内内存缓存（TTL 180s，切账号即清空）+ 刷新按钮，**未新增 DB 表**（原 §5 阶段 3 的本地缓存表暂缓）；文件夹 id 另有 600s 独立缓存，刷新按钮会一并清空 |
 | 加速器 | 未做；图片空间 9 条单页加载，视频空间 5 条，实测首屏可接受 |
-| 真机发送验证 | 图片链路复用线上已跑通的 `send_image`；**视频链路仍需真发一条给测试买家**确认端到端（未做，避免误发真实客户） |
+| 真机发送验证 | 图片链路复用线上已跑通的 `send_image`；**视频链路已用真实代码路径拿到 `result=ok` + `msg_id`**（见 §3.2.1，含素材发送与历史转发两种 info）；剩余未闭环项仅为「投递到真实买家并确认买家可见」 |
 
 ### 账号隔离（2026-10-11 修复）
 
@@ -350,9 +376,27 @@ ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下�
 
 ### 复现过的坑（重要）
 
+**① QThread 引用未清 → 进程 abort**
+
 `_MaterialLoader` 用 `worker.finished.connect(worker.deleteLater)` 后仍从 `self._worker` 访问它 → `RuntimeError: wrapped C/C++ object ... has been deleted`。
 该异常若发生在 Qt 信号槽（如 `QTabBar.currentChanged`）内，PyQt6 会直接 `qFatal` → 进程 **abort（`0xC0000409`，崩溃点 Qt6Core.dll）**。
 **结论：后台线程对象必须在线程结束后把 Python 引用清空**（见 `MaterialPopup._on_worker_finished` / `_current_worker`），不要留指向已销毁 C++ 包装的引用。
+
+**② 信号参数类型与 `None` 不兼容 → 错误提示发不出来（2026-10-11 修复）**
+
+`_MaterialSendWorker.done = pyqtSignal(bool, str, dict)` 第 3 参声明为 `dict`，而三条失败路径都传 `None`
+（`emit(False, err, None)`）→ PyQt6 抛 `TypeError`。后果：
+
+- `done` 信号**根本没发出去** → `_on_material_send_done` 不执行 → **InfoBar 不弹、界面无任何反馈**；
+- `run()` 的 `except` 里再次 `emit(..., None)` → 异常逃出线程 → `_global_excepthook` 报「未捕获的异常」。
+
+**修法**：`pyqtSignal(bool, str, object)`（注释本就写的是 `msg_dict|None`）。
+**教训：PyQt 信号若有「可能为 None」的参数，类型必须写 `object`，不能写具体类型。**
+
+**③ `_judge` 丢掉服务端原文（同日修复）**
+
+原实现失败时输出 `param error: {inner['reason']}`，但服务端返回的是 `error` 字段，
+导致界面只显示「param error: 未知错误」。已改为输出 `error` 原文 + `error_code`（例：`视频参数错误（error_code=40003）`）。
 
 
 ---

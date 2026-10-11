@@ -108,8 +108,9 @@ class SendMessage(BaseRequest):
         }
         # 注意：不传 chat_type 字段，与 send_text 保持一致
         # 之前传 "chat_type": "cs" 时，API 返回 success:True 但消息实际未送达
+        # download_url 由服务端下发，提交时携带会导致 error_code=40003「视频参数错误」
         if info and isinstance(info, dict):
-            message["info"] = info
+            message["info"] = {k: v for k, v in info.items() if k != "download_url"}
 
         import json
         payload = {
