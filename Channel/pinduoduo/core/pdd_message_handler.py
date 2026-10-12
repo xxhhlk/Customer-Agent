@@ -78,6 +78,11 @@ class MessageHandlerMixin:
             from_uid_log = message_data.get("message", {}).get("from_uid", "unknown")
             self.logger.debug(f"收到消息: type={msg_type}, from_uid={from_uid_log}, shop_id={shop_id}")
 
+            # 丢弃本系统发送素材（library_file/send）后的服务端自回显：
+            # 发送时已落库 manual 记录，回显若再落库会导致同一素材显示两条
+            if self._is_self_sent_echo(message_data, shop_id):
+                return
+
             # 当收到客服端发送的视频消息（mall_cs + type=14），打印完整结构用于对比
             if msg_type == 14:
                 msg_body = message_data.get("message", {})
@@ -122,6 +127,40 @@ class MessageHandlerMixin:
             self.logger.error(f"JSON解析失败: {message}")
         except Exception as e:
             self.logger.error(f"处理WebSocket消息失败: {e}")
+
+    def _is_self_sent_echo(self, message_data: dict, shop_id: str) -> bool:
+        """判断该 WS 消息是否为本系统发送素材后的服务端自回显。
+
+        library_file/send 投递成功后，服务端会推送一条同内容的
+        from=mall_cs 消息（新 msg_id）。仅拦截与「刚发出的素材」登记
+        完全一致的 mall_cs 消息；买家消息、其他会话消息不受影响。
+        命中即消耗一条登记记录（登记逻辑见 self_echo_registry）。
+        """
+        try:
+            msg_body = message_data.get("message") or {}
+            if not isinstance(msg_body, dict):
+                return False
+            from_role = str((msg_body.get("from") or {}).get("role") or "")
+            if from_role != "mall_cs":
+                return False
+            to_uid = str((msg_body.get("to") or {}).get("uid") or "")
+            content = msg_body.get("content")
+            if not to_uid or not isinstance(content, str) or not content:
+                return False
+
+            from Message.handlers.self_echo_registry import self_echo_registry
+            if not self_echo_registry.consume(shop_id, to_uid, content):
+                return False
+        except Exception as e:
+            # 判定异常时按「非回显」处理：宁可多显示一条，也不丢真实消息
+            self.logger.warning(f"自回显判定异常（按非回显处理）: {e}")
+            return False
+
+        self.logger.info(
+            f"[SELF_ECHO] 丢弃素材自回显: shop={shop_id}, buyer={to_uid}, "
+            f"type={msg_body.get('type')}, content={content[:80]}"
+        )
+        return True
 
     def _resolve_action(self, pdd_message: PDDChatMessage) -> Action:
         """取解析层判定出的动作；缺失或非法时降级为 UNKNOWN。"""

@@ -389,8 +389,8 @@ class ChatAreaPanel(QWidget):
             logger.warning("未选择会话，忽略素材发送")
             return
         logger.info(
-            "[ChatArea] 素材待发送: id=%s, type=%s, buyer=%s",
-            (item or {}).get("id"), (item or {}).get("file_type"), self._current_buyer_uid,
+            f"[ChatArea] 素材待发送: id={(item or {}).get('id')}, "
+            f"type={(item or {}).get('file_type')}, buyer={self._current_buyer_uid}"
         )
         self.send_material.emit(
             self._current_shop_id, self._current_user_id, item, self._current_buyer_uid

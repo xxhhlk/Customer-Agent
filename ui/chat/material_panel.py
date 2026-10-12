@@ -661,8 +661,7 @@ class MaterialPopup(QFrame):
 
     def _on_card_clicked(self, item: Dict[str, Any]):
         logger.info(
-            "素材已选择: id=%s, type=%s, name=%r",
-            item.get("id"), item.get("file_type"), item.get("name"),
+            f"素材已选择: id={item.get('id')}, type={item.get('file_type')}, name={item.get('name')!r}"
         )
         self.material_selected.emit(item)
         self.hide()

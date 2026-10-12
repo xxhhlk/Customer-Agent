@@ -69,9 +69,12 @@ class _MaterialSendWorker(QThread):
         self._item = item
 
     def run(self):
+        registered = False
+        content = ""
         try:
             from Channel.pinduoduo.utils.API.material_space import MaterialSpace
             from Channel.pinduoduo.utils.API.send_message import SendMessage
+            from Message.handlers.self_echo_registry import self_echo_registry
 
             payload = MaterialSpace.build_send_payload(self._item)
             ctx_type = payload["context_type"]
@@ -83,15 +86,20 @@ class _MaterialSendWorker(QThread):
                 return
 
             sender = SendMessage(str(self._sid), str(self._uid))
+            # 视频走 library_file/send：服务端投递成功后会推送同内容自回显，
+            # 发送前登记，由 WS 处理层丢弃回显（否则同一条素材会显示两条）
             if ctx_type == "video":
-                logger.info("[MATERIAL] 发送视频: file_id=%s", self._item.get("id"))
+                logger.info(f"[MATERIAL] 发送视频: file_id={self._item.get('id')}")
+                registered = self_echo_registry.register(self._sid, self._buid, content)
                 result = sender.send_library_file(str(self._buid), url)
             else:
-                logger.info("[MATERIAL] 发送图片: name=%s", self._item.get("name"))
+                logger.info(f"[MATERIAL] 发送图片: name={self._item.get('name')}")
                 result = sender.send_image(str(self._buid), url)
 
             ok, err = self._judge(result)
             if not ok:
+                if registered:
+                    self_echo_registry.revoke(self._sid, self._buid, content)
                 self.done.emit(False, err, None)
                 return
 
@@ -100,6 +108,9 @@ class _MaterialSendWorker(QThread):
             msg_dict = self._persist(ctx_type, content, payload.get("media_meta"))
             self.done.emit(True, "", msg_dict or {})
         except Exception as e:
+            # 未走到落库即失败：撤销登记，让可能存在的服务端回显保留为唯一记录
+            if registered:
+                self_echo_registry.revoke(self._sid, self._buid, content)
             logger.error(f"[MATERIAL] 发送素材异常: {e}", exc_info=True)
             self.done.emit(False, str(e), None)
 
@@ -476,11 +487,15 @@ class ChatUI(QFrame):
                 self._media_meta = media_meta
 
             def run(self):
+                registered = False
                 try:
                     from Channel.pinduoduo.utils.API.send_message import SendMessage
                     sender = SendMessage(str(self._sid), str(self._uid))
                     logger.info(f"[FORWARD] SendMessage 已创建: shop_id={self._sid}, user_id={self._uid}, "
                                 f"account_name={sender.account_name}, has_cookies={bool(sender.cookies)}")
+
+                    # 视频经 library_file/send 发送后会收到服务端自回显，
+                    # 登记后由 WS 处理层丢弃（失败时撤销）
 
                     if self._ctx_type == "image":
                         logger.info(f"[FORWARD] 调用 send_image: target={self._target_uid}")
@@ -502,10 +517,12 @@ class ChatUI(QFrame):
                             from Channel.pinduoduo.utils.API.material_space import MaterialSpace
                             item = MaterialSpace(str(self._sid), str(self._uid)).find_file(file_id)
                         if not item or not item.get("url"):
-                            logger.warning("[FORWARD] 视频原素材不存在或已删除: file_id=%s", file_id)
+                            logger.warning(f"[FORWARD] 视频原素材不存在或已删除: file_id={file_id}")
                             self.done.emit(False, "原视频素材已不存在，无法转发")
                             return
                         logger.info(f"[FORWARD] 发送视频: target={self._target_uid}, file_id={file_id}")
+                        from Message.handlers.self_echo_registry import self_echo_registry
+                        registered = self_echo_registry.register(self._sid, self._target_uid, self._cnt)
                         result = sender.send_library_file(str(self._target_uid), item["url"])
                     elif self._ctx_type == "goods_card":
                         # 商品卡片尝试提取 goods_id
@@ -537,10 +554,14 @@ class ChatUI(QFrame):
                         inner = result.get("result", {})
                         if inner.get("result") == "fail":
                             logger.error(f"[FORWARD] 发送失败(param error): reason={inner.get('reason')}")
+                            if registered:
+                                self_echo_registry.revoke(self._sid, self._target_uid, self._cnt)
                             self.done.emit(False, f"param error: {inner.get('reason')}")
                             return
                         if inner.get("error_code") and inner.get("error_code") != 0:
                             logger.error(f"[FORWARD] 发送失败(error_code): code={inner.get('error_code')}")
+                            if registered:
+                                self_echo_registry.revoke(self._sid, self._target_uid, self._cnt)
                             self.done.emit(False, str(inner))
                             return
                         # 持久化
@@ -567,8 +588,13 @@ class ChatUI(QFrame):
                         self.done.emit(True, "")
                     else:
                         logger.error(f"[FORWARD] 发送失败: {result}")
+                        if registered:
+                            self_echo_registry.revoke(self._sid, self._target_uid, self._cnt)
                         self.done.emit(False, str(result))
                 except Exception as e:
+                    # 未走到落库即异常：撤销登记，让可能存在的服务端回显保留为唯一记录
+                    if registered:
+                        self_echo_registry.revoke(self._sid, self._target_uid, self._cnt)
                     logger.error(f"[FORWARD] 转发异常: {e}", exc_info=True)
                     self.done.emit(False, str(e))
 
