@@ -23,6 +23,16 @@ class MessageHandlerMixin:
         "请设置【商品说明书】",
     )
 
+    # 人工介入只认这几类客服可见发言：文本/图片/表情/视频（收敛为 MALL_CS）
+    # 与商品卡、规格卡、订单卡。安全提示、用户来源、已读同步等系统消息
+    # 同样来自 mall_cs，但不构成人工回复
+    _STAFF_REPLY_CONTEXT_TYPES = frozenset({
+        ContextType.MALL_CS,
+        ContextType.GOODS_CARD,
+        ContextType.GOODS_SPEC,
+        ContextType.ORDER_INFO,
+    })
+
     # Attributes provided by PDDChannel host class
     channel_name: str
     logger: Any
@@ -243,14 +253,16 @@ class MessageHandlerMixin:
             return
 
         buyer_uid = context.kwargs.to_uid
-        if buyer_uid:
+        if buyer_uid and context.type in self._STAFF_REPLY_CONTEXT_TYPES:
             try:
                 from Message.handlers.staff_reply_event import staff_reply_event_manager
                 staff_reply_event_manager.notify_staff_reply(buyer_uid)
             except Exception as e:
                 self.logger.error(f"通知人工回复事件失败: {e}")
-        else:
+        elif not buyer_uid:
             self.logger.warning("客服消息缺少 to_uid，无法定位买家")
+        else:
+            self.logger.debug(f"系统消息不构成人工回复: type={context.type}, content={content[:60]}")
 
         # 缓存客服消息，供 AI 回复时作为上下文；结构化卡片先摘要成一行，
         # 避免原始 JSON 直接进 AI 上下文。

@@ -5,6 +5,7 @@ AI回复处理器
 
 from typing import Dict, Any, Optional, Tuple
 import asyncio
+import time
 from bridge.context import Context, ContextType
 from .base import BaseHandler
 from .preprocessor import MessagePreprocessor
@@ -80,6 +81,7 @@ class AIReplyHandler(BaseHandler):
     async def handle(self, context: Context, metadata: Dict[str, Any]) -> bool:
         """处理AI回复"""
         try:
+            ai_start_time = time.time()
             # 1. 预处理消息
             content = context.content if context.content else ""
             processed_content = self.preprocessor.process(content, context.type)
@@ -108,15 +110,15 @@ class AIReplyHandler(BaseHandler):
                 self.logger.info(f"AI回复生成完毕但任务已取消（人工已介入），跳过发送: {from_uid}")
                 return True  # 返回 True 避免兜底重发
 
-            # 二次检查：人工是否在 AI 生成期间回复（冷却期内说明人工刚回复过）
+            # 二次检查：本次 AI 生成期间人工是否回复
             if from_uid:
                 try:
                     from Message.handlers.staff_reply_event import staff_reply_event_manager
-                    if staff_reply_event_manager.is_in_cooldown(str(from_uid)):
+                    if staff_reply_event_manager.replied_since(str(from_uid), ai_start_time):
                         self.logger.info(f"AI回复生成完毕但人工已回复，丢弃AI回复: {from_uid}")
                         return True
                 except Exception as e:
-                    logger.warning(f"检查人工冷却期失败: {e}")
+                    logger.warning(f"检查人工回复失败: {e}")
 
             # 4. 发送回复
             success = await self._send_reply(context, reply, metadata, reply_source='ai')

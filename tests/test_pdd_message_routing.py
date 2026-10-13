@@ -7,11 +7,14 @@
 3. AI 白名单与动作表一致（此前 GOODS_CARD 有落差）
 4. 图片保留 URL、空内容有兜底、表情缺描述有兜底
 5. type=64 按结构探测，不产出全 null 字段
+6. 人工介入只认客服可见发言，系统消息（安全提示、已读同步等）不触发人工回复事件
+7. AI 生成窗口判定只看窗口内的人工回复，窗口外的冷却时间戳不拦截
 """
 
 import asyncio
 import json
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -36,6 +39,7 @@ from Channel.pinduoduo.core.pdd_message_handler import MessageHandlerMixin  # no
 from Message.handlers.ai_handler import AIReplyHandler  # noqa: E402
 from Message.handlers.preprocessor import MessagePreprocessor  # noqa: E402
 from Message.handlers.staff_message_cache import staff_message_cache  # noqa: E402
+from Message.handlers.staff_reply_event import StaffReplyEventManager  # noqa: E402
 
 
 BUYER_UID = "buyer1"
@@ -459,6 +463,89 @@ class DispatchTest(unittest.TestCase):
                     self.assertGreater(acted, 0, f"被静默丢弃: role={role} type={t}")
                 finally:
                     self.tearDown()
+
+
+class StaffReplyInterventionTest(unittest.TestCase):
+    """人工介入事件：只有客服可见发言才触发人工回复通知。
+
+    安全提示（type=31）、已读同步（type=20）等系统消息同样来自 mall_cs，
+    若按人工回复处理会写入 60s 冷却，静默吞掉买家本该收到的 AI 回复。
+    """
+
+    def setUp(self):
+        from unittest import mock
+        from Message.handlers.staff_reply_event import staff_reply_event_manager
+
+        self.h = _Harness()
+        self.notified = []
+        self._patch = mock.patch.object(
+            staff_reply_event_manager,
+            "notify_staff_reply",
+            side_effect=lambda uid: self.notified.append(uid) or True,
+        )
+        self._patch.start()
+        staff_message_cache.clear()
+
+    def tearDown(self):
+        self._patch.stop()
+        staff_message_cache.clear()
+
+    def _dispatch(self, raw):
+        msg = PDDChatMessage(raw)
+        ctx = make_context(msg)
+        asyncio.run(self.h._dispatch_by_action(ctx, "591119888", "149439461", "q", msg))
+        return msg
+
+    def test_staff_text_notifies(self):
+        self._dispatch(envelope("mall_cs", 0, content="亲，在的哦"))
+        self.assertEqual(self.notified, [BUYER_UID])
+
+    def test_staff_order_card_notifies(self):
+        info = {"title": "待用户寄出", "text": "售后已通过",
+                "goods_info": {"order_sequence_no": "260915-088"}}
+        self._dispatch(envelope("mall_cs", PDDMsgType.ORDER_CARD,
+                                content="[待用户寄出]", info=info))
+        self.assertEqual(self.notified, [BUYER_UID])
+
+    def test_staff_goods_spec_notifies(self):
+        info = {"data": {"goods_info": {"goods_name": "晕车贴"}}}
+        self._dispatch(envelope("mall_cs", PDDMsgType.GOODS_SPEC,
+                                content="商品说明书", info=info))
+        self.assertEqual(self.notified, [BUYER_UID])
+
+    def test_robot_hint_does_not_notify(self):
+        """type=31 平台安全提示不是人工回复，不得写入冷却。"""
+        self._dispatch(envelope(
+            "mall_cs", PDDMsgType.ROBOT_HINT,
+            content="为保障您的购物权益和资金安全，请联系商家客服使用小额打款或小额收款。",
+        ))
+        self.assertEqual(self.notified, [])
+
+    def test_read_sync_does_not_notify(self):
+        self._dispatch(envelope("mall_cs", PDDMsgType.READ_SYNC, content=None))
+        self.assertEqual(self.notified, [])
+
+    def test_platform_notice_does_not_notify(self):
+        self._dispatch(envelope("mall_cs", 0, content="请设置【商品说明书】"))
+        self.assertEqual(self.notified, [])
+
+
+class RepliedSinceTest(unittest.TestCase):
+    """replied_since：AI 生成窗口判定，窗口之外的冷却时间戳不构成介入。"""
+
+    def test_reply_inside_window_counts(self):
+        manager = StaffReplyEventManager()
+        manager.notify_staff_reply("b1")
+        self.assertTrue(manager.replied_since("b1", time.time() - 60))
+
+    def test_reply_before_window_does_not_count(self):
+        manager = StaffReplyEventManager()
+        manager.notify_staff_reply("b1")
+        self.assertFalse(manager.replied_since("b1", time.time() + 60))
+
+    def test_never_replied_does_not_count(self):
+        manager = StaffReplyEventManager()
+        self.assertFalse(manager.replied_since("b2", time.time() - 60))
 
 
 class SessionKeyIsolationTest(unittest.TestCase):

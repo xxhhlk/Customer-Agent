@@ -194,6 +194,24 @@ class StaffReplyEventManager:
             del self._staff_reply_times[from_uid]
             return False
 
+    def replied_since(self, from_uid: str, since: float) -> bool:
+        """
+        检查 since 之后是否收到过人工回复
+
+        用于 AI 生成窗口判定：只有生成期间到达的人工回复才构成介入，
+        更早的回复（哪怕仍在冷却期内）不影响本轮 AI 回复的去留。
+
+        Args:
+            from_uid: 买家ID
+            since: 窗口起点时间戳（time.time()）
+
+        Returns:
+            bool: True表示 since 之后人工回复过
+        """
+        with self._lock:
+            last_reply_time = self._staff_reply_times.get(from_uid)
+            return bool(last_reply_time and last_reply_time > since)
+
     def get_cooldown_remaining(self, from_uid: str) -> float:
         """
         获取冷却期剩余时间（秒）
