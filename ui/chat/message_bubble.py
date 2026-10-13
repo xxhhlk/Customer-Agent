@@ -11,6 +11,16 @@ from PyQt6.QtGui import QFont, QTextOption, QAction, QCursor
 from qfluentwidgets import isDarkTheme, CaptionLabel
 
 
+def _set_clipboard_text(text: str, attempt: int = 0) -> None:
+    clipboard = QApplication.clipboard()
+    if clipboard is None:
+        return
+    clipboard.setText(text)
+    if clipboard.text() == text or attempt >= 2:
+        return
+    QTimer.singleShot(200 * (attempt + 1), lambda: _set_clipboard_text(text, attempt + 1))
+
+
 class MessageBubble(QFrame):
     """消息气泡 - 左对齐（买家）或右对齐（客服）"""
 
@@ -227,17 +237,13 @@ class MessageBubble(QFrame):
         """复制整条消息内容到剪贴板（未选中文字时即复制全部）"""
         content = self.msg_data.get("content", "")
         if content:
-            clipboard = QApplication.clipboard()
-            if clipboard is not None:
-                clipboard.setText(content)
+            _set_clipboard_text(content)
 
     def _copy_selected(self):
         """仅复制当前选中的文字"""
         selected = self._get_selected_text()
         if selected:
-            clipboard = QApplication.clipboard()
-            if clipboard is not None:
-                clipboard.setText(selected)
+            _set_clipboard_text(selected)
 
     def _get_selected_text(self) -> str:
         """返回文本消息当前选中的文字，无选中返回空串"""
