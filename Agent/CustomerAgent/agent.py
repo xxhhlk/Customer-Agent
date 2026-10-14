@@ -397,18 +397,27 @@ class CustomerAgent(Bot):
             from_uid = str(getattr(context.kwargs, "from_uid", "") or "")
         return f"{context.channel_type}{context.kwargs.user_id}_{from_uid}"
 
-    async def record_staff_turn(self, query: str, context: Optional[Context] = None) -> None:
-        """人工接管本轮时，把买家消息补写进会话历史。
+    async def record_staff_turn(
+        self,
+        query: str,
+        context: Optional[Context] = None,
+        placeholder: Optional[str] = None,
+    ) -> None:
+        """本轮不走 AI（人工接管 / 系统自动回复）时，把买家消息补写进会话历史。
 
-        被人接管的轮次不走模型，历史里只会留下 AI 参与过的对话。若不补写，
+        这类轮次不走模型，历史里只会留下 AI 参与过的对话。若不补写，
         买家已发出的机器码、订单号、图片等关键信息对后续每轮都不可见，
         AI 会重复索要买家已经提供过的内容。
+
+        placeholder 为 None 时使用人工接管默认文案；关键词等系统直接回复
+        场景传入对应占位（如「本轮由系统自动回复」）。
         """
         if self._agent is None or context is None:
             return
         text = (query or "").strip()
         if not text:
             return
+        reply_content = placeholder or _STAFF_TAKEOVER_CONTENT
 
         session_id = self._make_session_id(context)
         user_id = str(context.kwargs.user_id)
@@ -432,20 +441,20 @@ class CustomerAgent(Bot):
                         agent_id=self._agent.id,
                         agent_name=self._agent.name,
                         user_id=user_id,
-                        content=_STAFF_TAKEOVER_CONTENT,
+                        content=reply_content,
                         status=RunStatus.completed,
                         messages=[
                             Message(role="user", content=text),
                             Message(
                                 role=getattr(self._agent.model, "assistant_message_role", "assistant"),
-                                content=_STAFF_TAKEOVER_CONTENT,
+                                content=reply_content,
                             ),
                         ],
                     )
                 )
                 await self._agent.asave_session(session)
             except Exception as e:
-                self.logger.warning(f"[record_staff_turn] 补写人工接管轮次失败: {e}")
+                self.logger.warning(f"[record_staff_turn] 补写会话轮次失败: {e}")
 
     @staticmethod
     def _load_recent_history_block(shop_id: str, buyer_uid: str, current_content: str, limit: int = 30) -> str:

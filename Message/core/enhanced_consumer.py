@@ -20,6 +20,11 @@ from ..handlers.rate_limiter import CozeRateLimiter
 logger = get_logger(__name__)
 
 
+# 系统直接回复轮次在会话历史中的占位：这类轮次不过模型，但买家消息必须留在
+# 历史里，否则买家已提供的信息（机器码、订单号等）对后续 AI 轮次不可见。
+_SYSTEM_TURN_CONTENT = "（本轮由系统自动回复）"
+
+
 class EnhancedMessageConsumer:
     """增强版消息消费者 - 集成防抖、AI超时等功能"""
 
@@ -267,6 +272,9 @@ class EnhancedMessageConsumer:
 
                             # 继续AI处理
                             await self._process_message_with_ai_timeout(merged_wrapper, metadata)
+                        else:
+                            # 关键词回复已发送且无剩余内容，本轮不进 AI；补写买家消息进会话历史
+                            await self._record_system_turn([merged_wrapper.context])
                     else:
                         # 普通关键词：冷却期内等待冷却期结束，同时监听人工回复
                         if from_uid and isinstance(from_uid, str):
@@ -290,10 +298,14 @@ class EnhancedMessageConsumer:
                                     self.logger.info(
                                         f"冷却期内命中关键词，人工客服已回复，跳过关键词回复"
                                     )
+                                    # 本轮不走 AI，补写买家消息进会话历史，避免后续 AI 轮次缺失
+                                    await self._record_staff_takeover([merged_wrapper.context])
                                     return
                                 self.logger.info(f"冷却期结束，人工未回复，发送关键词回复")
                         self.logger.info(f"命中普通关键词，发送回复")
                         await self._send_keyword_reply(merged_wrapper.context, keyword_result)
+                        # 关键词回复轮次不走 AI，补写买家消息进会话历史，否则对 AI 永久不可见
+                        await self._record_system_turn([merged_wrapper.context])
                     return
                 else:
                     # 未命中关键词，走原逻辑：等待人工回复
@@ -556,6 +568,18 @@ class EnhancedMessageConsumer:
         这些消息既不过模型也不进 session，若不补写则对 AI 永久不可见，
         买家已发出的机器码、订单号等关键信息缺失，AI 会重复索要。
         """
+        await self._record_buyer_turns(contexts, placeholder=None)
+
+    async def _record_system_turn(self, contexts: list) -> None:
+        """关键词等系统直接回复导致本轮不走 AI 时，把买家消息补写进会话历史。
+
+        与人工接管同理：消息不过模型，若不补写则对 AI 永久不可见，
+        后续 AI 介入时会重复索要买家已提供的信息（如机器码）。
+        """
+        await self._record_buyer_turns(contexts, placeholder=_SYSTEM_TURN_CONTENT)
+
+    async def _record_buyer_turns(self, contexts: list, placeholder: Optional[str]) -> None:
+        """把未经过 AI 的买家消息补写进 agno 会话历史；placeholder 说明本轮由谁回复。"""
         bot = None
         for handler in self.handlers:
             candidate = getattr(handler, "bot", None)
@@ -568,9 +592,9 @@ class EnhancedMessageConsumer:
             if context is None:
                 continue
             try:
-                await bot.record_staff_turn(str(context.content or ""), context)
+                await bot.record_staff_turn(str(context.content or ""), context, placeholder=placeholder)
             except Exception as e:
-                self.logger.warning(f"补写人工接管轮次失败: {e}")
+                self.logger.warning(f"补写会话历史失败: {e}")
 
     async def _process_message_with_ai_timeout(self, wrapper: MessageWrapper, prebuilt_metadata: Optional[Dict[str, Any]] = None):
         """带AI超时中断的消息处理
@@ -648,6 +672,8 @@ class EnhancedMessageConsumer:
                         success = await handler.handle(context, metadata)
                         if success:
                             self.logger.debug(f"Message handled by {handler.__class__.__name__}")
+                            # 非 AI 处理器（关键词/转人工等）已终止本轮，补写买家消息进会话历史
+                            await self._record_system_turn([context])
                             return  # 处理成功，直接返回
                         else:
                             # 非AI处理器返回False，表示需要继续传递给AI（如关键词pass_to_ai）
