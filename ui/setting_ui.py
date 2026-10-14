@@ -21,11 +21,58 @@ from config import config
 
 
 
+class LLMTestThread(QThread):
+    """后台测试 LLM 接口可用性（用当前表单参数发起一次最小对话请求，不阻塞 UI）"""
+
+    # (耗时ms, 模型回复内容) 成功
+    finished_ok = pyqtSignal(float, str)
+    # (错误信息) 失败
+    finished_err = pyqtSignal(str)
+
+    _TIMEOUT = 20
+
+    def __init__(self, api_base: str, api_key: str, model_name: str,
+                 thinking: Optional[dict] = None, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.api_base = api_base
+        self.api_key = api_key
+        self.model_name = model_name
+        self.thinking = thinking
+        self.setObjectName("LLMTestThread")
+
+    def run(self):
+        """后台线程：同步调用 chat.completions，通过信号回传结果"""
+        try:
+            from openai import OpenAI
+
+            start = time.perf_counter()
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.api_base,
+                timeout=self._TIMEOUT,
+                max_retries=0,
+            )
+            resp = client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": "你好"}],
+                max_tokens=64,
+                extra_body={"thinking": self.thinking} if self.thinking else None,
+            )
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            content = ""
+            if resp.choices and resp.choices[0].message is not None:
+                content = (resp.choices[0].message.content or "").strip()
+            self.finished_ok.emit(elapsed_ms, content)
+        except Exception as e:
+            self.finished_err.emit(str(e))
+
+
 class LLMConfigCard(CardWidget):
     """LLM配置卡片"""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._test_thread: Optional[LLMTestThread] = None
         self.setupUI()
 
     def setupUI(self) -> None:
@@ -34,10 +81,17 @@ class LLMConfigCard(CardWidget):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(16)
 
-        # 卡片标题
+        # 卡片标题行（标题 + 测试按钮）
+        title_row = QHBoxLayout()
         title_label = StrongBodyLabel("LLM模型配置")
         title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
-        layout.addWidget(title_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch()
+        self.test_btn = PushButton(FIF.SYNC, "测试连接")
+        self.test_btn.setToolTip("使用当前填写的参数发起一次最小对话请求，验证接口、密钥与模型是否可用")
+        self.test_btn.clicked.connect(self._on_test)
+        title_row.addWidget(self.test_btn)
+        layout.addLayout(title_row)
 
         # 表单布局
         form_layout = QFormLayout()
@@ -106,10 +160,88 @@ class LLMConfigCard(CardWidget):
         # 说明文本
         description_label = CaptionLabel(
             "配置LLM模型的连接参数。\n"
-            "支持OpenAI兼容的API接口，包括豆包、通义千问等模型。"
+            "支持OpenAI兼容的API接口，包括豆包、通义千问等模型。\n"
+            "测试连接：使用当前表单填写的参数（无需先保存）发起一次最小对话请求，"
+            "验证接口、密钥与模型是否可用。"
         )
         description_label.setStyleSheet("padding: 8px 0;")
         layout.addWidget(description_label)
+
+    def _on_test(self):
+        """点击测试：校验表单值 → 后台线程实测 LLM 接口"""
+        if self._test_thread is not None and self._test_thread.isRunning():
+            return
+
+        cfg = self.getConfig()
+        if not cfg["api_key"]:
+            InfoBar.warning(
+                title="配置不完整",
+                content="请先填写 API Key",
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+        if not cfg["model_name"]:
+            InfoBar.warning(
+                title="配置不完整",
+                content="请先填写模型名称",
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            return
+
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("测试中...")
+
+        self._test_thread = LLMTestThread(
+            cfg["api_base"], cfg["api_key"], cfg["model_name"], cfg["thinking"], parent=self
+        )
+        self._test_thread.finished_ok.connect(self._on_test_ok)
+        self._test_thread.finished_err.connect(self._on_test_err)
+        self._test_thread.finished.connect(self._on_test_done)
+        self._test_thread.start()
+
+    def _on_test_ok(self, elapsed_ms: float, content: str):
+        """测试成功（接口、密钥与模型均可用）"""
+        reply = " ".join(content.split())
+        if len(reply) > 40:
+            reply = reply[:40] + "…"
+        suffix = f"，模型回复：{reply}" if reply else ""
+        InfoBar.success(
+            title="模型测试成功",
+            content=f"接口调用正常，耗时 {int(elapsed_ms)} ms{suffix}",
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+            parent=self,
+        )
+
+    def _on_test_err(self, error_msg: str):
+        """测试失败"""
+        InfoBar.error(
+            title="模型测试失败",
+            content=f"{error_msg}，请检查接口地址、API Key 与模型名称",
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=8000,
+            parent=self,
+        )
+
+    def _on_test_done(self):
+        """测试结束，恢复按钮"""
+        try:
+            self.test_btn.setEnabled(True)
+            self.test_btn.setText("测试连接")
+        except RuntimeError:
+            pass  # 窗口已销毁
+        thread = self._test_thread
+        self._test_thread = None
+        if thread is not None:
+            thread.deleteLater()
 
     def getConfig(self) -> dict:
         """获取配置"""
