@@ -22,10 +22,13 @@ body: {"uid": "<买家uid>", "pageNo": 1, "pageSize": 10, "showHistory": true}
 | `orderStatusStr` | **现成的状态文案**，如「已发货，待签收」 |
 | `orderStatus / payStatus / shippingStatus / groupStatus` | 数值状态码 |
 | `orderAmount` | 订单金额（**分**） |
-| `orderGoodsList` | `{goodsId, skuId, goodsName, goodsPrice, goodsNumber, thumbUrl, spec}` |
+| `orderGoodsList` | **单商品订单为 dict、多商品为 list**；元素 `{goodsId, skuId, goodsName, goodsPrice, goodsNumber, thumbUrl, spec}` |
 | `note` | **商家备注（直接带在列表里）** |
-| `orderTime / payTime / shippingTime / trackingNumber` | 时间与物流 |
+| `orderTime / payTime / shippingTime` | **Unix 秒（int）**，非格式化字符串 |
+| `trackingNumber` | 物流单号（可能为空字符串） |
 | `uid / mallId / id / groupOrderId` | 买家/店铺/订单内部ID |
+
+> 形态补充（2026-10-15 落地实现时再次实测）：`orderTime` 为 int 秒（如 `1791730606` → `2026-10-11 22:56:46`）；`orderGoodsList` 直接按 list 处理会 `KeyError: 0`（dict 时），消费方必须两种形态兼容。
 
 ### 同族接口（同参数风格，未逐一实测）
 
