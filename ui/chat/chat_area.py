@@ -250,6 +250,8 @@ class ChatAreaPanel(QWidget):
         self.input_area.set_account(
             self._current_shop_id, self._current_user_id, self._current_shop_name
         )
+        # 同步买家给订单面板（按当前会话买家查询订单/编辑备注）
+        self.input_area.set_buyer(self._current_buyer_uid, nickname or "")
 
         # 分批渲染（旧批次由 token 拦截）
         logger.info("[ChatArea] _on_messages_loaded: 开始渲染气泡")

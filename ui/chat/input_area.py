@@ -11,6 +11,7 @@ from qfluentwidgets import PrimaryPushButton, isDarkTheme, TransparentToolButton
 from ui.chat.slash_popup import SlashKnowledgePopup
 from ui.chat.emoji_panel import EmojiPopup
 from ui.chat.material_panel import MaterialPopup
+from ui.chat.order_panel import OrderPopup
 from utils.logger_loguru import get_logger
 
 logger = get_logger("InputArea")
@@ -31,13 +32,16 @@ class InputArea(QWidget):
         self._query_start_pos = 0  # 当前联想片段起始位置（替换时用）
         self._min_query_len = 1  # 触发联想的最小字符数
         self._max_query_len = 12  # 参与匹配的查询长度（取末尾片段）
-        self._shop_id = ""  # 当前会话店铺 id（素材面板用）
-        self._user_id = ""  # 当前会话登录账号 id（素材面板用）
-        self._shop_name = ""  # 当前会话店铺名（素材面板标注用）
+        self._shop_id = ""  # 当前会话店铺 id（素材面板/订单面板用）
+        self._user_id = ""  # 当前会话登录账号 id（素材面板/订单面板用）
+        self._shop_name = ""  # 当前会话店铺名（素材/订单面板标注用）
+        self._buyer_uid = ""  # 当前会话买家 uid（订单面板查询用）
+        self._buyer_name = ""  # 当前会话买家昵称（订单面板标注用）
         self._init_ui()
         self._init_slash_popup()
         self._init_emoji_panel()
         self._init_material_panel()
+        self._init_order_panel()
         self._apply_theme()
 
     def _apply_theme(self):
@@ -100,6 +104,12 @@ class InputArea(QWidget):
         self.material_btn.setFixedSize(32, 32)
         self.material_btn.clicked.connect(self._toggle_material_panel)
         btn_layout.addWidget(self.material_btn)
+
+        self.order_btn = TransparentToolButton(FluentIcon.SHOPPING_CART)
+        self.order_btn.setToolTip("订单（查看订单 / 编辑备注）")
+        self.order_btn.setFixedSize(32, 32)
+        self.order_btn.clicked.connect(self._toggle_order_panel)
+        btn_layout.addWidget(self.order_btn)
 
         btn_layout.addStretch()
 
@@ -225,6 +235,71 @@ class InputArea(QWidget):
         """选中素材：交给上层发送（图片/视频走不同通道）"""
         self.material_selected.emit(item)
         self.text_edit.setFocus()
+
+    # ========== 订单面板 ==========
+
+    def _init_order_panel(self):
+        """初始化订单浮窗（查看当前会话买家订单 / 编辑商家备注）"""
+        self._order_popup = OrderPopup(self)
+
+    def set_buyer(self, buyer_uid: str, buyer_name: str = ""):
+        """同步当前会话买家（订单面板按买家查询；切买家时收起面板）"""
+        new_uid, new_name = str(buyer_uid or ""), str(buyer_name or "")
+        changed = new_uid != self._buyer_uid
+        self._buyer_uid, self._buyer_name = new_uid, new_name
+        try:
+            self._update_order_tooltip()
+            if changed:
+                self._order_popup.hide()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"设置订单面板买家失败: {e}")
+
+    def _update_order_tooltip(self):
+        """订单按钮 tooltip 标注当前账号与买家（多账号/多会话下避免看错）"""
+        try:
+            label = self._shop_name or (f"店铺 {self._shop_id}" if self._shop_id else "")
+            buyer = self._buyer_name or self._buyer_uid
+            tips = "订单（查看订单 / 编辑备注）"
+            if label or buyer:
+                tips += f"\n{label}" + (f" · 买家 {buyer}" if buyer else "")
+            self.order_btn.setToolTip(tips)
+        except RuntimeError:
+            pass
+
+    def _toggle_order_panel(self):
+        """显示/收起订单面板并定位到输入框上方"""
+        if self._order_popup.isVisible():
+            self._order_popup.hide()
+            return
+        # 收起其它浮层，避免叠在一起
+        self._cancel_slash()
+        self._emoji_popup.hide()
+        self._material_popup.hide()
+        self._order_popup.open_for(
+            self._shop_id, self._user_id, self._shop_name,
+            self._buyer_uid, self._buyer_name,
+        )
+        self._position_order_popup()
+        self._order_popup.show()
+        self._order_popup.raise_()
+
+    def _position_order_popup(self):
+        """将订单浮窗定位到输入框上方（并做屏幕边界收敛）"""
+        bottom_left = self.text_edit.mapToGlobal(self.text_edit.rect().bottomLeft())
+        h = self._order_popup.height()
+        if h <= 0:
+            h = 560  # 与 OrderPopup 的固定高度保持一致
+        x = bottom_left.x()
+        y = bottom_left.y() - h - 4
+
+        screen = self.text_edit.screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            if y < avail.top() + 4:
+                y = avail.top() + 4
+            if x + self._order_popup.width() > avail.right():
+                x = max(avail.left() + 4, avail.right() - self._order_popup.width())
+        self._order_popup.move(x, y)
 
     # ========== 斜杠检索逻辑 ==========
 
@@ -366,6 +441,11 @@ class InputArea(QWidget):
                 popup_rect = self._material_popup.geometry()
                 if not popup_rect.contains(event.globalPosition().toPoint()):
                     self._material_popup.hide()
+            if self._order_popup.isVisible():
+                # 检查点击是否在订单面板外
+                popup_rect = self._order_popup.geometry()
+                if not popup_rect.contains(event.globalPosition().toPoint()):
+                    self._order_popup.hide()
             return False
 
         # 处理输入法事件（中文输入法候选词确认后触发）
@@ -439,10 +519,11 @@ class InputArea(QWidget):
 
     def _on_send_clicked(self):
         """发送按钮 / Enter 触发"""
-        # 发送前关闭联想浮窗与表情/素材面板
+        # 发送前关闭联想浮窗与表情/素材/订单面板
         self._cancel_slash()
         self._emoji_popup.hide()
         self._material_popup.hide()
+        self._order_popup.hide()
 
         text = self.text_edit.toPlainText().strip()
         if not text:
@@ -456,8 +537,10 @@ class InputArea(QWidget):
         self.send_btn.setEnabled(enabled)
         self.emoji_btn.setEnabled(enabled)
         self.material_btn.setEnabled(enabled)
+        self.order_btn.setEnabled(enabled)
         if not enabled:
             self._material_popup.hide()
+            self._order_popup.hide()
             self.hint_label.setText("请先选择一个会话")
         else:
             self.hint_label.setText("")
@@ -480,6 +563,9 @@ class InputArea(QWidget):
         if getattr(self, "_material_popup", None) is not None:
             self._material_popup.hide()
             self._material_popup.deleteLater()
+        if getattr(self, "_order_popup", None) is not None:
+            self._order_popup.hide()
+            self._order_popup.deleteLater()
         self._remove_global_click_filter()
 
     def changeEvent(self, event):
@@ -498,6 +584,7 @@ class InputArea(QWidget):
             self._slash_popup.refresh_theme()
             self._emoji_popup.refresh_theme()
             self._material_popup.refresh_theme()
+            self._order_popup.refresh_theme()
         finally:
             QTimer.singleShot(200, self._reset_palette_pending)
 
