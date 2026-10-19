@@ -516,6 +516,50 @@ class CustomerAgent(Bot):
         except Exception:
             return False
 
+    @staticmethod
+    def _video_cover_url(context: Context) -> Optional[str]:
+        """取 PDD 视频消息自带的封面图 URL（message.info.preview.url）。
+
+        抽帧失败时的降级素材：只有首帧画面，但零成本、不需要解码。
+        """
+        try:
+            raw = getattr(context.kwargs, "raw_data", None) or {}
+            msg = raw.get("message", raw) if isinstance(raw, dict) else {}
+            info = (msg.get("info") or {}) if isinstance(msg, dict) else {}
+            preview = info.get("preview") or {}
+            url = preview.get("url") if isinstance(preview, dict) else None
+            return str(url) if url else None
+        except Exception:
+            return None
+
+    def _prepare_video_frames(self, url: str, context: Context) -> list:
+        """下载视频并本地抽帧，返回 data URL 列表（供 asyncio.to_thread 调用）。
+
+        耗时较长（1080p/113s 实测约 30s 解码），必须在事件循环外执行。
+        内部有全局 ffmpeg 串行锁，多账号并发时排队而非同时解码。
+        """
+        from utils.video_frames import prepare_from_url
+
+        # 时长优先取 PDD 给的 info.duration（省一次 probe），单位可能是毫秒
+        duration: Optional[float] = None
+        try:
+            raw = getattr(context.kwargs, "raw_data", None) or {}
+            msg = raw.get("message", raw) if isinstance(raw, dict) else {}
+            info = (msg.get("info") or {}) if isinstance(msg, dict) else {}
+            d = info.get("duration")
+            if isinstance(d, (int, float)) and d > 0:
+                duration = float(d) / 1000.0 if d > 1000 else float(d)
+        except Exception:
+            duration = None
+
+        return prepare_from_url(
+            url,
+            duration=duration,
+            target_frames=int(get_config("llm.video_max_frames", 80)),
+            width=int(get_config("llm.video_frame_width", 768)),
+            threshold=float(get_config("llm.video_scene_threshold", 0.02)),
+        )
+
     async def _async_reply_locked(self, query: str, context: Optional[Context] = None) -> Reply:
         """异步回复实现（在会话锁内执行）"""
         self.logger.info("[async_reply] 开始处理，进入初始化检查")
@@ -598,7 +642,10 @@ class CustomerAgent(Bot):
 
             # 图片/视频消息传给视觉大模型（llm.send_image_to_ai 开关实时读取，免重启热开关）
             # 图片：URL 直传优先，走 agno images 参数（自动转 image_url 内容块）；
-            # 视频：agno OpenAILike 不支持 videos 参数，构造带 video_url 内容块的 Message 原样透传。
+            # 视频：按 llm.video_input_mode 分流
+            #   native → 构造带 video_url 内容块的 Message 原样透传（模型需支持）
+            #   frames → 本地抽帧成多图，走 images 通道（模型只支持图片时用）
+            #   off    → 不分析
             # 两者 URL 直传失败时均由 _arun 内的重试逻辑下载转 base64 再试一次。
             images: Optional[list] = None
             image_url: Optional[str] = None
@@ -620,7 +667,30 @@ class CustomerAgent(Bot):
                     images = [Image(url=_img)]
             elif context.type == ContextType.VIDEO and _send_media and context.content:
                 _video = str(context.content).strip()
-                if _video.startswith(("http://", "https://", "data:video")):
+                _mode = str(get_config("llm.video_input_mode", "native") or "native").lower()
+                if _mode == "frames":
+                    if _video.startswith(("http://", "https://")):
+                        _frames = await asyncio.to_thread(
+                            self._prepare_video_frames, _video, context
+                        )
+                    else:
+                        _frames = []
+                    if _frames:
+                        images = [Image(url=u) for u in _frames]
+                        self.logger.info(
+                            f"[async_reply] 视频本地抽帧完成，共 {len(_frames)} 帧"
+                        )
+                    else:
+                        # 抽帧失败：退到 PDD 给的视频封面图（info.preview.url），
+                        # 只能体现首帧画面，但比完全没有视觉信息好
+                        _cover = self._video_cover_url(context)
+                        if _cover and self._is_safe_media_url(_cover):
+                            images = [Image(url=_cover)]
+                            image_url = _cover
+                            self.logger.info("[async_reply] 抽帧失败，改用视频封面图")
+                        else:
+                            self.logger.warning("[async_reply] 抽帧与封面图均不可用，按纯文本处理")
+                elif _mode != "off" and _video.startswith(("http://", "https://", "data:video")):
                     video_url = _video
                     _fps = get_config("llm.video_fps", 1.0)
                     video_message = Message(role="user", content=[

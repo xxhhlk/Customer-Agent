@@ -170,6 +170,13 @@ from utils.logger_loguru import get_logger as _get_logger
 from core.di_container import configure_standard_services
 configure_standard_services(_app_config)
 
+# 5. 清理上次异常退出残留的视频抽帧临时目录
+try:
+    from utils.video_frames import cleanup_leftovers as _cleanup_video_frames
+    _cleanup_video_frames()
+except Exception:
+    pass
+
 # ============================================================================
 
 from ui.main_ui import MainWindow

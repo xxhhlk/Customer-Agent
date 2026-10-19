@@ -36,18 +36,35 @@ _pw_node = [
 _pw_binaries = list(_pw_binaries) + _pw_node
 
 # ================================
+# imageio-ffmpeg（本地视频抽帧）
+# ================================
+# imageio-ffmpeg 用 __file__ 推导 exe 路径，onedir 打包后会指向解压临时目录，
+# 故显式把 ffmpeg 放进 binaries 的 imageio_ffmpeg/binaries/。
+# utils/video_frames.resolve_ffmpeg() 会优先在 sys._MEIPASS 下探测该目录。
+_ffmpeg_binaries = []
+try:
+    import imageio_ffmpeg as _iio_ff
+    _ff_exe = Path(_iio_ff.get_ffmpeg_exe())
+    if _ff_exe.is_file():
+        _ffmpeg_binaries.append((str(_ff_exe), "imageio_ffmpeg/binaries"))
+except Exception:
+    pass
+
+# ================================
 # 基础配置
 # ================================
 a = Analysis(
     [str(PROJECT_ROOT / "app.py")],
     pathex=[str(PROJECT_ROOT)],
-    binaries=_pw_binaries,
+    binaries=_pw_binaries + _ffmpeg_binaries,
     datas=[
         # 图标文件
         (str(PROJECT_ROOT / "icon" / "icon.ico"), "icon"),
         # 配置文件（如果存在）
     ] + _pw_datas,
     hiddenimports=[
+        # === 视频抽帧（延迟导入，显式登记防漏收） ===
+        "imageio_ffmpeg",
         # === PyQt6 & Fluent Widgets ===
         "PyQt6",
         "PyQt6.QtCore",

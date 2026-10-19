@@ -33,7 +33,14 @@ class LLMConfig(OpenAILike):
     """LLM配置模型"""
     model_config = ConfigDict(arbitrary_types_allowed=True)
     send_image_to_ai: bool = Field(default=True, description="是否将买家图片/视频传给视觉大模型")
-    video_fps: float = Field(default=1.0, description="视频抽帧率（每秒帧数，范围 0.2-5），影响理解精度与 token 用量")
+    video_fps: float = Field(default=1.0, description="原生视频理解的抽帧率（仅 native 模式生效，范围 0.2-5）")
+    video_input_mode: str = Field(
+        default="native",
+        description="视频输入方式：native=直接传 video_url（模型需支持）/ frames=本地抽帧转多图 / off=不分析视频",
+    )
+    video_max_frames: int = Field(default=80, description="本地抽帧的目标帧数（frames 模式生效，40-120）")
+    video_frame_width: int = Field(default=768, description="抽帧缩放宽度（像素，512 以下小字会失真）")
+    video_scene_threshold: float = Field(default=0.02, description="场景变化阈值（frames 模式，越低越敏感）")
     pass
 
 class KnowledgeConfig(BaseModel):
@@ -147,7 +154,11 @@ config_base = {
         "api_base": "",
         "reasoning_effort": "",
         "send_image_to_ai": True,
-        "video_fps": 1.0
+        "video_fps": 1.0,
+        "video_input_mode": "native",
+        "video_max_frames": 80,
+        "video_frame_width": 768,
+        "video_scene_threshold": 0.02
     },
     "embedder": {
         "model_name": "",

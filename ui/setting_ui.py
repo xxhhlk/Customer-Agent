@@ -73,6 +73,12 @@ class LLMConfigCard(CardWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._test_thread: Optional[LLMTestThread] = None
+        # 进阶参数不在界面暴露，保存时原样带回，避免被全量覆盖抹掉
+        self._extra_llm: dict = {
+            "video_fps": 1.0,
+            "video_frame_width": 768,
+            "video_scene_threshold": 0.02,
+        }
         self.setupUI()
 
     def setupUI(self) -> None:
@@ -150,10 +156,34 @@ class LLMConfigCard(CardWidget):
         self.send_image_switch.setToolTip(
             "开启后，买家图片/视频消息传给视觉大模型识别。\n"
             "图片 URL 直传优先，失败自动下载转 base64 重试一次。\n"
-            "视频抽帧率在 config.json 的 llm.video_fps 配置（默认 1）。\n"
+            "视频的送入方式由下方「视频分析方式」决定。\n"
             "非视觉模型（如 DeepSeek）建议关闭。"
         )
         form_layout.addRow("图片/视频传AI识别:", self.send_image_switch)
+
+        # 视频分析方式
+        self.video_mode_combo = ComboBox()
+        self.video_mode_combo.addItems(["原生视频理解", "本地抽帧分析", "不分析视频"])
+        self.video_mode_combo.setCurrentIndex(0)
+        self.video_mode_combo.setToolTip(
+            "原生视频理解：视频直接交给模型，需要模型支持视频输入。\n"
+            "本地抽帧分析：从视频中提取关键画面交给模型，适用于只支持图片的模型。\n"
+            "不分析视频：视频消息只按文字处理。\n"
+            "换用不支持视频输入的模型时，请选择「本地抽帧分析」。"
+        )
+        form_layout.addRow("视频分析方式:", self.video_mode_combo)
+
+        # 抽帧数量
+        self.video_frames_spin = SpinBox()
+        self.video_frames_spin.setRange(20, 200)
+        self.video_frames_spin.setSingleStep(10)
+        self.video_frames_spin.setValue(80)
+        self.video_frames_spin.setToolTip(
+            "本地抽帧分析时提取的画面数量。\n"
+            "数值越大越能覆盖视频中的操作细节，同时增加等待时间与 token 消耗。\n"
+            "1-2 分钟的录屏建议 80；短视频可适当调小。"
+        )
+        form_layout.addRow("视频识别帧数:", self.video_frames_spin)
 
         layout.addLayout(form_layout)
 
@@ -253,7 +283,11 @@ class LLMConfigCard(CardWidget):
         effort_map = {0: "", 1: "minimal", 2: "low", 3: "medium", 4: "high", 5: "max"}
         reasoning_effort = effort_map.get(self.effort_combo.currentIndex(), "")
 
-        return {
+        # 映射视频分析方式
+        video_mode_map = {0: "native", 1: "frames", 2: "off"}
+        video_input_mode = video_mode_map.get(self.video_mode_combo.currentIndex(), "native")
+
+        result = {
             "api_base": self.api_base_edit.text().strip() or "https://ark.cn-beijing.volces.com/api/v3",
             "api_key": self.api_key_edit.text().strip(),
             "model_name": self.model_name_edit.text().strip(),
@@ -261,8 +295,14 @@ class LLMConfigCard(CardWidget):
                 "type": thinking_type
             },
             "reasoning_effort": reasoning_effort,
-            "send_image_to_ai": self.send_image_switch.isChecked()
+            "send_image_to_ai": self.send_image_switch.isChecked(),
+            "video_input_mode": video_input_mode,
+            "video_max_frames": int(self.video_frames_spin.value())
         }
+        # 界面未暴露的进阶参数原样带回，避免保存时被全量覆盖抹掉
+        for _k, _v in self._extra_llm.items():
+            result.setdefault(_k, _v)
+        return result
 
     def setConfig(self, config: dict):
         """设置配置"""
@@ -283,6 +323,23 @@ class LLMConfigCard(CardWidget):
 
         # 设置图片传 AI 识别开关
         self.send_image_switch.setChecked(config.get("send_image_to_ai", True))
+
+        # 设置视频分析方式与帧数
+        mode_map_inv = {"native": 0, "frames": 1, "off": 2}
+        self.video_mode_combo.setCurrentIndex(
+            mode_map_inv.get(str(config.get("video_input_mode", "native") or "native"), 0)
+        )
+        try:
+            self.video_frames_spin.setValue(int(config.get("video_max_frames", 80)))
+        except (TypeError, ValueError):
+            self.video_frames_spin.setValue(80)
+
+        # 未暴露的进阶参数原样保存，getConfig 时带回
+        self._extra_llm = {
+            "video_fps": config.get("video_fps", 1.0),
+            "video_frame_width": config.get("video_frame_width", 768),
+            "video_scene_threshold": config.get("video_scene_threshold", 0.02),
+        }
 
 
 class EmbedderConfigCard(CardWidget):
@@ -1545,7 +1602,12 @@ class SettingUI(QFrame):
                     "model_name": config.get("llm.model_name", "doubao-seed-1-6-flash-250828"),
                     "thinking": config.get("llm.thinking", {"type": "disabled"}),
                     "reasoning_effort": config.get("llm.reasoning_effort", ""),
-                    "send_image_to_ai": config.get("llm.send_image_to_ai", True)
+                    "send_image_to_ai": config.get("llm.send_image_to_ai", True),
+                    "video_input_mode": config.get("llm.video_input_mode", "native"),
+                    "video_max_frames": config.get("llm.video_max_frames", 80),
+                    "video_fps": config.get("llm.video_fps", 1.0),
+                    "video_frame_width": config.get("llm.video_frame_width", 768),
+                    "video_scene_threshold": config.get("llm.video_scene_threshold", 0.02)
                 },
                 "embedder": {
                     "api_base": config.get("embedder.api_base", "https://ark.cn-beijing.volces.com/api/v3"),
@@ -1608,7 +1670,12 @@ class SettingUI(QFrame):
                 "model_name": "doubao-seed-1-6-flash-250828",
                 "thinking": {"type": "disabled"},
                 "reasoning_effort": "",
-                "send_image_to_ai": True
+                "send_image_to_ai": True,
+                "video_input_mode": "native",
+                "video_max_frames": 80,
+                "video_fps": 1.0,
+                "video_frame_width": 768,
+                "video_scene_threshold": 0.02
             },
             "embedder": {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -1658,7 +1725,12 @@ class SettingUI(QFrame):
                 "model_name": "doubao-seed-1-6-flash-250828",
                 "thinking": {"type": "disabled"},
                 "reasoning_effort": "",
-                "send_image_to_ai": True
+                "send_image_to_ai": True,
+                "video_input_mode": "native",
+                "video_max_frames": 80,
+                "video_fps": 1.0,
+                "video_frame_width": 768,
+                "video_scene_threshold": 0.02
             }),
             "embedder": config_data.get("embedder", {
                 "api_base": "https://ark.cn-beijing.volces.com/api/v3",
