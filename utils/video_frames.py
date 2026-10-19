@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from typing import List, Optional, Tuple
 
 from utils.logger_loguru import get_logger
@@ -47,6 +48,25 @@ _FFMPEG_CANDIDATES = (
     os.path.join("imageio_ffmpeg", "binaries"),   # imageio-ffmpeg 打包后的标准位置
     "ffmpeg.exe",
 )
+
+
+def _rmtree_with_retry(path: str, attempts: int = 3) -> None:
+    """删除目录，失败重试。
+
+    Windows 下 ffmpeg / PIL 的句柄释放有延迟，rmtree(ignore_errors=True) 会
+    静默吞掉失败，导致临时帧长期堆积（实测残留过 9 个目录共 127MB）。
+    """
+    for i in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if i == attempts - 1:
+                logger.warning(f"[video] 临时帧目录清理失败，留待下次启动清理: {path}")
+                return
+            time.sleep(0.3 * (i + 1))
 
 
 def _sem_run(cmd: List[str], timeout: int) -> Tuple[int, str]:
@@ -170,8 +190,12 @@ def download_video(
 def _extract_candidates(
     video_path: str, out_dir: str, threshold: float, width: int, ffmpeg: str
 ) -> List[Tuple[str, float, float]]:
-    """一次抽出所有 scene>threshold 的候选帧，返回 [(路径, 时间, 分数)]。"""
-    p = subprocess.run(
+    """一次抽出所有 scene>threshold 的候选帧，返回 [(路径, 时间, 分数)]。
+
+    必须走 _sem_run：这是整条链路最耗时的解码步骤，绕开信号量会让多账号
+    并发时同时跑多个 ffmpeg，把 4GB 机器压死。
+    """
+    rc, raw = _sem_run(
         [
             ffmpeg, "-hide_banner", "-loglevel", "info", "-y",
             "-i", video_path,
@@ -179,18 +203,14 @@ def _extract_candidates(
             "-fps_mode", "vfr", "-q:v", "4",
             os.path.join(out_dir, "%04d.jpg"),
         ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
-        timeout=_SCAN_TIMEOUT,
-        creationflags=_CREATE_NO_WINDOW,
+        _SCAN_TIMEOUT,
     )
     files = sorted(glob.glob(os.path.join(out_dir, "*.jpg")))
     if not files:
+        # 失败要留证据：线上偶发空结果时，只能靠 ffmpeg 自己的报错定位
+        logger.warning(f"[video] 候选帧为空 rc={rc}，ffmpeg 输出尾部: {raw[-400:]}")
         return []
 
-    raw = p.stderr or ""
     times = [float(x) for x in re.findall(r"pts_time:([\d.]+)", raw)]
     scores = [float(x) for x in re.findall(r"lavfi\.scene_score=([\d.]+)", raw)]
 
@@ -293,9 +313,10 @@ def _dedup(pairs: List[Tuple[str, bool]], thresh: float = 3.0) -> List[str]:
             last_fill = None
             continue
         try:
-            arr = np.asarray(
-                Image.open(path).convert("L").resize((32, 32)), dtype=np.float32
-            )
+            # 必须用 with 关闭句柄：PIL 的 Image 会持有文件句柄到 GC 为止，
+            # Windows 上会导致 finally 里的 rmtree 失败（残留 20MB/次的临时帧）
+            with Image.open(path) as im:
+                arr = np.asarray(im.convert("L").resize((32, 32)), dtype=np.float32)
         except Exception:
             continue
         if last_fill is not None and float(np.abs(arr - last_fill).mean()) < thresh:
@@ -411,7 +432,7 @@ def extract_for_model(
         logger.error(f"[video] 抽帧失败: {e}", exc_info=True)
         return []
     finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
+        _rmtree_with_retry(out_dir)
 
 
 def prepare_from_url(
