@@ -167,6 +167,7 @@ class LLMConfigCard(CardWidget):
         self.video_mode_combo.setCurrentIndex(0)
         self.video_mode_combo.setToolTip(
             "原生视频理解：视频直接交给模型，需要模型支持视频输入。\n"
+            "  采样率由 config.json 的 llm.video_fps 控制（默认 1），下方帧数不生效。\n"
             "本地抽帧分析：从视频中提取关键画面交给模型，适用于只支持图片的模型。\n"
             "不分析视频：视频消息只按文字处理。\n"
             "换用不支持视频输入的模型时，请选择「本地抽帧分析」。"
@@ -184,6 +185,11 @@ class LLMConfigCard(CardWidget):
             "1-2 分钟的录屏建议 80；短视频可适当调小。"
         )
         form_layout.addRow("视频识别帧数:", self.video_frames_spin)
+
+        # 帧数只在本地抽帧模式下生效，原生模式由服务端按 video_fps 采样，
+        # 不禁用会让用户以为改这里有作用
+        self.video_mode_combo.currentIndexChanged.connect(self._sync_video_controls)
+        self._sync_video_controls()
 
         layout.addLayout(form_layout)
 
@@ -273,6 +279,10 @@ class LLMConfigCard(CardWidget):
         if thread is not None:
             thread.deleteLater()
 
+    def _sync_video_controls(self) -> None:
+        """帧数只在本地抽帧模式下可用；原生/不分析时置灰，避免误以为改这里有效。"""
+        self.video_frames_spin.setEnabled(self.video_mode_combo.currentIndex() == 1)
+
     def getConfig(self) -> dict:
         """获取配置"""
         # 映射下拉框索引到 thinking type
@@ -340,6 +350,8 @@ class LLMConfigCard(CardWidget):
             "video_frame_width": config.get("video_frame_width", 768),
             "video_scene_threshold": config.get("video_scene_threshold", 0.02),
         }
+        # index 未变化时不会触发 currentIndexChanged，这里补一次
+        self._sync_video_controls()
 
 
 class EmbedderConfigCard(CardWidget):
