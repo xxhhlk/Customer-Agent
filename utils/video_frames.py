@@ -362,6 +362,10 @@ def extract_for_model(
     os.makedirs(out_dir, exist_ok=True)
 
     try:
+        # 不做窗口下限：窗口越细，落在不同窗口的候选点越多，保留的画面越多。
+        # 实测 12s 视频 80 窗口得 16 帧、压到 30 窗口只剩 11 帧（同窗口内多个操作被合并）。
+        # 静止窗口复用已有候选帧、不额外解码，所以复用率高只是日志噪音，不是开销。
+
         # 短视频：窗口比帧还密，直接按 fps 均匀取，避免分层退化成逐帧
         if dur and dur < 3:
             fps = max(target_frames / dur, 1.0)
@@ -396,7 +400,7 @@ def extract_for_model(
         pairs = _fill_gaps(video_path, picked, out_dir, width, ffmpeg)
         files = _dedup(pairs)
         logger.info(
-            f"[video] 抽帧完成 候选={len(cands)} 目标={target_frames} "
+            f"[video] 抽帧完成 候选={len(cands)} 窗口={target_frames} "
             f"实抽={len(files)} 复用={sum(1 for _, f in pairs if f)}"
         )
         return _to_data_urls(files, budget_bytes)
