@@ -280,6 +280,8 @@ class CustomerAgent(Bot):
         self._agent: Optional[Agent] = None
         self.logger = get_logger("CustomerAgent")
         self._is_initialized = False
+        # 当前生效的 LLM 配置指纹，用于运行时检测配置变更并热替换模型
+        self._model_fp: Optional[tuple] = None
         # 同一买家会话串行锁：防止同一买家消息并发交错进入 Agent（会话历史/工具调用互相污染）
         self._conversation_locks: Dict[str, asyncio.Lock] = {}
 
@@ -316,27 +318,9 @@ class CustomerAgent(Bot):
 
                 # 获取配置
                 db_path = get_config("db_path", "./temp/agent.db")
-                model_name = get_config("llm.model_name", "gpt-3.5-turbo")
-                api_key = get_config("llm.api_key", "")
-                api_base = get_config("llm.api_base", "")
                 description = get_config("prompt.description", "")
                 instructions = get_config("prompt.instructions", [])
                 additional_context = get_config("prompt.additional_context", "")
-                thinking_config = get_config("llm.thinking", None)
-                reasoning_effort = get_config("llm.reasoning_effort", "") or ""
-
-                # 验证必要配置
-                if not api_key:
-                    raise ValueError("LLM API密钥未配置")
-
-                # 构建 extra_body 参数（火山引擎 thinking / reasoning_effort 配置）
-                # 思考强度仅对支持的模型透传，避免不支持的模型因未知参数报错
-                extra_body = {}
-                if thinking_config:
-                    extra_body["thinking"] = thinking_config
-                if reasoning_effort and _model_supports_reasoning_effort(model_name):
-                    extra_body["reasoning_effort"] = reasoning_effort
-                extra_body = extra_body or None
 
                 # 创建Agent实例；给 agno 的 SQLite 引擎补 WAL + busy_timeout，
                 # 缓解多账号并发写同一 db 时的 SQLITE_BUSY 争用
@@ -350,13 +334,7 @@ class CustomerAgent(Bot):
                 self._agent = Agent(
                     db=_agent_db,
                     knowledge=self.knowledge_manager.knowledge,
-                    model=OpenAILike(
-                        id=model_name,
-                        api_key=api_key,
-                        base_url=api_base,
-                        temperature=0.7,
-                        extra_body=extra_body,
-                    ),
+                    model=self._build_model(),
                     tools=[transfer_conversation, send_goods_link],
                     # search_knowledge: 给模型挂 search_knowledge_base 工具（模型自主决定是否调用）
                     # add_knowledge_to_context: 每轮无条件检索并在用户消息中注入 <references> 保底，
@@ -374,12 +352,91 @@ class CustomerAgent(Bot):
                 )
 
                 self._is_initialized = True
+                self._model_fp = self._config_fingerprint()
                 self.logger.info("CustomerAgent初始化成功")
                 return True
 
             except Exception as e:
                 self.logger.error(f"CustomerAgent初始化失败: {e}")
                 return False
+
+    @staticmethod
+    def _llm_model_options() -> Dict[str, Any]:
+        """按当前配置构造 OpenAILike 参数（初始化与热更新共用）。
+
+        api_key 缺失时抛 ValueError，与初始化时的必填校验行为一致。
+        """
+        model_name = get_config("llm.model_name", "gpt-3.5-turbo")
+        api_key = get_config("llm.api_key", "")
+        api_base = get_config("llm.api_base", "")
+        if not api_key:
+            raise ValueError("LLM API密钥未配置")
+
+        # extra_body 透传火山引擎的 thinking / reasoning_effort；
+        # reasoning_effort 仅对支持的模型下发，避免不支持的模型因未知参数报错
+        extra_body: Dict[str, Any] = {}
+        thinking_config = get_config("llm.thinking", None)
+        if thinking_config:
+            extra_body["thinking"] = thinking_config
+        reasoning_effort = get_config("llm.reasoning_effort", "") or ""
+        if reasoning_effort and _model_supports_reasoning_effort(model_name):
+            extra_body["reasoning_effort"] = reasoning_effort
+
+        return {
+            "id": model_name,
+            "api_key": api_key,
+            "base_url": api_base,
+            "temperature": 0.7,
+            "extra_body": extra_body or None,
+        }
+
+    @classmethod
+    def _build_model(cls) -> OpenAILike:
+        return OpenAILike(**cls._llm_model_options())
+
+    @staticmethod
+    def _config_fingerprint() -> tuple:
+        """影响模型连接方式的配置指纹。embedder 不在其中：向量模型变更需要
+        重建 lancedb 子进程与索引，只能重启生效。"""
+        return (
+            get_config("llm.model_name", "gpt-3.5-turbo"),
+            get_config("llm.api_base", ""),
+            get_config("llm.api_key", ""),
+            repr(get_config("llm.thinking", None)),
+            get_config("llm.reasoning_effort", "") or "",
+        )
+
+    def _refresh_model_if_changed(self) -> None:
+        """LLM 配置变更后热替换模型实例，免重启。
+
+        只换 model 不重建 Agent：CustomerAgent 是 DI 全局单例，被多个账号线程
+        （各自独立事件循环）共用，重建会出现「_agent 为 None」的中间态，此刻
+        其他线程正在 arun 就会崩。属性赋值是原子的，最坏情况是本次请求仍用旧
+        模型，下一次生效。
+        """
+        if self._agent is None:
+            return
+        fp = self._config_fingerprint()
+        if fp == self._model_fp:
+            return
+        try:
+            new_model = self._build_model()
+        except Exception as e:
+            self.logger.error(f"[模型热更新] 构造新模型失败，继续使用旧配置: {e}")
+            return
+        self._agent.model = new_model
+        # agno 初始化时把 model 复制给了这几个管理器，不同步会让
+        # 会话摘要 / 上下文压缩继续打旧地址
+        for attr in ("memory_manager", "session_summary_manager",
+                     "compression_manager", "culture_manager"):
+            mgr = getattr(self._agent, attr, None)
+            if mgr is not None:
+                try:
+                    mgr.model = new_model
+                except Exception:
+                    pass
+        self._model_fp = fp
+        self.logger.info(f"[模型热更新] 已切换到 {fp[0]} @ {fp[1]}")
 
     async def async_reply(self, query: str, context: Optional[Context] = None) -> Reply:
         """异步回复接口 - 确保返回Reply对象；同一买家会话串行处理，防止并发交错"""
@@ -566,6 +623,9 @@ class CustomerAgent(Bot):
         if not self._agent:
             if not await self.initialize_async():
                 return Reply(ReplyType.TEXT, "AI客服初始化失败")
+        else:
+            # 模型地址/密钥/思考参数可能在设置页刚改过，这里比对指纹按需热替换
+            self._refresh_model_if_changed()
         self.logger.info("[async_reply] Agent 已就绪")
 
         if context is None:
