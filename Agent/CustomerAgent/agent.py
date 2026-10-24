@@ -544,6 +544,17 @@ class CustomerAgent(Bot):
         return "[历史聊天记录]\n" + "\n".join(lines) + "\n"
 
     @staticmethod
+    def _load_order_block(shop_id: str, account_user_id: str, buyer_uid: str) -> str:
+        """读取买家近期订单（状态/商品/物流）并格式化为上下文块；无订单返回空串。
+
+        同步 HTTP 访问（含 cookies 读取），调用方需用 asyncio.to_thread 包装。
+        结果在 order_context 内部按 (shop, buyer) 缓存，短时间多轮对话不重复请求。
+        """
+        from Agent.CustomerAgent.order_context import load_order_block
+
+        return load_order_block(shop_id, account_user_id, buyer_uid)
+
+    @staticmethod
     def _is_safe_media_url(url: str) -> bool:
         """校验媒体 URL：仅允许 http(s) 且指向公网地址（防 SSRF）。
 
@@ -699,6 +710,21 @@ class CustomerAgent(Bot):
                         self.logger.info("[async_reply] 已注入近期聊天记录")
                 except Exception as e:
                     self.logger.warning(f"[async_reply] 加载历史聊天记录失败（将继续）: {e}")
+
+            # 注入买家近期订单（状态/商品/金额/物流），供回答订单进度类问题。
+            # 每轮都带（内部 60s 缓存），订单状态会变化，不能只在首轮注入。
+            try:
+                _order_block = await asyncio.to_thread(
+                    self._load_order_block,
+                    str(context.kwargs.shop_id),
+                    str(context.kwargs.user_id),
+                    str(context.kwargs.from_uid),
+                )
+                if _order_block:
+                    final_input = _order_block + final_input
+                    self.logger.info("[async_reply] 已注入买家订单信息")
+            except Exception as e:
+                self.logger.warning(f"[async_reply] 加载买家订单信息失败（将继续）: {e}")
 
             # 图片/视频消息传给视觉大模型（llm.send_image_to_ai 开关实时读取，免重启热开关）
             # 图片：URL 直传优先，走 agno images 参数（自动转 image_url 内容块）；

@@ -67,3 +67,17 @@ body: {"uid": "<买家uid>", "pageNo": 1, "pageSize": 10, "showHistory": true}
 
 - `note`（列表内）与 `note/query` 返回的 `result` 一致。
 - 各订单独立；测试账号 3395880824 的订单未探测（无必要）。
+
+## 5. AI 上下文注入（2026-10-25 落地）
+
+AI 回复前把当前买家的近期订单注入 prompt，模型可直接回答订单进度/物流类问题。
+
+- 实现：`Agent/CustomerAgent/order_context.py`（`load_order_block`，同步，调用方
+  `asyncio.to_thread`）；注入点 `Agent/CustomerAgent/agent.py:_async_reply_locked`
+  （会话历史注入之后、图片/视频处理之前，视频消息分支同样带上）。
+- 注入格式：`[买家订单信息]` + 每单一行（订单号 / 状态 / 商品（规格）×数量 / 金额 /
+  下单 / 发货或承诺发货 / 物流单号），最多 5 单。
+- **商家备注（note）不注入**：属店铺内部信息（可能含机器码、内部标记），
+  进 prompt 有被模型转述给买家的风险。
+- 缓存：按 `(shop_id, buyer_uid)` 60s，失败也缓存空结果（静默降级，不影响回复）。
+- 每轮都注入（订单状态会变化），不像聊天历史那样只在首轮补。

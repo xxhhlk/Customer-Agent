@@ -124,7 +124,7 @@ class OrderApi(BaseRequest):
 
         if not result or not result.get("success"):
             err = self._extract_error(result)
-            self.logger.error("获取买家订单列表失败 (uid=%s, page=%s): %s", uid, page, err)
+            self.logger.error(f"获取买家订单列表失败 (uid={uid}, page={page}): {err}")
             return {"success": False, "orders": [], "total": 0, "error_msg": err}
 
         inner = result.get("result") or {}
@@ -163,7 +163,7 @@ class OrderApi(BaseRequest):
         )
         if not result or not result.get("success"):
             err = self._extract_error(result)
-            self.logger.error("读取订单备注失败 (orderSn=%s): %s", sn, err)
+            self.logger.error(f"读取订单备注失败 (orderSn={sn}): {err}")
             return {"success": False, "note": "", "error_msg": err}
 
         return {"success": True, "note": str(result.get("result") or ""), "error_msg": ""}
@@ -206,13 +206,13 @@ class OrderApi(BaseRequest):
         err = self._extract_error(result)
         # add 失败（如服务端判定已有备注）时兜底重试 update 一次
         if path == "add":
-            self.logger.warning("note/add 失败，回退 note/update 重试 (orderSn=%s): %s", sn, err)
+            self.logger.warning(f"note/add 失败，回退 note/update 重试 (orderSn={sn}): {err}")
             result2 = self._write_note(sn, text, "update")
             if result2 and result2.get("success"):
                 return {"success": True, "error_msg": ""}
             err = self._extract_error(result2) or err
 
-        self.logger.error("写入订单备注失败 (orderSn=%s, path=%s): %s", sn, path, err)
+        self.logger.error(f"写入订单备注失败 (orderSn={sn}, path={path}): {err}")
         return {"success": False, "error_msg": err}
 
     def _write_note(self, order_sn: str, remark: str, path: str):
@@ -231,8 +231,9 @@ class OrderApi(BaseRequest):
     def _normalize_order(raw: Any) -> Optional[Dict[str, Any]]:
         """把接口原始订单整理成 UI 友好的结构。
 
-        保留：order_sn / status_str / amount（分）/ order_time /
-        pay_time / tracking_number / note / goods[]
+        保留：order_sn / status_str / amount（分）/ order_time / pay_time /
+        shipping_time / receive_time / promise_shipping_time /
+        tracking_number / note / goods[]
         """
         if not isinstance(raw, dict):
             return None
@@ -254,6 +255,9 @@ class OrderApi(BaseRequest):
             "amount": raw.get("orderAmount"),  # 单位：分
             "order_time": _fmt_time(raw.get("orderTime")),
             "pay_time": _fmt_time(raw.get("payTime")),
+            "shipping_time": _fmt_time(raw.get("shippingTime")),
+            "receive_time": _fmt_time(raw.get("receiveTime")),
+            "promise_shipping_time": _fmt_time(raw.get("promiseShippingTime")),
             "tracking_number": str(raw.get("trackingNumber") or ""),
             "note": str(raw.get("note") or ""),
             "goods": goods,
