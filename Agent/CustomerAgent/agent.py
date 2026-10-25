@@ -282,6 +282,8 @@ class CustomerAgent(Bot):
         self._is_initialized = False
         # 当前生效的 LLM 配置指纹，用于运行时检测配置变更并热替换模型
         self._model_fp: Optional[tuple] = None
+        # 当前生效的提示词指纹（description / additional_context / instructions）
+        self._prompt_fp: Optional[tuple] = None
         # 同一买家会话串行锁：防止同一买家消息并发交错进入 Agent（会话历史/工具调用互相污染）
         self._conversation_locks: Dict[str, asyncio.Lock] = {}
 
@@ -353,6 +355,7 @@ class CustomerAgent(Bot):
 
                 self._is_initialized = True
                 self._model_fp = self._config_fingerprint()
+                self._prompt_fp = self._prompt_fingerprint()
                 self.logger.info("CustomerAgent初始化成功")
                 return True
 
@@ -437,6 +440,43 @@ class CustomerAgent(Bot):
                     pass
         self._model_fp = fp
         self.logger.info(f"[模型热更新] 已切换到 {fp[0]} @ {fp[1]}")
+
+    # 提示词指纹字段顺序，与 _prompt_fingerprint() 的元组一一对应
+    _PROMPT_FP_FIELDS = ("description", "additional_context", "instructions")
+
+    @staticmethod
+    def _prompt_fingerprint() -> tuple:
+        """提示词配置指纹。instructions 可能是 list 或 str，统一 repr 后比较。"""
+        return (
+            repr(get_config("prompt.description", "")),
+            repr(get_config("prompt.additional_context", "")),
+            repr(get_config("prompt.instructions", [])),
+        )
+
+    def _refresh_prompt_if_changed(self) -> None:
+        """提示词变更后热替换 agno Agent 的 system message 来源，免重启。
+
+        与模型热更新同理只做属性赋值：agno 在 get_system_message() /
+        aget_system_message() 里每次 run 才读 self.description、
+        self.instructions、self.additional_context
+        （agno/agent/agent.py:6942 / 7035 / 7074），赋值即对下一条消息生效。
+        不重建 Agent，避免多账号线程看到「_agent 为 None」的中间态。
+        """
+        if self._agent is None:
+            return
+        fp = self._prompt_fingerprint()
+        if fp == self._prompt_fp:
+            return
+        old = self._prompt_fp or ("",) * len(self._PROMPT_FP_FIELDS)
+        changed = [
+            name for name, before, after in zip(self._PROMPT_FP_FIELDS, old, fp)
+            if before != after
+        ]
+        self._agent.description = get_config("prompt.description", "")
+        self._agent.instructions = get_config("prompt.instructions", [])
+        self._agent.additional_context = get_config("prompt.additional_context", "")
+        self._prompt_fp = fp
+        self.logger.info(f"[提示词热更新] 已应用最新配置，变更项: {', '.join(changed) or 'unknown'}")
 
     async def async_reply(self, query: str, context: Optional[Context] = None) -> Reply:
         """异步回复接口 - 确保返回Reply对象；同一买家会话串行处理，防止并发交错"""
@@ -637,6 +677,8 @@ class CustomerAgent(Bot):
         else:
             # 模型地址/密钥/思考参数可能在设置页刚改过，这里比对指纹按需热替换
             self._refresh_model_if_changed()
+            # 提示词同样按指纹热更新（不重建 Agent，只改 system message 来源）
+            self._refresh_prompt_if_changed()
         self.logger.info("[async_reply] Agent 已就绪")
 
         if context is None:
