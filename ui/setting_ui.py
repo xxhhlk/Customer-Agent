@@ -149,6 +149,19 @@ class LLMConfigCard(CardWidget):
         )
         form_layout.addRow("思考强度:", self.effort_combo)
 
+        # 单次回复超时（秒）
+        self.reply_timeout_spin = SpinBox()
+        self.reply_timeout_spin.setRange(20, 300)
+        self.reply_timeout_spin.setSingleStep(10)
+        self.reply_timeout_spin.setValue(90)
+        self.reply_timeout_spin.setSuffix(" 秒")
+        self.reply_timeout_spin.setToolTip(
+            "单次 AI 回复的最长等待时间，超过后直接发送兜底话术。\n"
+            "开启深度思考时一次回复常需 40-70 秒，多轮知识库检索还会更久，\n"
+            "阈值过小会把正常回复误判为超时。建议 90，机器较慢可调到 120。"
+        )
+        form_layout.addRow("回复超时:", self.reply_timeout_spin)
+
         # 图片/视频传 AI 识别开关
         from qfluentwidgets import SwitchButton
         self.send_image_switch = SwitchButton("开启")
@@ -305,6 +318,7 @@ class LLMConfigCard(CardWidget):
                 "type": thinking_type
             },
             "reasoning_effort": reasoning_effort,
+            "reply_timeout": int(self.reply_timeout_spin.value()),
             "send_image_to_ai": self.send_image_switch.isChecked(),
             "video_input_mode": video_input_mode,
             "video_max_frames": int(self.video_frames_spin.value())
@@ -330,6 +344,12 @@ class LLMConfigCard(CardWidget):
         reasoning_effort = config.get("reasoning_effort", "")
         effort_map = {"": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4, "max": 5}
         self.effort_combo.setCurrentIndex(effort_map.get(reasoning_effort, 0))
+
+        # 设置回复超时
+        try:
+            self.reply_timeout_spin.setValue(int(config.get("reply_timeout", 90)))
+        except (TypeError, ValueError):
+            self.reply_timeout_spin.setValue(90)
 
         # 设置图片传 AI 识别开关
         self.send_image_switch.setChecked(config.get("send_image_to_ai", True))
@@ -1614,6 +1634,7 @@ class SettingUI(QFrame):
                     "model_name": config.get("llm.model_name", "doubao-seed-1-6-flash-250828"),
                     "thinking": config.get("llm.thinking", {"type": "disabled"}),
                     "reasoning_effort": config.get("llm.reasoning_effort", ""),
+                    "reply_timeout": config.get("llm.reply_timeout", 90),
                     "send_image_to_ai": config.get("llm.send_image_to_ai", True),
                     "video_input_mode": config.get("llm.video_input_mode", "native"),
                     "video_max_frames": config.get("llm.video_max_frames", 80),
@@ -1682,6 +1703,7 @@ class SettingUI(QFrame):
                 "model_name": "doubao-seed-1-6-flash-250828",
                 "thinking": {"type": "disabled"},
                 "reasoning_effort": "",
+                "reply_timeout": 90,
                 "send_image_to_ai": True,
                 "video_input_mode": "native",
                 "video_max_frames": 80,
@@ -1737,6 +1759,7 @@ class SettingUI(QFrame):
                 "model_name": "doubao-seed-1-6-flash-250828",
                 "thinking": {"type": "disabled"},
                 "reasoning_effort": "",
+                "reply_timeout": 90,
                 "send_image_to_ai": True,
                 "video_input_mode": "native",
                 "video_max_frames": 80,

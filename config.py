@@ -41,6 +41,9 @@ class LLMConfig(OpenAILike):
     video_max_frames: int = Field(default=80, description="本地抽帧的目标帧数（frames 模式生效，40-120）")
     video_frame_width: int = Field(default=768, description="抽帧缩放宽度（像素，512 以下小字会失真）")
     video_scene_threshold: float = Field(default=0.02, description="场景变化阈值（frames 模式，越低越敏感）")
+    reply_timeout: int = 90  # 单次 AI 回复超时（秒）。LLMConfig 继承自 agno 的 dataclass，
+    # 不是 pydantic 模型，Field(...) 只会变成默认值对象而不会做范围校验，故用普通字段。
+    # 范围夹取在读取侧完成（agent.py 的 _reply_timeout_seconds）。
     pass
 
 class KnowledgeConfig(BaseModel):

@@ -92,11 +92,28 @@ logger.remove()
 import sys
 is_frozen = getattr(sys, 'frozen', False)
 
+
+def _dynamic_format(template: str):
+    """按记录动态返回 format 模板，仅在有异常时追加堆栈。
+
+    两个约束（实测 loguru 0.7）：
+    1. 用 callable 作为 format 后，loguru 不再像静态 format 那样自动补行尾换行，
+       所以模板本身必须以 "\\n" 结尾，否则相邻日志会粘成一行。
+    2. 自定义 format 不会自动追加异常堆栈，需显式放 {exception}；堆栈文本自带换行，
+       故只在有异常时把 {exception} 拼到行尾，避免无异常日志多出空行。
+    注意：loguru 的 exc_info=True 参数无效，调用处需用 logger.opt(exception=True)。
+    """
+    return lambda record: template + "{exception}" if record["exception"] else template
+
+
 # 添加控制台处理器（仅在开发环境）
 if not is_frozen:
     logger.add(
         sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        format=_dynamic_format(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>\n"
+        ),
         level=log_level.upper(),
         colorize=True,
         backtrace=True,
@@ -106,7 +123,10 @@ if not is_frozen:
 # 添加文件处理器（按天 + 按大小轮转，保留 7 天，轮转产物压缩为 zip）
 logger.add(
     DEFAULT_LOG_FILE,
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    # 行尾换行必写；有异常时追加堆栈，否则出错只剩一行 message 看不到调用栈
+    format=_dynamic_format(
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}\n"
+    ),
     level=log_level.upper(),
     rotation=_rotation_condition,
     retention=f"{LOG_RETENTION_DAYS} days",

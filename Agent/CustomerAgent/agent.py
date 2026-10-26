@@ -56,6 +56,26 @@ _HISTORY_MEDIA_KEEP_RECENT = 2
 # 历史里，否则买家已提供过的机器码、订单号等关键信息在后续轮次中缺失。
 _STAFF_TAKEOVER_CONTENT = "（本轮由人工客服直接回复）"
 
+# 单次回复允许的知识库工具调用总次数上限（agno 跨轮累计，超出后返回错误结果逼模型收敛）。
+# 背景：2026-10-26 一次换机器码咨询里模型连续检索 4 次，叠加深度思考把单次 arun
+# 拖过 60s 被超时打断。实测正常咨询 1-3 次足够（提示词已要求先关键词后语义），
+# 这里封顶 4 次，避免无限检索。改这里需要重启客户端（构造 Agent 时传入）。
+_AGENT_TOOL_CALL_LIMIT = 4
+
+
+def _reply_timeout_seconds() -> float:
+    """单次 AI 回复超时（秒）：读 llm.reply_timeout 并夹取到 [20, 300]。
+
+    模型带深度思考时一次回复常需 40-70s，多轮知识库检索还会更久；
+    写死 60s 会把正常回复打成超时兜底（2026-10-26 实测，买家换机器码那轮
+    模型检索 4 次后仍被切断）。配置项在设置页可调，每轮实时读取。
+    """
+    try:
+        value = float(get_config("llm.reply_timeout", 90))
+    except (TypeError, ValueError):
+        return 90.0
+    return max(20.0, min(300.0, value))
+
 
 def _strip_old_history_images(messages, keep_recent: int = _HISTORY_MEDIA_KEEP_RECENT) -> None:
     """剥离较旧历史消息里的图片（原地修改），只保留最近 keep_recent 条带图消息。"""
@@ -350,7 +370,9 @@ class CustomerAgent(Bot):
                     num_history_runs=8,
                     add_dependencies_to_context=True,
                     add_datetime_to_context=True,
-                    timezone_identifier="Asia/Shanghai"
+                    timezone_identifier="Asia/Shanghai",
+                    # 知识库工具调用总次数封顶，防止模型反复检索把单次回复拖到超时
+                    tool_call_limit=_AGENT_TOOL_CALL_LIMIT,
                 )
 
                 self._is_initialized = True
@@ -827,9 +849,13 @@ class CustomerAgent(Bot):
                     ])
 
             self.logger.info("[async_reply] 开始调用 arun")
-            # 给 arun 加 60 秒超时，避免某个步骤无限挂起导致事件循环冻结
+            # 给 arun 加超时，避免某个步骤无限挂起导致事件循环冻结。
+            # 阈值可配置（llm.reply_timeout，默认 90s）：模型带深度思考时一次回复
+            # 常要 40-70s，写死 60s 会把正常回复打成超时兜底。每轮实时读取，改了即时生效。
             # input_msg/ images 均为 None 时与旧行为完全一致；带图片/视频时 URL 直传优先，
             # 直传失败（HTTP 错误 / 超时）则下载转 base64 重试一次，仍失败 re-raise 走外层兜底
+            _reply_timeout = _reply_timeout_seconds()
+
             async def _arun(input_msg: Union[str, Message], images: Optional[list] = None) -> RunOutput:
                 assert self._agent is not None, "Agent未初始化"
                 return await asyncio.wait_for(
@@ -840,7 +866,7 @@ class CustomerAgent(Bot):
                         dependencies=dependencies,
                         images=images
                     ),
-                    timeout=60.0
+                    timeout=_reply_timeout
                 )
 
             run_input = video_message if video_message is not None else final_input
@@ -885,7 +911,12 @@ class CustomerAgent(Bot):
             self.logger.info("[async_reply] arun 调用完成")
             return Reply(ReplyType.TEXT, response.content)
         except Exception as e:
-            self.logger.error(f"CustomerAgent异步回复失败: {e}", exc_info=True)
+            # TimeoutError 的 str() 是空字符串，只打 {e} 会得到「异步回复失败: 」这种
+            # 无法排查的日志，必须带上异常类型名。
+            # loguru 不认 exc_info 参数，要打堆栈必须走 opt(exception=True)。
+            self.logger.opt(exception=True).error(
+                f"CustomerAgent异步回复失败: {type(e).__name__}: {e}"
+            )
             # 异常兜底：优先使用设置中配置的兜底回复话术（rate_limit.fallback_reply，
             # 即设置面板里的“兜底回复”），随机抽一条；未配置或列表为空时回退到默认文案，
             # 避免发送空消息。
