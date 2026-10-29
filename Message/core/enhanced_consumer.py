@@ -22,7 +22,9 @@ logger = get_logger(__name__)
 
 # 系统直接回复轮次在会话历史中的占位：这类轮次不过模型，但买家消息必须留在
 # 历史里，否则买家已提供的信息（机器码、订单号等）对后续 AI 轮次不可见。
-_SYSTEM_TURN_CONTENT = "（本轮由系统自动回复）"
+# ★ 必须是不像自然语言的内部标记：早先的中文话术会被模型当成自己的历史发言
+# 学舌并原句发给买家（2026-10-29），出站过滤见 agent._INTERNAL_TURN_MARKS。
+_SYSTEM_TURN_CONTENT = "[internal:auto-reply-turn]"
 
 
 class EnhancedMessageConsumer:

@@ -54,7 +54,28 @@ _HISTORY_MEDIA_KEEP_RECENT = 2
 
 # 人工接管轮次在会话历史中的占位回复：这类轮次不经模型，但买家消息必须留在
 # 历史里，否则买家已提供过的机器码、订单号等关键信息在后续轮次中缺失。
-_STAFF_TAKEOVER_CONTENT = "（本轮由人工客服直接回复）"
+# ★ 占位内容必须**不像一句能照着回复的话**：早先用中文话术「（本轮由人工客服
+# 直接回复）」占位，模型把它当成自己的历史发言学舌，原句复制发给买家
+# （2026-10-29 生产事故）。故改为纯内部标记，并纳入出站过滤。
+_STAFF_TAKEOVER_CONTENT = "[internal:no-ai-turn]"
+
+# 历史里出现这些内部占位标记时，模型可能复读。出站前必须拦掉，
+# 旧版本已写进历史的两个中文话术一并纳入（历史不会自动重写）。
+_INTERNAL_TURN_MARKS = (
+    "[internal:no-ai-turn]",
+    "[internal:auto-reply-turn]",
+    "（本轮由人工客服直接回复）",
+    "（本轮由系统自动回复）",
+)
+
+# 旧中文占位 → 内部标记的就地迁移表：历史里的老数据靠它随写入逐步洗掉，
+# 否则模型仍会读到「像话术」的占位并复读。
+_PLACEHOLDER_MIGRATION = {
+    "（本轮由人工客服直接回复）": _STAFF_TAKEOVER_CONTENT,
+    # 与 Message.core.enhanced_consumer._SYSTEM_TURN_CONTENT 保持一致；
+    # 此处写字面量避免 Message 层与 Agent 层互相 import
+    "（本轮由系统自动回复）": "[internal:auto-reply-turn]",
+}
 
 # 单次回复允许的知识库工具调用总次数上限（agno 跨轮累计，超出后返回错误结果逼模型收敛）。
 # 背景：2026-10-26 一次换机器码咨询里模型连续检索 4 次，叠加深度思考把单次 arun
@@ -516,6 +537,33 @@ class CustomerAgent(Bot):
             from_uid = str(getattr(context.kwargs, "from_uid", "") or "")
         return f"{context.channel_type}{context.kwargs.user_id}_{from_uid}"
 
+    @staticmethod
+    def _migrate_turn_placeholders(session) -> None:
+        """把历史里旧的中文占位话术就地换成内部标记（幂等）。
+
+        改常量只能影响新写入，旧数据仍会被模型读到并学舌；人工接管轮次本来
+        就要 asave_session，顺手一起洗掉，不需要单独停机迁移。
+        """
+        for run in getattr(session, "runs", None) or []:
+            run_content = getattr(run, "content", None)
+            if isinstance(run_content, str):
+                fixed = _PLACEHOLDER_MIGRATION.get(run_content.strip())
+                if fixed:
+                    try:
+                        run.content = fixed
+                    except Exception:
+                        pass
+            for msg in getattr(run, "messages", None) or []:
+                content = getattr(msg, "content", None)
+                if not isinstance(content, str):
+                    continue
+                fixed = _PLACEHOLDER_MIGRATION.get(content.strip())
+                if fixed:
+                    try:
+                        msg.content = fixed
+                    except Exception:
+                        pass
+
     async def record_staff_turn(
         self,
         query: str,
@@ -553,6 +601,8 @@ class CustomerAgent(Bot):
                         session_id=session_id, user_id=user_id
                     ),
                 )
+                # 旧中文占位会被模型当自己的发言复读，落盘前先把历史洗一遍
+                self._migrate_turn_placeholders(session)
                 session.upsert_run(
                     RunOutput(
                         run_id=str(uuid4()),
@@ -916,7 +966,19 @@ class CustomerAgent(Bot):
                 else:
                     raise
             self.logger.info("[async_reply] arun 调用完成")
-            return Reply(ReplyType.TEXT, response.content)
+            _content = str(getattr(response, "content", "") or "").strip()
+            # 模型偶尔把历史里的内部占位标记当自己的话吐出来，绝不能发给买家
+            if _content and any(mark in _content for mark in _INTERNAL_TURN_MARKS):
+                self.logger.warning(
+                    f"[async_reply] 模型复读了内部占位标记，改用兜底话术: {_content[:120]}"
+                )
+                _content = ""
+            if not _content:
+                _fallbacks = get_config("rate_limit.fallback_reply", []) or []
+                if _fallbacks:
+                    return Reply(ReplyType.TEXT, random.choice(_fallbacks))
+                return Reply(ReplyType.TEXT, "抱歉，我现在无法回复，请稍后再试。")
+            return Reply(ReplyType.TEXT, _content)
         except Exception as e:
             # TimeoutError 的 str() 是空字符串，只打 {e} 会得到「异步回复失败: 」这种
             # 无法排查的日志，必须带上异常类型名。
