@@ -364,6 +364,17 @@ class EnhancedMessageConsumer:
         except Exception as e:
             self.logger.error(f"Failed to process message with debounce: {e}")
 
+    @staticmethod
+    def _matchable_text(context: Context) -> str:
+        """取用于关键词匹配的文本。
+
+        文本消息用 content；图片/视频消息的 content 被媒体地址占用，
+        同批到达的文本在合并时转存到 merged_text（见防抖适配器），用它匹配。
+        """
+        if context.type.name == "TEXT":
+            return str(context.content or "").strip()
+        return str(getattr(context, "merged_text", None) or "").strip()
+
     async def _precheck_keyword(self, context: Context) -> Optional[dict]:
         """预处理关键词：检查消息是否命中关键词
 
@@ -378,8 +389,9 @@ class EnhancedMessageConsumer:
             for handler in self.handlers:
                 if hasattr(handler, 'match_keyword') and callable(getattr(handler, 'match_keyword', None)):
                     # 这是关键词处理器
-                    if context.type.name == "TEXT" and context.content:
-                        matched = getattr(handler, 'match_keyword')(context.content)
+                    matchable = self._matchable_text(context)
+                    if matchable:
+                        matched = getattr(handler, 'match_keyword')(matchable)
                         if matched:
                             self.logger.info(f"关键词预处理命中: {matched.get('keyword')}")
                             return matched
@@ -524,22 +536,12 @@ class EnhancedMessageConsumer:
             pass
 
     def _merge_messages(self, wrappers: list) -> MessageWrapper:
-        """合并多条消息"""
-        # 使用最后一条消息的上下文
-        last_wrapper = wrappers[-1]
-        merged_context = last_wrapper.context
+        """合并多条消息
 
-        # 合并消息内容
-        if merged_context.type.name == "TEXT":
-            texts = []
-            for w in wrappers:
-                if w.context.type.name == "TEXT" and w.context.content:
-                    texts.append(w.context.content)
-            
-            if texts:
-                merged_context.content = "\n".join(texts)
-
-        return last_wrapper
+        委托给防抖适配器：合并策略（文本拼接 / 媒体类型保留 / 附带文本转存）
+        只维护一份，两套实现曾各自演化，媒体消息都会被压成 URL 文本。
+        """
+        return self.debounce_processor._merge_messages(wrappers)
 
     def _clear_pending_user_messages(self, user_key: str) -> list:
         """清空用户队列中待处理的消息
@@ -592,7 +594,13 @@ class EnhancedMessageConsumer:
             if context is None:
                 continue
             try:
-                await bot.record_staff_turn(str(context.content or ""), context, placeholder=placeholder)
+                text = str(context.content or "")
+                # 合并后的媒体消息：content 是媒体地址，同批文本在 merged_text 里，
+                # 补写历史时必须一并带上，否则买家说过的内容对 AI 永久不可见
+                extra = str(getattr(context, "merged_text", None) or "").strip()
+                if extra:
+                    text = f"{extra}\n{text}"
+                await bot.record_staff_turn(text, context, placeholder=placeholder)
             except Exception as e:
                 self.logger.warning(f"补写会话历史失败: {e}")
 

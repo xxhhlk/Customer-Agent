@@ -245,6 +245,9 @@ class DebounceProcessorAdapter:
             return content or "[表情]"
         return f"[{name}] {content}".rstrip() if content else f"[{name}]"
 
+    # 需要保持消息类型（而非压成文本）的媒体类型：视觉模型靠它决定是否收图
+    MEDIA_TYPES = ("IMAGE", "VIDEO")
+
     @staticmethod
     def _absorb_dropped(wrapper: MessageWrapper, dropped: list) -> None:
         """把因人工接管而不再处理的已收集消息并入首条。
@@ -253,32 +256,83 @@ class DebounceProcessorAdapter:
         它们承载的是人工回复前买家发出的内容，必须能在会话历史中留痕。
         """
         context = wrapper.context
-        if context.type.name != "TEXT":
+        lines = [
+            line
+            for line in (
+                DebounceProcessorAdapter._context_line(item.context) for item in dropped
+            )
+            if line
+        ]
+        if not lines:
             return
-        texts = [str(context.content)] if context.content else []
-        for item in dropped:
-            line = DebounceProcessorAdapter._context_line(item.context)
-            if line:
-                texts.append(line)
-        if texts:
-            context.content = "\n".join(texts)
+        if context.type.name == "TEXT":
+            texts = [str(context.content)] if context.content else []
+            context.content = "\n".join(texts + lines)
+        else:
+            # 首条是媒体：content 已被地址占用，文本改走 merged_text 留痕
+            merged = str(getattr(context, "merged_text", None) or "").strip()
+            context.merged_text = "\n".join(([merged] if merged else []) + lines)
 
     def _merge_messages(self, wrappers: list) -> MessageWrapper:
-        """合并多条消息"""
-        # 使用最后一条消息的上下文
+        """合并多条消息
+
+        纯文本：全部内容按顺序拼进 content。
+        含图片/视频：合并结果必须保留最近一条媒体消息的类型与地址，否则
+        context 类型会被后续文本覆盖成 TEXT，AI 层不会把图交给视觉模型，
+        模型只能看到一串 URL 文本（表现为回复「图片显示不出来」）。
+        媒体 context 的 content 只能放地址，同批文本转存 merged_text。
+        """
         last_wrapper = wrappers[-1]
         merged_context = last_wrapper.context
 
-        # 合并消息内容（非文本类型降级为带标记的一行，不丢弃）
-        if merged_context.type.name == "TEXT":
-            texts = []
-            for w in wrappers:
-                line = self._context_line(w.context)
-                if line:
-                    texts.append(line)
+        # 文本行必须在改 merged_context 之前算：它本身就是最后一条 wrapper 的
+        # context，改完类型后再按类型过滤会把这条的文本当成媒体内容吃掉。
+        # 已经合并过的媒体 wrapper 带着 merged_text，二次合并（超时后补合并队列
+        # 残留消息）时也要把它带下去，否则先前收集的文本会静默丢失。
+        text_lines: list[str] = []
+        media_count = 0
+        for w in wrappers:
+            if w.context.type.name in self.MEDIA_TYPES:
+                media_count += 1
+                prev_text = str(getattr(w.context, "merged_text", None) or "").strip()
+                if prev_text:
+                    text_lines.append(prev_text)
+                continue
+            line = self._context_line(w.context)
+            if line:
+                text_lines.append(line)
 
-            if texts:
-                merged_context.content = "\n".join(texts)
+        media_wrapper = next(
+            (
+                w for w in reversed(wrappers)
+                if w.context.type.name in self.MEDIA_TYPES and w.context.content
+            ),
+            None,
+        )
+
+        if media_wrapper is not None and media_wrapper is not last_wrapper:
+            media_context = media_wrapper.context
+            merged_context.type = media_context.type
+            merged_context.content = media_context.content
+            # 视频抽帧/封面依赖原始 info（时长、封面地址），一并带过来
+            try:
+                merged_context.kwargs.raw_data = media_context.kwargs.raw_data
+            except Exception:
+                pass
+
+        if merged_context.type.name in self.MEDIA_TYPES:
+            # 媒体地址已进 content，其余文本另存（媒体自身那行不入文本）
+            merged_context.merged_text = "\n".join(text_lines) or None
+            self.logger.info(
+                f"合并保留媒体消息: type={merged_context.type.name}, "
+                f"附带文本 {len(text_lines)} 行, 媒体 {media_count} 条（仅最近一条送入模型）"
+            )
+        elif merged_context.type.name == "TEXT":
+            # 无可用媒体地址：退回纯文本合并，非文本类型降级为带标记的一行
+            all_lines = [self._context_line(w.context) for w in wrappers]
+            all_lines = [line for line in all_lines if line]
+            if all_lines:
+                merged_context.content = "\n".join(all_lines)
 
         return last_wrapper
 

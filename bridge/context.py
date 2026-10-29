@@ -69,6 +69,9 @@ class Context(BaseModel):
     content: Optional[str] = Field(None, description="内容")
     kwargs: Any = Field(default_factory=dict, description="渠道专用参数")
     channel_type: Optional[ChannelType] = Field(None, description="渠道类型")
+    # 防抖合并时与图片/视频同批到达的文本：媒体消息的 content 必须保持纯 URL
+    # （视觉模型直传地址），文本无处安放，故单独携带，由 AI 层拼进输入。
+    merged_text: Optional[str] = None
 
     @classmethod
     def create_pinduoduo_context(cls, content=None, msg_id=None, from_user=None, from_uid=None,

@@ -726,6 +726,13 @@ class CustomerAgent(Bot):
             if staff_context:
                 final_input = f"{query}{staff_context}"
 
+            # 防抖合并：图片/视频消息的 content 只能放地址，同批文本存在
+            # merged_text 里（见 DebounceProcessorAdapter._merge_messages）。
+            # 不拼进来的话买家一边发图一边描述，模型只看得到图、看不到描述。
+            _merged_text = str(getattr(context, "merged_text", None) or "").strip()
+            if _merged_text:
+                final_input = f"{_merged_text}\n{final_input}"
+
             # 会话键含买家 from_uid，避免同店多个买家共用历史（防串话）
             session_id = self._make_session_id(context)
             # 确保dependencies中的值是安全的类型
