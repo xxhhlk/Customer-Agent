@@ -21,6 +21,7 @@ class DebounceProcessorAdapter:
     NIGHT_DEBOUNCE_SECONDS = 300  # 夜间防抖时间（5分钟）
 
     def __init__(self):
+        # 活跃防抖窗口标记（值=窗口开启时刻，仅用于诊断；窗口关闭见 _wait_and_merge.finally）
         self._last_message_time: Dict[str, float] = {}
         self._pending_messages: Dict[str, list] = {}
         self.logger = get_logger("DebounceProcessor")
@@ -49,18 +50,13 @@ class DebounceProcessorAdapter:
         try:
             user_key = self._extract_user_id(wrapper.context)
             current_time = asyncio.get_event_loop().time()
-
-            # 检查是否在防抖窗口内
-            last_time = self._last_message_time.get(user_key, 0)
             debounce_seconds = self._get_debounce_seconds()
 
-            if current_time - last_time < debounce_seconds:
-                # 在防抖窗口内，合并消息
-                self.logger.debug(f"User {user_key} message merged (debounce)")
-                self._last_message_time[user_key] = current_time
-                return None
-
-            # 更新最后消息时间
+            # 防抖窗口 = 本次等待任务的生命周期（由 _wait_and_merge 的 finally 关闭），
+            # 不能用「距上条消息时间 < 防抖时长」判定窗口：同一用户是串行消费的，
+            # 上一条消息早已处理完毕但时间戳仍留着，夜间 300s 会把这 5 分钟内的
+            # 后续消息全部误判成「窗口内」而静默丢弃（无人等待、也无人补发）。
+            # 真正的窗口内合并由 _wait_and_merge 从 user_queue 吸收后续消息完成。
             self._last_message_time[user_key] = current_time
 
             # 等待防抖窗口，收集后续消息，同时监听人工回复
@@ -229,6 +225,11 @@ class DebounceProcessorAdapter:
                 except Exception:
                     pass
             return wrapper
+
+        finally:
+            # 窗口随任务一起关闭：任务结束后到达的消息必须重新开窗，
+            # 残留的时间戳会让下一条消息被误判为「仍在防抖」。
+            self._last_message_time.pop(self._extract_user_id(wrapper.context), None)
 
     @staticmethod
     def _context_line(context: Context) -> str:
