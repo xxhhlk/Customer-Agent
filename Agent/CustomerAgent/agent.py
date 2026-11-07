@@ -1,6 +1,8 @@
 import asyncio
+import contextvars
 import random
 import threading
+import time
 
 from agno import tools
 from Agent.bot import Bot
@@ -96,6 +98,92 @@ def _reply_timeout_seconds() -> float:
     except (TypeError, ValueError):
         return 90.0
     return max(20.0, min(300.0, value))
+
+
+# ---------------------------------------------------------------------------
+# arun 分段计时
+#
+# 排查「回复被 90s 超时打断」时，只有 arun 的总耗时无法判断是模型生成慢、
+# 还是知识库检索轮次太多把预算吃光。这里给每次 LLM 往返单独计时，并把
+# 初始化 / 预读 session / 历史注入 / 订单注入 / 媒体准备各阶段耗时一并输出，
+# 一行 INFO 即可定位瓶颈（超时时还要能看出最后卡在第几轮）。
+#
+# CustomerAgent 是全局单例、多账号线程共用一个 model 实例，所以计时包装只
+# 安装一次，是否记录由 contextvar 决定：只有 _arun 期间置位，其余调用原样
+# 转发，不改变任何行为。
+# ---------------------------------------------------------------------------
+_arun_timing: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "arun_timing", default=None
+)
+
+
+def _install_model_timing_hook(model: Any) -> None:
+    """给 model.aresponse 包一层计时（幂等，重复调用无副作用）。"""
+    if model is None or getattr(model, "_cb_timing_hooked", False):
+        return
+    orig = getattr(model, "aresponse", None)
+    if orig is None:
+        return
+
+    async def _timed_aresponse(*args, **kwargs):
+        rec = _arun_timing.get()
+        if rec is None:
+            return await orig(*args, **kwargs)
+        t0 = time.perf_counter()
+        try:
+            resp = await orig(*args, **kwargs)
+        except asyncio.CancelledError:
+            # wait_for 到点会取消内层任务：这条标记出「被超时切断的那一次往返」
+            rec["llm"].append({"cost": time.perf_counter() - t0, "error": "cancelled"})
+            raise
+        except BaseException as e:
+            rec["llm"].append({"cost": time.perf_counter() - t0, "error": type(e).__name__})
+            raise
+        usage = getattr(resp, "response_usage", None)
+        provider = getattr(resp, "provider_data", None)
+        rec["llm"].append({
+            "cost": time.perf_counter() - t0,
+            "finish": str((provider or {}).get("finish_reason") or "") if isinstance(provider, dict) else "",
+            "tokens": getattr(usage, "completion_tokens", None),
+            "tool_calls": len(getattr(resp, "tool_calls", None) or []),
+        })
+        return resp
+
+    try:
+        model.aresponse = _timed_aresponse
+        model._cb_timing_hooked = True
+    except Exception:
+        # 包装失败只是没有计时日志，绝不能影响回复主流程
+        pass
+
+
+def _format_arun_timing(
+    stages: list, rec: Optional[dict], total: float, timeout: float
+) -> str:
+    """把分段打点拼成一行日志。
+
+    llm 每项形如 `#2 43.1s(2tool)`：带 tool_calls 时标出工具轮数（连续多轮
+    tool_call 是超时常见成因），否则显示 completion tokens；`cancelled` 表示
+    这一次往返被 wait_for 超时切断，也就是超时卡在哪一轮。
+    """
+    parts = []
+    for i, item in enumerate((rec or {}).get("llm") or [], 1):
+        if item.get("error"):
+            parts.append(f"#{i} {item['cost']:.1f}s-{item['error']}")
+        else:
+            n_tool = item.get("tool_calls") or 0
+            if n_tool:
+                tail = f"{n_tool}tool"
+            elif item.get("tokens"):
+                tail = f"{item['tokens']}tok"
+            else:
+                tail = item.get("finish") or "-"
+            parts.append(f"#{i} {item['cost']:.1f}s({tail})")
+    return (
+        f"[arun-timing] 总计 {total:.1f}s (上限 {timeout:.0f}s) | "
+        f"阶段: {' -> '.join(stages) or '无'} | "
+        f"LLM 往返 {len(parts)} 次: {' '.join(parts) or '未发生'}"
+    )
 
 
 def _strip_old_history_images(messages, keep_recent: int = _HISTORY_MEDIA_KEEP_RECENT) -> None:
@@ -396,6 +484,9 @@ class CustomerAgent(Bot):
                     tool_call_limit=_AGENT_TOOL_CALL_LIMIT,
                 )
 
+                # LLM 逐轮计时（排查超时用），幂等且不影响调用行为
+                _install_model_timing_hook(self._agent.model)
+
                 self._is_initialized = True
                 self._model_fp = self._config_fingerprint()
                 self._prompt_fp = self._prompt_fingerprint()
@@ -471,6 +562,8 @@ class CustomerAgent(Bot):
             self.logger.error(f"[模型热更新] 构造新模型失败，继续使用旧配置: {e}")
             return
         self._agent.model = new_model
+        # 热更新换了 model 实例，计时包装要重新装到新实例上
+        _install_model_timing_hook(new_model)
         # agno 初始化时把 model 复制给了这几个管理器，不同步会让
         # 会话摘要 / 上下文压缩继续打旧地址
         for attr in ("memory_manager", "session_summary_manager",
@@ -743,6 +836,31 @@ class CustomerAgent(Bot):
     async def _async_reply_locked(self, query: str, context: Optional[Context] = None) -> Reply:
         """异步回复实现（在会话锁内执行）"""
         self.logger.info("[async_reply] 开始处理，进入初始化检查")
+
+        # 分段计时：阶段耗时 + 每次 LLM 往返耗时，结束时汇总成一行 [arun-timing]
+        _t_start = time.perf_counter()
+        _t_tick = _t_start
+        _stages: list = []
+        _timing_rec: dict = {"llm": []}
+        _timing_token = None
+
+        def _mark(name: str) -> None:
+            nonlocal _t_tick
+            _now = time.perf_counter()
+            _stages.append(f"{name} {_now - _t_tick:.2f}s")
+            _t_tick = _now
+
+        def _clear_timing() -> None:
+            nonlocal _timing_token
+            if _timing_token is None:
+                return
+            try:
+                _arun_timing.reset(_timing_token)
+            except Exception:
+                # reset 只影响计时作用域，失败不能打断回复流程
+                pass
+            _timing_token = None
+
         if not self._agent:
             if not await self.initialize_async():
                 return Reply(ReplyType.TEXT, "AI客服初始化失败")
@@ -752,6 +870,7 @@ class CustomerAgent(Bot):
             # 提示词同样按指纹热更新（不重建 Agent，只改 system message 来源）
             self._refresh_prompt_if_changed()
         self.logger.info("[async_reply] Agent 已就绪")
+        _mark("init")
 
         if context is None:
             return Reply(ReplyType.TEXT, "缺少上下文信息")
@@ -812,6 +931,7 @@ class CustomerAgent(Bot):
                     # 但我们用的是单 agent 模式，实际只会返回 AgentSession，用 cast 安抚类型检查器
                     self._agent._cached_session = _pre_session
                     self.logger.info("[async_reply] 预读 session 完成")
+                    _mark("session")
             except Exception as e:
                 self.logger.warning(f"[async_reply] 预读 session 失败（将继续）: {e}")
 
@@ -829,6 +949,7 @@ class CustomerAgent(Bot):
                     if _history_block:
                         final_input = _history_block + final_input
                         self.logger.info("[async_reply] 已注入近期聊天记录")
+                        _mark("history")
                 except Exception as e:
                     self.logger.warning(f"[async_reply] 加载历史聊天记录失败（将继续）: {e}")
 
@@ -844,6 +965,7 @@ class CustomerAgent(Bot):
                 if _order_block:
                     final_input = _order_block + final_input
                     self.logger.info("[async_reply] 已注入买家订单信息")
+                    _mark("order")
             except Exception as e:
                 self.logger.warning(f"[async_reply] 加载买家订单信息失败（将继续）: {e}")
 
@@ -927,6 +1049,9 @@ class CustomerAgent(Bot):
                 )
 
             run_input = video_message if video_message is not None else final_input
+            _mark("media")
+            # 置位计时上下文：arun 内部每次 LLM 往返由 _install_model_timing_hook 记录
+            _timing_token = _arun_timing.set(_timing_rec)
             try:
                 response = await _arun(run_input, images)
             except Exception:
@@ -966,6 +1091,13 @@ class CustomerAgent(Bot):
                 else:
                     raise
             self.logger.info("[async_reply] arun 调用完成")
+            _mark("arun")
+            _clear_timing()
+            self.logger.info(
+                _format_arun_timing(
+                    _stages, _timing_rec, time.perf_counter() - _t_start, _reply_timeout
+                )
+            )
             _content = str(getattr(response, "content", "") or "").strip()
             # 模型偶尔把历史里的内部占位标记当自己的话吐出来，绝不能发给买家
             if _content and any(mark in _content for mark in _INTERNAL_TURN_MARKS):
@@ -983,6 +1115,13 @@ class CustomerAgent(Bot):
             # TimeoutError 的 str() 是空字符串，只打 {e} 会得到「异步回复失败: 」这种
             # 无法排查的日志，必须带上异常类型名。
             # loguru 不认 exc_info 参数，要打堆栈必须走 opt(exception=True)。
+            if _timing_token is not None:
+                _clear_timing()
+            self.logger.warning(
+                _format_arun_timing(
+                    _stages, _timing_rec, time.perf_counter() - _t_start, _reply_timeout_seconds()
+                )
+            )
             self.logger.opt(exception=True).error(
                 f"CustomerAgent异步回复失败: {type(e).__name__}: {e}"
             )
