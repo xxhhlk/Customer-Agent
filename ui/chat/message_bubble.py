@@ -195,24 +195,25 @@ class MessageBubble(QFrame):
         self.customContextMenuRequested.connect(self._show_context_menu)
 
     def _show_context_menu(self, pos):
-        """显示右键菜单 — 复制消息 / 转发消息"""
+        """显示右键菜单 — 复制所选（有选中文字时置顶）/ 复制消息 / 转发消息"""
         menu = QMenu(self)
 
         content = self.msg_data.get("content", "")
         context_type = self.msg_data.get("context_type", "text") or "text"
 
         if content:
+            # 文本消息若有选中文字，则「复制所选」置顶
+            selected = ""
+            if context_type not in ("image", "video"):
+                selected = self._get_selected_text()
+            if selected:
+                copy_sel_action = QAction("复制所选", self)
+                copy_sel_action.triggered.connect(self._copy_selected)
+                menu.addAction(copy_sel_action)
+
             copy_action = QAction("复制消息", self)
             copy_action.triggered.connect(self._copy_content)
             menu.addAction(copy_action)
-
-            # 文本消息若有选中文字，额外提供「复制所选」
-            if context_type not in ("image", "video"):
-                selected = self._get_selected_text()
-                if selected:
-                    copy_sel_action = QAction("复制所选", self)
-                    copy_sel_action.triggered.connect(self._copy_selected)
-                    menu.addAction(copy_sel_action)
 
         # 图片/视频消息：额外提供「复制链接」
         if context_type in ("image", "video") and content.startswith(("http://", "https://")):
