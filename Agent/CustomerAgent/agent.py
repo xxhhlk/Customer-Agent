@@ -201,6 +201,8 @@ def _install_model_timing_hook(model: Any) -> None:
             "cost": time.perf_counter() - t0,
             "finish": str((provider or {}).get("finish_reason") or "") if isinstance(provider, dict) else "",
             "tokens": getattr(usage, "completion_tokens", None),
+            # 服务端回传的输入 token 数，用于反向校准 context_budget 的估算
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
             "tool_calls": len(getattr(resp, "tool_calls", None) or []),
         })
         return resp
@@ -235,10 +237,17 @@ def _format_arun_timing(
             else:
                 tail = item.get("finish") or "-"
             parts.append(f"#{i} {item['cost']:.1f}s({tail})")
+    # 首次往返的 prompt_tokens = 本轮实际发出的完整上下文量，用来校准
+    # context_budget 的估算偏差与 HISTORY_BUDGET_RATIO / CAP 的取值。
+    first_prompt = next(
+        (i.get("prompt_tokens") for i in (rec or {}).get("llm") or [] if i.get("prompt_tokens")),
+        None,
+    )
+    ctx_part = f" | 上下文 {first_prompt / 1000:.1f}k tok" if first_prompt else ""
     return (
         f"[arun-timing] 总计 {total:.1f}s (上限 {timeout:.0f}s) | "
         f"阶段: {' -> '.join(stages) or '无'} | "
-        f"LLM 往返 {len(parts)} 次: {' '.join(parts) or '未发生'}"
+        f"LLM 往返 {len(parts)} 次: {' '.join(parts) or '未发生'}{ctx_part}"
     )
 
 
@@ -423,15 +432,25 @@ def _patch_agno_async_db():
     # _read_session 耗时 6+ 秒，阻塞 asyncio 线程池，导致主线程冻结，最终进程崩溃。
     #
     # 修复：upsert_run 后只保留最近 MAX_SESSION_RUNS 条 run。
-    # 真正的上下文窗口由 token 预算决定（context_budget.truncate_messages_by_tokens），
-    # 这里只是磁盘与读放大的物理上限。
-    # 配合 store_history_messages=False 后单条 run 只存本轮 2~3 条消息（不再重复
-    # 携带前序全部历史的快照），60 条约 300~400KB/session，读取消耗可接受。
+    # 真正的上下文窗口由 token 预算决定（context_budget.truncate_messages_by_tokens，
+    # 500k 窗口下按 40% 封顶 150k），这里只是磁盘与读放大的物理上限。
+    # 配合 store_history_messages=False（不重复携带前序历史快照）+ 落盘剔除
+    # system 消息后，单条 run 只剩本轮 2~3 条对话，300 条约 1~2MB/session。
     # ---------------------------------------------------------------------------
-    _MAX_SESSION_RUNS = 60
+    _MAX_SESSION_RUNS = 300
     _original_upsert_run = AgentSession.upsert_run
 
     def _patched_upsert_run(self: AgentSession, run):
+        # 落盘前剔除 system 消息：历史注入时 agno 已按 skip_roles=["system"]
+        # 过滤（agent.py 的 _aget_run_messages），存下来纯属每轮重复占 3~4k
+        # token（约 10KB），300 轮就是 3MB 冗余。
+        try:
+            _msgs = getattr(run, "messages", None)
+            if _msgs:
+                run.messages = [m for m in _msgs if getattr(m, "role", "") != "system"]
+        except Exception:
+            # 剔除失败只多占体积，不能影响落盘
+            pass
         _original_upsert_run(self, run)
         # 截断：只保留最近 N 条 run
         if self.runs and len(self.runs) > _MAX_SESSION_RUNS:

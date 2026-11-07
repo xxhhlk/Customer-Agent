@@ -27,6 +27,12 @@ from typing import Any, List, Optional, Tuple
 # 检索结果（add_knowledge_to_context=True）、本轮输入与模型输出。
 HISTORY_BUDGET_RATIO = 0.40
 
+# 历史注入的绝对上限（tokens）。窗口越大，按比例算出的预算越离谱：
+# 500k 窗口 × 40% = 200k，单次 prefill 要十几秒、输入成本翻几倍，而客服场景
+# 95% 的问题只需要最近 10~20 轮，超长上下文还会让中段信息检索衰减。
+# 超出部分交给滚动摘要承载（摘要 ≤800 字，压缩比远超原文）。
+HISTORY_BUDGET_CAP = 150000
+
 # 历史估算达到预算的该比例时，后台生成滚动摘要（略早于截断点，提前准备）。
 SUMMARY_TRIGGER_RATIO = 0.85
 
@@ -152,8 +158,8 @@ def context_window() -> int:
 
 
 def history_token_budget() -> int:
-    """历史注入允许占用的 token 预算。"""
-    return int(context_window() * HISTORY_BUDGET_RATIO)
+    """历史注入允许占用的 token 预算：比例值与绝对上限取小。"""
+    return min(int(context_window() * HISTORY_BUDGET_RATIO), HISTORY_BUDGET_CAP)
 
 
 # ---------------------------------------------------------------------------

@@ -95,15 +95,31 @@ class ContextBudgetTest(unittest.TestCase):
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
-        # 应用生产同一份补丁（历史图片限流 + token 预算截断）
-        from Agent.CustomerAgent.agent import _patch_agno_history_media
+        # 固定窗口值，避免测试结果随用户 config.json 漂移（只改内存，不落盘）
+        from config import config
 
+        cls._orig_cw = config.get("llm.context_window", 128000)
+        config.update({"llm": {"context_window": 500000}}, save=False)
+
+        # 应用生产同一份补丁（DB 走 to_thread + run 落盘裁剪 + token 预算截断）
+        from Agent.CustomerAgent.agent import (
+            _patch_agno_async_db,
+            _patch_agno_history_media,
+        )
+
+        _patch_agno_async_db()
         _patch_agno_history_media()
 
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
         cls.server.server_close()
+        try:
+            from config import config
+
+            config.update({"llm": {"context_window": cls._orig_cw}}, save=False)
+        except Exception:
+            pass
 
     def _make_agent(self, db_path):
         from agno.agent import Agent
@@ -134,30 +150,30 @@ class ContextBudgetTest(unittest.TestCase):
         budget = history_token_budget()
         try:
             agent = self._make_agent(db_path)
-            long_text = "字" * 2000  # 每轮约 2000 token
+            long_text = "字" * 5000  # 每轮约 5000 token
 
             async def _run():
-                # 32 轮 × 2000 token = 64000 > 51200 预算，必然触发截断
-                for i in range(32):
+                # 36 轮 × 5000 = 180000 token，超过封顶后的 150000 预算，必然截断
+                for i in range(36):
                     await agent.arun(f"第{i}轮{long_text}", session_id="s1", user_id="u1")
                 await agent.arun("最后确认一句", session_id="s1", user_id="u1")
 
             asyncio.run(_run())
 
-            self.assertGreaterEqual(len(CAPTURED), 33, f"mock 捕获轮数不足: {len(CAPTURED)}")
+            self.assertGreaterEqual(len(CAPTURED), 37, f"mock 捕获轮数不足: {len(CAPTURED)}")
             messages = CAPTURED[-1]["messages"]
             self.assertEqual(messages[0]["role"], "system", "首条应为本轮 system 消息")
 
             history_msgs = messages[1:-1]
-            # 32 轮 × 2 条 = 64 条历史，截断后应少于这个数
-            self.assertLess(len(history_msgs), 64, "历史条数未减少，截断未生效")
+            # 36 轮 × 2 条 = 72 条历史，截断后应少于这个数
+            self.assertLess(len(history_msgs), 72, "历史条数未减少，截断未生效")
             self.assertNotEqual(history_msgs[0]["role"] if history_msgs else "", "tool",
                                 "截断后历史不应以 tool 消息开头")
 
             history_tokens = _payload_text_tokens({"messages": history_msgs})
             # 允许一条消息的越界余量（从尾部累加时最后一条不拆分）
             self.assertLessEqual(
-                history_tokens, budget + 2500,
+                history_tokens, budget + 7000,
                 f"历史 token {history_tokens} 超出预算 {budget}",
             )
 
@@ -168,12 +184,19 @@ class ContextBudgetTest(unittest.TestCase):
             finally:
                 conn.close()
             history_snapshots = 0
+            system_msgs = 0
+            total_runs = 0
             for (runs_json,) in rows:
                 for run in _load_runs(runs_json):
+                    total_runs += 1
                     for m in run.get("messages") or []:
                         if m.get("from_history"):
                             history_snapshots += 1
+                        if m.get("role") == "system":
+                            system_msgs += 1
+            self.assertGreater(total_runs, 0, "未读到任何 run")
             self.assertEqual(history_snapshots, 0, f"落盘仍存有 {history_snapshots} 条历史快照")
+            self.assertEqual(system_msgs, 0, f"落盘仍存有 {system_msgs} 条 system 消息（应为 0）")
         finally:
             try:
                 if os.path.exists(db_path):
