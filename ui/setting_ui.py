@@ -162,6 +162,21 @@ class LLMConfigCard(CardWidget):
         )
         form_layout.addRow("回复超时:", self.reply_timeout_spin)
 
+        # 上下文窗口（tokens）：历史注入预算与滚动摘要阈值都由它推导
+        self.context_window_spin = SpinBox()
+        self.context_window_spin.setRange(8000, 1000000)
+        self.context_window_spin.setSingleStep(8000)
+        self.context_window_spin.setValue(128000)
+        self.context_window_spin.setSuffix(" tokens")
+        self.context_window_spin.setToolTip(
+            "模型单次请求能容纳的上下文长度（含系统提示词、历史对话、本轮输入与回复）。\n"
+            "国内主流模型 doubao-seed / deepseek-v4 均为 128000，未知模型按默认值即可。\n"
+            "历史对话的注入预算按其中的 40% 计算；接近预算时会把最旧的对话压缩成一段\n"
+            "摘要长期保留，因此对话条数不再受限、早期信息（机器码、订单号等）也不会丢。\n"
+            "填得比模型实际窗口大 → 接口报超长错误；填得太小 → 过早触发摘要。"
+        )
+        form_layout.addRow("上下文窗口:", self.context_window_spin)
+
         # 图片/视频传 AI 识别开关
         from qfluentwidgets import SwitchButton
         self.send_image_switch = SwitchButton("开启")
@@ -319,6 +334,7 @@ class LLMConfigCard(CardWidget):
             },
             "reasoning_effort": reasoning_effort,
             "reply_timeout": int(self.reply_timeout_spin.value()),
+            "context_window": int(self.context_window_spin.value()),
             "send_image_to_ai": self.send_image_switch.isChecked(),
             "video_input_mode": video_input_mode,
             "video_max_frames": int(self.video_frames_spin.value())
@@ -350,6 +366,12 @@ class LLMConfigCard(CardWidget):
             self.reply_timeout_spin.setValue(int(config.get("reply_timeout", 90)))
         except (TypeError, ValueError):
             self.reply_timeout_spin.setValue(90)
+
+        # 设置上下文窗口
+        try:
+            self.context_window_spin.setValue(int(config.get("context_window", 128000)))
+        except (TypeError, ValueError):
+            self.context_window_spin.setValue(128000)
 
         # 设置图片传 AI 识别开关
         self.send_image_switch.setChecked(config.get("send_image_to_ai", True))
@@ -1635,6 +1657,7 @@ class SettingUI(QFrame):
                     "thinking": config.get("llm.thinking", {"type": "disabled"}),
                     "reasoning_effort": config.get("llm.reasoning_effort", ""),
                     "reply_timeout": config.get("llm.reply_timeout", 90),
+                    "context_window": config.get("llm.context_window", 128000),
                     "send_image_to_ai": config.get("llm.send_image_to_ai", True),
                     "video_input_mode": config.get("llm.video_input_mode", "native"),
                     "video_max_frames": config.get("llm.video_max_frames", 80),
@@ -1704,6 +1727,7 @@ class SettingUI(QFrame):
                 "thinking": {"type": "disabled"},
                 "reasoning_effort": "",
                 "reply_timeout": 90,
+                "context_window": 128000,
                 "send_image_to_ai": True,
                 "video_input_mode": "native",
                 "video_max_frames": 80,
@@ -1760,6 +1784,7 @@ class SettingUI(QFrame):
                 "thinking": {"type": "disabled"},
                 "reasoning_effort": "",
                 "reply_timeout": 90,
+                "context_window": 128000,
                 "send_image_to_ai": True,
                 "video_input_mode": "native",
                 "video_max_frames": 80,
@@ -1903,6 +1928,17 @@ class SettingUI(QFrame):
             if not llm_config.get("model_name"):
                 self._show_info("配置错误", "请输入LLM模型名称！", "warning")
                 return
+
+            # 验证上下文窗口（SpinBox 已限范围，这里兜住手改 config.json 的情况）
+            try:
+                _cw = int(llm_config.get("context_window", 128000))
+            except (TypeError, ValueError):
+                self._show_info("配置错误", "上下文窗口必须是整数（tokens）！", "warning")
+                return
+            if _cw < 8000 or _cw > 1000000:
+                self._show_info("配置错误", "上下文窗口需在 8000 ~ 1000000 tokens 之间！", "warning")
+                return
+            llm_config["context_window"] = _cw
 
             # 验证时间设置
             start_time = self.business_hours_card.start_time_picker.getTime()

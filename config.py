@@ -44,6 +44,9 @@ class LLMConfig(OpenAILike):
     reply_timeout: int = 90  # 单次 AI 回复超时（秒）。LLMConfig 继承自 agno 的 dataclass，
     # 不是 pydantic 模型，Field(...) 只会变成默认值对象而不会做范围校验，故用普通字段。
     # 范围夹取在读取侧完成（agent.py 的 _reply_timeout_seconds）。
+    context_window: int = 128000  # 模型上下文窗口（tokens）。历史注入预算、滚动摘要
+    # 阈值都由它推导（history 预算 = 40%）。同上：普通字段，范围夹取在读取侧完成
+    # （context_budget.context_window()，夹到 8000~1000000）。
     pass
 
 class KnowledgeConfig(BaseModel):
@@ -161,7 +164,8 @@ config_base = {
         "video_input_mode": "native",
         "video_max_frames": 80,
         "video_frame_width": 768,
-        "video_scene_threshold": 0.02
+        "video_scene_threshold": 0.02,
+        "context_window": 128000
     },
     "embedder": {
         "model_name": "",
