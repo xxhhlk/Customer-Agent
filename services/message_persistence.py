@@ -33,6 +33,7 @@ logger = get_logger("MessagePersistence")
 class MessagePersistenceSignals(QObject):
     """消息持久化信号 - 线程安全通知 UI"""
     new_message = pyqtSignal(dict)  # 新消息到达，参数: msg_dict
+    history_synced = pyqtSignal(list)  # 历史补拉完成，参数: [(shop_id, buyer_uid), ...]
 
 
 class MessagePersistenceService:
@@ -54,6 +55,8 @@ class MessagePersistenceService:
         self._seen_msg_ids: set = set()
         # 跨线程消息通知缓冲区
         self._notify_buffer: deque = deque(maxlen=200)
+        # 历史补拉完成通知缓冲区：元素为 [(shop_id, buyer_uid), ...]
+        self._history_buffer: deque = deque(maxlen=50)
         self._notify_lock = threading.Lock()
         self._notify_timer: Optional[QTimer] = None
         self._start_notify_timer()
@@ -73,17 +76,30 @@ class MessagePersistenceService:
 
     def _flush_notify_buffer(self):
         """从缓冲区批量取消息并在主线程 emit"""
-        if not self._notify_buffer:
+        if not self._notify_buffer and not self._history_buffer:
             return
+
         batch = []
+        history_pairs: set = set()
         with self._notify_lock:
             while self._notify_buffer and len(batch) < 20:
                 batch.append(self._notify_buffer.popleft())
+            while self._history_buffer:
+                for pair in self._history_buffer.popleft():
+                    if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                        history_pairs.add((str(pair[0]), str(pair[1])))
+
         for msg_dict in batch:
             try:
                 self._signals.new_message.emit(msg_dict)
             except Exception:
                 pass  # emit 失败时静默丢弃
+
+        if history_pairs:
+            try:
+                self._signals.history_synced.emit(sorted(history_pairs))
+            except Exception:
+                pass
 
     @property
     def signals(self) -> MessagePersistenceSignals:
@@ -626,6 +642,26 @@ class MessagePersistenceService:
                 self._signals.new_message.emit(msg_dict)
         except Exception as e:
             logger.warning(f"通知新消息失败: {e}")
+
+    def notify_history_synced(self, pairs):
+        """通知 UI 历史补拉已完成（线程安全）
+
+        Args:
+            pairs: 受影响的会话列表 ``[(shop_id, buyer_uid), ...]``
+
+        与 ``notify_new_message`` 走同一条主线程定时器通道，区别是它只触发界面
+        重载，不产生未读标记与提示音——历史回填不应打断正在处理的消息。
+        """
+        if not pairs:
+            return
+        try:
+            if self._notify_timer is not None:
+                with self._notify_lock:
+                    self._history_buffer.append(list(pairs))
+            else:
+                self._signals.history_synced.emit(list(pairs))
+        except Exception as e:
+            logger.warning(f"通知历史补拉失败: {e}")
 
     @staticmethod
     def _record_to_dict(record: ChatMessageRecord) -> Dict[str, Any]:

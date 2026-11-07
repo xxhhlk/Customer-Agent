@@ -16,7 +16,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from bridge.context import ChannelType, Context
 from Channel.pinduoduo.pdd_message import PDDChatMessage
@@ -34,8 +34,10 @@ MAX_CONVERSATIONS = 50
 MAX_PAGES_PER_CONVERSATION = 3
 # 单页条数
 PAGE_SIZE = 50
-# 同一账号两次同步的最小间隔（秒），避免重连时重复拉取
-SYNC_INTERVAL_SECONDS = 600
+# 同一账号两次同步的最小间隔（秒），避免重连时重复拉取。
+# 取 60s：WS 掉线重连通常发生在秒级到分钟级，窗口过长会漏掉断线期间的推送。
+# 该冷却只存在于进程内存（_last_sync），进程重启后归零，重启必然重新补拉。
+SYNC_INTERVAL_SECONDS = 60
 # 连接建立后的等待时间（秒），先让实时消息流稳定
 START_DELAY_SECONDS = 5
 # 相邻会话之间的间隔（秒），避免一次性打出过多请求触发风控
@@ -52,38 +54,58 @@ class HistorySyncService:
     def __init__(self) -> None:
         self._last_sync: Dict[str, float] = {}
         self._running: Set[str] = set()
+        # 同步进行中又被触发的账号：本轮结束后补跑一轮，避免重连请求被静默丢弃
+        self._pending: Set[str] = set()
 
     async def sync_on_start(self, shop_id: str, user_id: str, username: str = "") -> int:
         """上线后补拉历史消息
 
         Returns:
-            本次新增的消息条数；命中节流或同步失败时返回 0。
+            本次新增的消息条数；命中节流、拉取失败或已有同步在进行时返回 0。
         """
         key = f"{shop_id}_{user_id}"
         if key in self._running:
+            self._pending.add(key)
             return 0
         if time.monotonic() - self._last_sync.get(key, 0.0) < SYNC_INTERVAL_SECONDS:
             return 0
 
-        self._running.add(key)
-        try:
-            await asyncio.sleep(START_DELAY_SECONDS)
-            added = await asyncio.to_thread(self._sync, shop_id, user_id, username)
-            self._last_sync[key] = time.monotonic()
-            return added
-        except Exception as e:
-            logger.warning(f"历史消息同步失败: {shop_id}-{username}, {e}")
-            return 0
-        finally:
-            self._running.discard(key)
+        total = 0
+        delay = START_DELAY_SECONDS
+        while True:
+            # 进入本轮先清掉待补标记，本轮结束后再检查是否被重新置位
+            self._pending.discard(key)
+            self._running.add(key)
+            try:
+                if delay:
+                    await asyncio.sleep(delay)
+                    delay = 0
+                added = await asyncio.to_thread(self._sync, shop_id, user_id, username)
+                if added is None:
+                    # 拉取失败不写冷却时间戳，下次连接可立即重试
+                    logger.warning(f"历史消息同步未完成，稍后可重试: {shop_id}-{username}")
+                else:
+                    self._last_sync[key] = time.monotonic()
+                    total += added
+            except Exception as e:
+                logger.warning(f"历史消息同步失败: {shop_id}-{username}, {e}")
+            finally:
+                self._running.discard(key)
 
-    def _sync(self, shop_id: str, user_id: str, username: str) -> int:
-        """拉取会话列表并逐会话补拉历史（同步执行，由调用方置于工作线程）"""
+            if key not in self._pending:
+                return total
+
+    def _sync(self, shop_id: str, user_id: str, username: str) -> Optional[int]:
+        """拉取会话列表并逐会话补拉历史（同步执行，由调用方置于工作线程）
+
+        Returns:
+            新增条数；会话列表不可用时返回 None（表示失败，调用方不应写入节流时间）。
+        """
         client = GetChatHistory(shop_id, user_id)
         conv_result = client.fetch_conversations(page=1, size=MAX_CONVERSATIONS)
         if not conv_result.get("success"):
             logger.warning(f"历史消息同步跳过，会话列表不可用: {shop_id}-{username}")
-            return 0
+            return None
 
         conversations = conv_result.get("conversations") or []
         if not conversations:
@@ -93,6 +115,7 @@ class HistorySyncService:
         shop_name = self._get_shop_name(shop_id)
 
         total = 0
+        touched: Set[Tuple[str, str]] = set()
         for index, conversation in enumerate(conversations):
             buyer_uid = conversation.get("buyer_uid")
             if not buyer_uid:
@@ -100,7 +123,7 @@ class HistorySyncService:
             if index > 0:
                 time.sleep(CONVERSATION_INTERVAL)
             try:
-                total += self._sync_conversation(
+                added = self._sync_conversation(
                     client,
                     shop_id,
                     user_id,
@@ -108,11 +131,26 @@ class HistorySyncService:
                     conversation.get("nickname") or "",
                     shop_name,
                 )
+                total += added
+                if added:
+                    touched.add((str(shop_id), str(buyer_uid)))
             except Exception as e:
                 logger.warning(f"会话历史补拉失败: {shop_id}/{buyer_uid}, {e}")
 
         logger.info(f"历史消息同步完成: {username}, 新增 {total} 条")
+        if touched:
+            self._notify_ui(touched)
         return total
+
+    @staticmethod
+    def _notify_ui(touched: Set[Tuple[str, str]]) -> None:
+        """通知界面刷新这些会话（只落库不通知会让人以为消息没补到）"""
+        try:
+            from services.message_persistence import message_persistence_service
+
+            message_persistence_service.notify_history_synced(sorted(touched))
+        except Exception as e:
+            logger.debug(f"通知界面刷新失败: {e}")
 
     def _sync_conversation(
         self,

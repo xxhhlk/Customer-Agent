@@ -345,6 +345,7 @@ class ChatUI(QFrame):
         try:
             from services.message_persistence import message_persistence_service
             message_persistence_service.signals.new_message.connect(self._on_new_message)
+            message_persistence_service.signals.history_synced.connect(self._on_history_synced)
         except Exception as e:
             logger.warning(f"连接消息信号失败: {e}")
 
@@ -375,6 +376,28 @@ class ChatUI(QFrame):
 
         # 追加到当前聊天
         self.chat_area.append_message(msg_data)
+
+    def _on_history_synced(self, pairs: list):
+        """历史补拉完成：刷新会话列表；当前会话命中则重载消息
+
+        补拉的消息时间可能早于窗口里已渲染的消息，走 append 会顺序错乱，
+        所以直接重载当前会话，让界面按时间重新铺。
+        """
+        try:
+            self.conversation_list.refresh(self.shop_combo.currentData())
+            cur_shop = str(getattr(self.chat_area, "_current_shop_id", "") or "")
+            cur_buyer = str(getattr(self.chat_area, "_current_buyer_uid", "") or "")
+            if not cur_shop or not cur_buyer:
+                return
+            for pair in pairs or []:
+                if len(pair) < 2:
+                    continue
+                if str(pair[0]) == cur_shop and str(pair[1]) == cur_buyer:
+                    logger.info(f"[ChatUI] 历史补拉完成，重载当前会话: shop={cur_shop}, buyer={cur_buyer}")
+                    self.chat_area.reload_messages()
+                    break
+        except Exception as e:
+            logger.warning(f"[ChatUI] 处理历史补拉通知失败: {e}")
 
     def _send_manual_reply(self, shop_id: str, user_id: str, text: str, buyer_uid: str):
         """发送手动回复
@@ -678,6 +701,7 @@ class ChatUI(QFrame):
         try:
             from services.message_persistence import message_persistence_service
             message_persistence_service.signals.new_message.disconnect(self._on_new_message)
+            message_persistence_service.signals.history_synced.disconnect(self._on_history_synced)
         except Exception:
             pass
 

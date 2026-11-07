@@ -214,6 +214,20 @@ class ChatAreaPanel(QWidget):
         loader.start()
         logger.info("[ChatArea] load_messages: loader 已启动")
 
+    def reload_messages(self):
+        """强制重载当前会话（历史补拉落库后刷新界面用）
+
+        ``load_messages`` 对同一会话有短路（避免重复点击重载），这里先清掉
+        会话键再调用，让补拉到的消息能出现在已打开的窗口里。
+        """
+        shop_id = getattr(self, "_current_shop_id", "")
+        buyer_uid = getattr(self, "_current_buyer_uid", "")
+        if not shop_id or not buyer_uid:
+            return
+        logger.info(f"[ChatArea] reload_messages: shop_id={shop_id}, buyer_uid={buyer_uid}")
+        self._active_key = ("", "")
+        self.load_messages(shop_id, buyer_uid, shop_name=getattr(self, "_current_shop_name", ""))
+
     # 分批渲染参数：避免一次创建几百个气泡冻结 UI
     _RENDER_BATCH_SIZE = 20
     _RENDER_BATCH_INTERVAL_MS = 15
