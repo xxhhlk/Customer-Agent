@@ -10,6 +10,7 @@ from agno.agent import Agent
 from agno.run.agent import RunOutput
 from agno.models.message import Message
 from agno.session import AgentSession
+from agno.session.summary import SessionSummary
 from agno.session.team import TeamSession
 from agno.session.workflow import WorkflowSession
 
@@ -21,6 +22,18 @@ from agno.db.sqlite import SqliteDb
 from Agent.CustomerAgent.tools.move_conversation import transfer_conversation
 from Agent.CustomerAgent.tools.get_product_list import get_shop_products
 from Agent.CustomerAgent.tools.send_goods_link import send_goods_link
+from Agent.CustomerAgent.context_budget import (
+    KEEP_VERBATIM_RATIO,
+    SUMMARY_MAX_CHARS,
+    SUMMARY_SYSTEM_PROMPT,
+    SUMMARY_TIMEOUT,
+    SUMMARY_TRIGGER_RATIO,
+    build_summary_input,
+    estimate_messages_tokens,
+    history_token_budget,
+    select_summarizable,
+    truncate_messages_by_tokens,
+)
 from config import get_config
 from typing import Any, Optional, Union, cast, TYPE_CHECKING
 from utils.logger_loguru import get_logger
@@ -53,6 +66,21 @@ _agno_patched = False  # 全局标志，确保只 patch 一次
 # 对应 JC0v0「仅还原最近若干条历史图」的取舍：买家发图后追问时 AI 仍能引用
 # 最近的图，但不会让 8 轮窗口内所有旧图随每轮请求重复携带（token 成本线性增长）。
 _HISTORY_MEDIA_KEEP_RECENT = 2
+
+# 历史注入时扫描的 run 数上限。远大于 _MAX_SESSION_RUNS，语义是「取全部」：
+# 真正的裁剪闸门是 token 预算（见 context_budget），条数不再定义窗口大小。
+_HISTORY_SCAN_RUNS = 200
+
+# 原始（未打补丁）的 AgentSession.get_messages。调度滚动摘要时要用完整历史
+# 估算 token，不能受自身预算截断影响，故单独保留引用。
+_ORIG_AGENT_SESSION_GET_MESSAGES = None
+
+# 进程内摘要缓存条数上限（按买家）。超出后按插入顺序淘汰最早的几条；
+# 丢了也不影响正确性 —— 下一轮会从 session.summary 重建。
+_MAX_CTX_SUMMARIES = 2000
+
+# 预算日志独立于实例 logger（patch 是模块级函数，拿不到 self）
+_budget_logger = get_logger("CustomerAgent")
 
 # 人工接管轮次在会话历史中的占位回复：这类轮次不经模型，但买家消息必须留在
 # 历史里，否则买家已提供过的机器码、订单号等关键信息在后续轮次中缺失。
@@ -222,14 +250,18 @@ def _strip_old_history_images(messages, keep_recent: int = _HISTORY_MEDIA_KEEP_R
 
 
 def _patch_agno_history_media() -> None:
-    """Patch AgentSession.get_messages：历史消息只保留最近 N 张图片。
+    """Patch AgentSession.get_messages：历史图片限流 + token 预算截断。
 
     背景（实测，agno 2.3.4）：get_messages 装载的历史 Message 若带 images，
     会被 OpenAIChat._format_message 无条件转成 image_url 内容块发给模型，
     且不受 send_media_to_model 控制（后者只管当前轮与工具产出媒体）；
-    配合 add_history_to_context + num_history_runs=8，每轮请求都会重放
-    窗口内所有历史图片。此补丁幂等。
+    配合 add_history_to_context，每轮请求都会重放窗口内所有历史图片。
+
+    新增：历史注入改按 token 预算从旧到新截断，替代 num_history_runs 的
+    条数硬切。只影响「历史注入」这一条路径（last_n_runs 有值且 limit 为
+    None），会话命名 / 全量导出等无参调用行为不变。此补丁幂等。
     """
+    global _ORIG_AGENT_SESSION_GET_MESSAGES
     try:
         from agno.session.agent import AgentSession
     except Exception:
@@ -238,6 +270,7 @@ def _patch_agno_history_media() -> None:
         return
 
     _orig_get_messages = AgentSession.get_messages
+    _ORIG_AGENT_SESSION_GET_MESSAGES = _orig_get_messages
 
     def _get_messages_patched(self, *args, **kwargs):
         messages = _orig_get_messages(self, *args, **kwargs)
@@ -245,6 +278,29 @@ def _patch_agno_history_media() -> None:
             _strip_old_history_images(messages)
         except Exception:
             # 剥离失败不影响主流程（代价只是多带几张旧图）
+            pass
+
+        try:
+            # agno 调用签名：get_messages(agent_id, team_id, last_n_runs, limit, ...)
+            # 实际调用全用关键字，位置参数分支只作兜底
+            last_n_runs = kwargs.get("last_n_runs")
+            if last_n_runs is None and len(args) > 2:
+                last_n_runs = args[2]
+            limit = kwargs.get("limit")
+            if limit is None and len(args) > 3:
+                limit = args[3]
+            if last_n_runs is not None and limit is None:
+                budget = history_token_budget()
+                kept, stats = truncate_messages_by_tokens(messages, budget)
+                if stats.get("dropped"):
+                    _budget_logger.info(
+                        f"[上下文预算] 历史 {stats['total']} token 超预算 {budget}，"
+                        f"丢弃最早 {stats['dropped']} 条 / {stats['dropped_tokens']} token，"
+                        f"保留 {stats['kept']} 条"
+                    )
+                return kept
+        except Exception:
+            # 预算逻辑失败只退化为旧行为（多带历史），绝不打断 arun
             pass
         return messages
 
@@ -367,9 +423,12 @@ def _patch_agno_async_db():
     # _read_session 耗时 6+ 秒，阻塞 asyncio 线程池，导致主线程冻结，最终进程崩溃。
     #
     # 修复：upsert_run 后只保留最近 MAX_SESSION_RUNS 条 run。
-    # num_history_runs=8 读取历史时只取最近 8 条，保留 15 条绰绰有余。
+    # 真正的上下文窗口由 token 预算决定（context_budget.truncate_messages_by_tokens），
+    # 这里只是磁盘与读放大的物理上限。
+    # 配合 store_history_messages=False 后单条 run 只存本轮 2~3 条消息（不再重复
+    # 携带前序全部历史的快照），60 条约 300~400KB/session，读取消耗可接受。
     # ---------------------------------------------------------------------------
-    _MAX_SESSION_RUNS = 15
+    _MAX_SESSION_RUNS = 60
     _original_upsert_run = AgentSession.upsert_run
 
     def _patched_upsert_run(self: AgentSession, run):
@@ -443,6 +502,11 @@ class CustomerAgent(Bot):
         self._prompt_fp: Optional[tuple] = None
         # 同一买家会话串行锁：防止同一买家消息并发交错进入 Agent（会话历史/工具调用互相污染）
         self._conversation_locks: Dict[str, asyncio.Lock] = {}
+        # 上下文滚动摘要：按 session_id 缓存正文（进程重启后从 session.summary 恢复）
+        self._ctx_summaries: Dict[str, Dict[str, Any]] = {}
+        # 在途摘要任务：存引用防 GC 回收（CPython 弱引用会让任务静默消失），
+        # 完成回调里按 session_id 清理
+        self._summary_tasks: Dict[str, "asyncio.Task[None]"] = {}
 
     async def initialize_async(self) -> bool:
         """初始化CustomerAgent"""
@@ -504,7 +568,17 @@ class CustomerAgent(Bot):
                     instructions=instructions,
                     additional_context=additional_context,
                     add_history_to_context=True,
-                    num_history_runs=8,
+                    # 条数不再是窗口：扫描全部 run（实际受 _MAX_SESSION_RUNS 约束），
+                    # 由 get_messages 补丁按 token 预算从旧到新截断
+                    num_history_runs=_HISTORY_SCAN_RUNS,
+                    # 落盘前剔除 run.messages 里的 from_history 快照。agno 的执行顺序
+                    # 是 _scrub_run_output_for_storage 先剥、session.upsert_run 后存
+                    # （agent.py:10608→10628），等价于「落盘前剥离」，避免 O(N²) 体积。
+                    store_history_messages=False,
+                    # 把 session.summary 注入 system message（per-session 对象，
+                    # 多账号并发不串味）。摘要在本模块后台生成，不开 agno 的
+                    # SessionSummaryManager —— 那个每轮无条件跑一次额外 LLM 调用。
+                    add_session_summary_to_context=True,
                     add_dependencies_to_context=True,
                     add_datetime_to_context=True,
                     timezone_identifier="Asia/Shanghai",
@@ -830,6 +904,200 @@ class CustomerAgent(Bot):
 
         return load_order_block(shop_id, account_user_id, buyer_uid)
 
+    # ---------------------------------------------------------------------------
+    # 上下文滚动摘要
+    #
+    # 历史注入改按 token 预算截断后，被挤掉的旧对话会永久丢失（买家早前提过的
+    # 机器码、订单号、已承诺的处理方案）。这里在历史接近预算时把最旧的一段压
+    # 成摘要，经 session.summary 注入 system message 长期保留。
+    #
+    # ★ 摘要只写内存，由每轮 arun 前的 _apply_cached_summary 赋给本轮 session
+    #   对象，随 asave_session 自然落盘。后台直写 DB 会被 upsert_session 的整行
+    #   覆盖（sqlite.py 的 on_conflict_do_update）用本轮开始时读的旧 session 冲掉。
+    # ---------------------------------------------------------------------------
+
+    def _apply_cached_summary(self, session: AgentSession, session_id: str) -> None:
+        """把内存里的摘要同步进本轮 session 对象。
+
+        agno 在 get_system_message() 每轮现读 session.summary（agent.py:7179），
+        赋值即对本轮生效。session 是 per-session 对象，多账号并发不串味。
+        """
+        rec = self._ctx_summaries.get(session_id)
+        if rec is None:
+            # 进程重启后内存为空：从 DB 落盘的 summary 读回来，避免同一段被重复摘要
+            obj = getattr(session, "summary", None)
+            text = (getattr(obj, "summary", "") or "").strip() if obj is not None else ""
+            if not text:
+                return
+            marker = (session.session_data or {}).get("context_summary") or {}
+            rec = {"text": text, "upto_msg_id": marker.get("upto_msg_id") or ""}
+            self._ctx_summaries[session_id] = rec
+
+        text = str(rec.get("text") or "")
+        if not text:
+            return
+
+        # 增量标记必须随本轮 session 落盘（_apply_cached_summary 是唯一的写入点）。
+        # 只放 JSON 原生类型：db/utils.py 是裸 json.dumps，放 datetime 会让整行落盘失败。
+        marker_id = str(rec.get("upto_msg_id") or "")
+        if session.session_data is None:
+            session.session_data = {}
+        cur_marker = session.session_data.get("context_summary") or {}
+        if str(cur_marker.get("upto_msg_id") or "") != marker_id:
+            session.session_data["context_summary"] = {
+                "upto_msg_id": marker_id,
+                "updated_at": int(rec.get("updated_at") or 0),
+                "chars": len(text),
+            }
+
+        current = getattr(session, "summary", None)
+        if current is not None and (getattr(current, "summary", "") or "") == text:
+            return
+        session.summary = SessionSummary(summary=text)
+
+    def _maybe_schedule_context_summary(
+        self, session: Optional[AgentSession], session_id: str, user_id: str
+    ) -> None:
+        """历史接近 token 预算时，后台生成滚动摘要（下轮生效，本轮不等）。"""
+        if session is None or _ORIG_AGENT_SESSION_GET_MESSAGES is None or self._agent is None:
+            return
+        try:
+            # 先把已有摘要同步进本轮 session：即便本轮不触发摘要，上次的也能用上
+            self._apply_cached_summary(session, session_id)
+
+            # 用未打补丁的原函数读完整历史，才能拿到真实的 token 占用
+            history = _ORIG_AGENT_SESSION_GET_MESSAGES(
+                session, last_n_runs=_HISTORY_SCAN_RUNS, limit=None
+            )
+            if not history:
+                return
+
+            budget = history_token_budget()
+            used = estimate_messages_tokens(history)
+            trigger_at = int(budget * SUMMARY_TRIGGER_RATIO)
+            if used < trigger_at:
+                return
+
+            pending = self._summary_tasks.get(session_id)
+            if pending is not None and not pending.done():
+                return  # 同一买家上一次摘要还没跑完
+
+            rec = self._ctx_summaries.get(session_id) or {}
+            old_msgs, new_marker = select_summarizable(
+                history, int(budget * KEEP_VERBATIM_RATIO), rec.get("upto_msg_id") or None
+            )
+            if not old_msgs:
+                return
+
+            task = asyncio.create_task(
+                self._run_context_summary(
+                    session_id, user_id, old_msgs, str(rec.get("text") or ""), new_marker
+                )
+            )
+            self._summary_tasks[session_id] = task
+
+            def _cleanup(t: "asyncio.Task[None]", sid: str = session_id) -> None:
+                # 只清自己那条，避免覆盖同 session 后来新建的任务
+                if self._summary_tasks.get(sid) is t:
+                    self._summary_tasks.pop(sid, None)
+                # 取回异常，避免 asyncio 打 "Task exception was never retrieved"
+                if not t.cancelled():
+                    try:
+                        t.exception()
+                    except Exception:
+                        pass
+
+            task.add_done_callback(_cleanup)
+            self.logger.info(
+                f"[上下文摘要] 历史 {used} token 达触发线 {trigger_at}，"
+                f"后台压缩最早 {len(old_msgs)} 条"
+            )
+        except Exception as e:
+            # 摘要调度失败绝不能影响本轮回复
+            self.logger.warning(f"[上下文摘要] 调度失败（将继续）: {e}")
+
+    async def _run_context_summary(
+        self,
+        session_id: str,
+        user_id: str,
+        old_msgs: list,
+        prev_text: str,
+        upto_msg_id: Optional[str],
+    ) -> None:
+        try:
+            text = await asyncio.wait_for(
+                self._summarize_messages(prev_text, old_msgs), timeout=SUMMARY_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            # 事件循环关闭时 threads.py 会 cancel 所有任务，必须原样抛出
+            self.logger.info("[上下文摘要] 任务被取消（事件循环关闭）")
+            raise
+        except asyncio.TimeoutError:
+            self.logger.warning(f"[上下文摘要] 生成超时({SUMMARY_TIMEOUT:.0f}s)，下轮重试")
+            return
+        except Exception as e:
+            self.logger.warning(f"[上下文摘要] 生成失败: {type(e).__name__}: {e}")
+            return
+
+        text = (text or "").strip()
+        if not text:
+            self.logger.warning("[上下文摘要] 模型返回空内容，下轮重试")
+            return
+        if len(text) > SUMMARY_MAX_CHARS:
+            text = text[:SUMMARY_MAX_CHARS]
+
+        # 只写内存，下一轮 arun 前由 _apply_cached_summary 落到本轮 session 对象
+        self._ctx_summaries[session_id] = {
+            "text": text,
+            "upto_msg_id": upto_msg_id or "",
+            "updated_at": int(time.time()),
+        }
+        if len(self._ctx_summaries) > _MAX_CTX_SUMMARIES:
+            # 长期运行（数天不重启）时防止按买家无限增长；淘汰最早的几条，
+            # 丢失也能从 session.summary 重建
+            for _k in list(self._ctx_summaries)[: len(self._ctx_summaries) - _MAX_CTX_SUMMARIES]:
+                self._ctx_summaries.pop(_k, None)
+        self.logger.info(
+            f"[上下文摘要] 已生成 {len(text)} 字（用户 {user_id}，覆盖 {len(old_msgs)} 条历史），下一轮生效"
+        )
+
+    async def _summarize_messages(self, prev_text: str, old_msgs: list) -> str:
+        """用独立 AsyncOpenAI 客户端做一次摘要。
+
+        不复用 self._agent.model：那个 client 被多个账号线程（各自独立事件循环）
+        共用，后台任务再往里塞请求会放大跨 loop 连接池风险。
+        不传 extra_body：thinking / reasoning_effort 是火山专属字段，通用 OpenAI
+        兼容接口收到未知参数会直接报错，摘要本身也不需要深度思考。
+        """
+        from openai import AsyncOpenAI
+
+        opts = self._llm_model_options()
+        client = AsyncOpenAI(
+            api_key=opts["api_key"],
+            base_url=opts["base_url"] or None,
+            timeout=SUMMARY_TIMEOUT,
+            max_retries=0,
+        )
+        try:
+            resp = await client.chat.completions.create(
+                model=opts["id"],
+                messages=[
+                    {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                    {"role": "user", "content": build_summary_input(prev_text, old_msgs)},
+                ],
+                temperature=0.3,
+                max_tokens=600,
+            )
+            choice = resp.choices[0] if resp.choices else None
+            message = getattr(choice, "message", None) if choice is not None else None
+            content = getattr(message, "content", None) if message is not None else None
+            return (content or "").strip()
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
     @staticmethod
     def _is_safe_media_url(url: str) -> bool:
         """校验媒体 URL：仅允许 http(s) 且指向公网地址（防 SSRF）。
@@ -1023,6 +1291,13 @@ class CustomerAgent(Bot):
                         _mark("history")
                 except Exception as e:
                     self.logger.warning(f"[async_reply] 加载历史聊天记录失败（将继续）: {e}")
+
+            # 历史接近 token 预算时，后台把最旧的对话压成摘要（下轮生效，本轮不等）。
+            # ★ 必须在下方 _arun_timing.set() 之前调用：create_task 会复制当前
+            #   context，在 set 之后创建会把摘要那次 LLM 往返记进 [arun-timing] 日志。
+            self._maybe_schedule_context_summary(
+                _pre_session, session_id, str(context.kwargs.user_id)
+            )
 
             # 注入买家近期订单（状态/商品/金额/物流），供回答订单进度类问题。
             # 每轮都带（内部 60s 缓存），订单状态会变化，不能只在首轮注入。
