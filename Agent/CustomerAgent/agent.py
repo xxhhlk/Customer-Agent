@@ -61,11 +61,14 @@ _HISTORY_MEDIA_KEEP_RECENT = 2
 # （2026-10-29 生产事故）。故改为纯内部标记，并纳入出站过滤。
 _STAFF_TAKEOVER_CONTENT = "[internal:no-ai-turn]"
 
+# 系统（关键词/兜底）直接回复轮次的占位：同样不能被模型当成话术复读
+_SYSTEM_TAKEOVER_CONTENT = "[internal:auto-reply-turn]"
+
 # 历史里出现这些内部占位标记时，模型可能复读。出站前必须拦掉，
 # 旧版本已写进历史的两个中文话术一并纳入（历史不会自动重写）。
 _INTERNAL_TURN_MARKS = (
-    "[internal:no-ai-turn]",
-    "[internal:auto-reply-turn]",
+    _STAFF_TAKEOVER_CONTENT,
+    _SYSTEM_TAKEOVER_CONTENT,
     "（本轮由人工客服直接回复）",
     "（本轮由系统自动回复）",
 )
@@ -75,9 +78,34 @@ _INTERNAL_TURN_MARKS = (
 _PLACEHOLDER_MIGRATION = {
     "（本轮由人工客服直接回复）": _STAFF_TAKEOVER_CONTENT,
     # 与 Message.core.enhanced_consumer._SYSTEM_TURN_CONTENT 保持一致；
-    # 此处写字面量避免 Message 层与 Agent 层互相 import
-    "（本轮由系统自动回复）": "[internal:auto-reply-turn]",
+    # 值在本模块定义，避免 Message 层与 Agent 层互相 import
+    "（本轮由系统自动回复）": _SYSTEM_TAKEOVER_CONTENT,
 }
+
+# 上游内容安全命中时，会把整段回复替换成固定占位串（实测 GLM 系返回
+# "sensitive content"）。这类响应的 finish_reason 仍是 stop、usage 为空，
+# 客户端只能从正文识别。它既不能发给买家（买家会收到一句英文），也不能留在
+# 会话历史里——下一轮会被当成模型自己说过的话继续复读。
+# 归一化后整串精确匹配，正常回复里偶尔提到该词组不会被误杀。
+_CENSOR_PLACEHOLDER_NORMS = frozenset({
+    "sensitivecontent",
+    "sensitivecontents",
+    "contentblocked",
+})
+
+
+def _is_censor_placeholder(text: str) -> bool:
+    """判断整段回复是否是上游内容审核的占位串（忽略大小写、标点、空白）。
+
+    只认「整段就是这句话」：正常回复里夹带该英文短语时不拦，宁可漏判也不
+    误杀正常话术（误杀的代价是买家收到兜底话术）。
+    """
+    raw = (text or "").strip()
+    if not raw or len(raw) > 40:
+        return False
+    norm = "".join(ch for ch in raw.lower() if ch.isalnum())
+    return norm in _CENSOR_PLACEHOLDER_NORMS
+
 
 # 单次回复允许的知识库工具调用总次数上限（agno 跨轮累计，超出后返回错误结果逼模型收敛）。
 # 背景：2026-10-26 一次换机器码咨询里模型连续检索 4 次，叠加深度思考把单次 arun
@@ -657,6 +685,49 @@ class CustomerAgent(Bot):
                     except Exception:
                         pass
 
+    async def _scrub_censored_turn(self, session_id: str, context: Optional[Context]) -> None:
+        """把本轮被上游审核替换的 assistant 内容洗成内部标记并回写会话。
+
+        arun 内部已经把带占位串的 session 落过盘，这里修正后立即再存一次；
+        占位串留在历史里会被下一轮当成本模型自己的发言继续复读。失败只告警，
+        不影响本轮兜底话术的发送。
+        """
+        if self._agent is None or context is None:
+            return
+        try:
+            assert self._agent is not None
+            session = self._agent._cached_session
+            if session is None or getattr(session, "session_id", None) != session_id:
+                # 单例的 _cached_session 可能被其他账号线程换掉，按 id 重新取
+                session = cast(
+                    AgentSession,
+                    await self._agent._aread_or_create_session(
+                        session_id=session_id, user_id=str(context.kwargs.user_id)
+                    ),
+                )
+            runs = getattr(session, "runs", None) or []
+            if not runs:
+                return
+            run = runs[-1]
+            changed = False
+            if isinstance(getattr(run, "content", None), str) and _is_censor_placeholder(run.content):
+                run.content = _SYSTEM_TAKEOVER_CONTENT
+                changed = True
+            # 只处理最近一条 assistant：再往前的干净历史不动
+            for msg in reversed(getattr(run, "messages", None) or []):
+                if getattr(msg, "role", "") != "assistant":
+                    continue
+                if _is_censor_placeholder(getattr(msg, "content", "")):
+                    msg.content = _SYSTEM_TAKEOVER_CONTENT
+                    changed = True
+                break
+            if not changed:
+                return
+            await self._agent.asave_session(session)
+            self.logger.info("[async_reply] 已将审核占位内容替换为内部标记")
+        except Exception as e:
+            self.logger.warning(f"[async_reply] 清洗审核占位历史失败（将继续）: {e}")
+
     async def record_staff_turn(
         self,
         query: str,
@@ -1099,8 +1170,17 @@ class CustomerAgent(Bot):
                 )
             )
             _content = str(getattr(response, "content", "") or "").strip()
+            # 上游内容安全命中时整段回复被换成固定占位串（"sensitive content"）：
+            # 不能发给买家，同时要把历史里的这一轮洗成内部标记，否则下一轮会被
+            # 当成模型自己的发言继续复读。
+            if _content and _is_censor_placeholder(_content):
+                self.logger.warning(
+                    f"[async_reply] 模型输出被内容审核替换，改用兜底话术: {_content[:120]!r}"
+                )
+                await self._scrub_censored_turn(session_id, context)
+                _content = ""
             # 模型偶尔把历史里的内部占位标记当自己的话吐出来，绝不能发给买家
-            if _content and any(mark in _content for mark in _INTERNAL_TURN_MARKS):
+            elif _content and any(mark in _content for mark in _INTERNAL_TURN_MARKS):
                 self.logger.warning(
                     f"[async_reply] 模型复读了内部占位标记，改用兜底话术: {_content[:120]}"
                 )
