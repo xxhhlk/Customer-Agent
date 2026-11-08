@@ -40,6 +40,9 @@ _lock = threading.Lock()
 _recent: Dict[Tuple[str, str, str], float] = {}
 # (shop_id, buyer_uid) -> [monotonic ts]
 _sent_ts: Dict[Tuple[str, str], List[float]] = {}
+# (shop_id, buyer_uid) -> [wall clock ts]：供上层判断"本次 AI 处理窗口内是否已发素材"
+_sent_log: Dict[Tuple[str, str], List[float]] = {}
+_SENT_LOG_TTL = 300.0
 
 
 def _norm(name: Any) -> str:
@@ -116,6 +119,27 @@ def _release(shop_id: str, buyer_uid: str, item_id: str) -> None:
             times.pop()
             if not times:
                 _sent_ts.pop(buyer_key, None)
+
+
+def _mark_sent(shop_id: str, buyer_uid: str) -> None:
+    """记录一次成功发送（wall clock，与 ai_handler 的处理起始时间对齐）"""
+    key = (str(shop_id), str(buyer_uid))
+    now = time.time()
+    with _lock:
+        times = [t for t in _sent_log.get(key, []) if (now - t) < _SENT_LOG_TTL]
+        times.append(now)
+        _sent_log[key] = times[-10:]
+
+
+def sent_since(shop_id: str, buyer_uid: str, since: float) -> bool:
+    """since（time.time()）之后是否给该买家发过素材。
+
+    供 ai_handler 判断"本轮只调了工具、没产出文字"，避免再补一条兜底话术。
+    """
+    key = (str(shop_id), str(buyer_uid))
+    with _lock:
+        times = list(_sent_log.get(key) or [])
+    return any(t > since for t in times)
 
 
 def _judge(result: Any) -> Tuple[bool, str]:
@@ -212,6 +236,7 @@ def _send_material_sync(
 
     kind = "视频" if item.get("file_type") == "video" else "图片"
     logger.info(f"AI 发送素材成功: {kind} {name} -> {buyer_uid}")
+    _mark_sent(shop_id, buyer_uid)
     return f"已发送{kind}「{name}」给买家"
 
 
@@ -255,4 +280,4 @@ async def send_material(
         return f"发送素材异常：{e}"
 
 
-__all__ = ["send_material", "RATE_WINDOW", "RATE_MAX", "DUP_WINDOW"]
+__all__ = ["send_material", "sent_since", "RATE_WINDOW", "RATE_MAX", "DUP_WINDOW"]

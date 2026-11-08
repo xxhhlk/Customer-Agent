@@ -89,6 +89,11 @@ class AIReplyHandler(BaseHandler):
             # 2. 调用AI生成回复
             reply = await self._get_ai_reply(processed_content, context)
             if not reply:
+                # 本轮可能只调用了 send_material（素材已发出）却没产出文字：
+                # 此时不要再补一条"客服正在为您处理"的兜底话术，避免图 + 错位回复
+                if self._material_sent_since(metadata, ai_start_time):
+                    self.logger.info("AI 未产出文字但本轮已发送素材，跳过兜底回复")
+                    return True
                 self.logger.warning("AI回复生成失败，使用备用回复")
                 return await self._handle_fallback(context, metadata)
 
@@ -154,6 +159,23 @@ class AIReplyHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"AI Bot调用失败: {e}")
             return None
+
+    @staticmethod
+    def _material_sent_since(metadata: Dict[str, Any], since: float) -> bool:
+        """本次 AI 处理窗口内是否已通过工具发出素材。
+
+        用于区分"AI 完全失败"与"只发了素材没写文字"，前者才补兜底话术。
+        """
+        try:
+            from Agent.CustomerAgent.tools.send_material import sent_since
+
+            return sent_since(
+                str(metadata.get("shop_id") or ""),
+                str(metadata.get("from_uid") or ""),
+                since,
+            )
+        except Exception:  # noqa: BLE001
+            return False
 
     async def _send_reply(self, context: Context, reply: str, metadata: Dict[str, Any],
                           reply_source: str = 'ai') -> bool:
