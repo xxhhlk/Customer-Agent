@@ -489,3 +489,23 @@ ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下�
   - `temp/pw_netlog.json` / `pw_jsnet.json` — 抓包产物（含 `library_file/send` 原始请求与 titan push 的服务端消息全文）
   - `temp/test_library_send.py` / `test_library_send2.py` — HTTP 直调验证（原片 url ✅ / f30 转码地址 ❌ `40000`）
   - `temp/test_product_send.py` — 改造后产品代码端到端（素材发送 + `find_file` 回查）
+
+## 8. AI 发送素材（2026-11-08 新增）
+
+在人工素材面板之外，开放 AI 主动从「客服专用」素材库发图/发视频。
+
+- **素材清单注入**：`Agent/CustomerAgent/material_context.py` 把图片（客服专用文件夹）+
+  视频空间素材名注入 prompt（缓存 300s，失败 60s），模型据此知道能发什么。
+  当前本店共 9 张图 + 5 个视频，清单约 250 字符。
+- **工具**：`Agent/CustomerAgent/tools/send_material.py`（async，内部 `asyncio.to_thread`）
+  - 参数 `material_name` 必须与清单名称一致；匹配规则：去扩展名/空格后精确 > 唯一包含 >
+    多候选则返回候选让模型重试 > 无匹配返回可用素材名
+  - 图片 `send_image`；视频 `library_file/send` + **发送前 `self_echo_registry.register`**
+    （失败 `revoke`），与人工面板同通道
+  - 落库 `reply_source="ai"` + `notify_new_message`，聊天区立即出现气泡
+- **安全边界**
+  - 人工客服 60s 冷却期内拒绝发送（避免与人工重复打扰）
+  - 同一素材对同一买家 60s 不重发；同一买家 60s 最多 2 条
+  - 只发审核通过的素材（目录侧已用 `is_sendable` 过滤）
+- **已知取舍**：AI 全自动选择素材，存在偶发发错图可能，靠上述限流与去重兜底；
+  素材清单变长后可改为按关键词检索。

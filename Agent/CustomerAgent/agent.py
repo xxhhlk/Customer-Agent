@@ -22,6 +22,7 @@ from agno.db.sqlite import SqliteDb
 from Agent.CustomerAgent.tools.move_conversation import transfer_conversation
 from Agent.CustomerAgent.tools.get_product_list import get_shop_products
 from Agent.CustomerAgent.tools.send_goods_link import send_goods_link
+from Agent.CustomerAgent.tools.send_material import send_material
 from Agent.CustomerAgent.context_budget import (
     KEEP_VERBATIM_RATIO,
     SUMMARY_MAX_CHARS,
@@ -577,7 +578,7 @@ class CustomerAgent(Bot):
                     db=_agent_db,
                     knowledge=self.knowledge_manager.knowledge,
                     model=self._build_model(),
-                    tools=[transfer_conversation, send_goods_link],
+                    tools=[transfer_conversation, send_goods_link, send_material],
                     # search_knowledge: 给模型挂 search_knowledge_base 工具（模型自主决定是否调用）
                     # add_knowledge_to_context: 每轮无条件检索并在用户消息中注入 <references> 保底，
                     # 实测模型会漏调工具（2026-10-10 排查），双通道并存互不冲突
@@ -1118,6 +1119,17 @@ class CustomerAgent(Bot):
                 pass
 
     @staticmethod
+    def _load_material_catalog(shop_id: str, account_user_id: str) -> str:
+        """读取客服素材库清单（图片/视频名称）并格式化为上下文块；无素材返回空串。
+
+        同步 HTTP 访问（含 cookies 读取），调用方需用 asyncio.to_thread 包装。
+        结果在 material_context 内部缓存，短时间多轮对话不重复请求。
+        """
+        from Agent.CustomerAgent.material_context import load_material_catalog
+
+        return load_material_catalog(shop_id, account_user_id)
+
+    @staticmethod
     def _is_safe_media_url(url: str) -> bool:
         """校验媒体 URL：仅允许 http(s) 且指向公网地址（防 SSRF）。
 
@@ -1333,6 +1345,21 @@ class CustomerAgent(Bot):
                     _mark("order")
             except Exception as e:
                 self.logger.warning(f"[async_reply] 加载买家订单信息失败（将继续）: {e}")
+
+            # 注入客服素材库清单：模型据此知道能发哪些图片/视频（send_material 按名调用）。
+            # 素材列表内部缓存 5 分钟，每轮带上成本可忽略。
+            try:
+                _material_block = await asyncio.to_thread(
+                    self._load_material_catalog,
+                    str(context.kwargs.shop_id),
+                    str(context.kwargs.user_id),
+                )
+                if _material_block:
+                    final_input = _material_block + final_input
+                    self.logger.info("[async_reply] 已注入客服素材清单")
+                    _mark("material")
+            except Exception as e:
+                self.logger.warning(f"[async_reply] 加载客服素材清单失败（将继续）: {e}")
 
             # 图片/视频消息传给视觉大模型（llm.send_image_to_ai 开关实时读取，免重启热开关）
             # 图片：URL 直传优先，走 agno images 参数（自动转 image_url 内容块）；
