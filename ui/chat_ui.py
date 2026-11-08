@@ -137,11 +137,24 @@ class _MaterialSendWorker(QThread):
             pass
         try:
             from Message.handlers.staff_message_cache import staff_message_cache
-            staff_message_cache.add_message(
-                self._buid, "[图片]" if ctx_type == "image" else "[视频]"
+        except Exception:
+            return
+        try:
+            # 带上素材名与已知描述：只写 [图片] 的话 AI 不知道刚发的是哪张
+            from Agent.CustomerAgent.material_context import display_name, get_description
+            item = getattr(self, "_item", None) or {}
+            staff_message_cache.add_media(
+                self._buid, ctx_type,
+                name=display_name(item),
+                desc=get_description(item),
             )
         except Exception:
-            pass
+            try:
+                staff_message_cache.add_message(
+                    self._buid, "[图片]" if ctx_type == "image" else "[视频]"
+                )
+            except Exception:
+                pass
 
     def _persist(self, ctx_type: str, url: str, media_meta):
         """写入消息库（成功后 UI 立即显示气泡）"""

@@ -265,12 +265,25 @@ class MessageHandlerMixin:
             self.logger.debug(f"系统消息不构成人工回复: type={context.type}, content={content[:60]}")
 
         # 缓存客服消息，供 AI 回复时作为上下文；结构化卡片先摘要成一行，
-        # 避免原始 JSON 直接进 AI 上下文。
+        # 避免原始 JSON 直接进 AI 上下文。图片/视频单独记一条（带媒体类型），
+        # 图片再挂后台描述任务——否则 AI 只能看到一串 URL 文本。
         if context.content and buyer_uid:
             from Message.handlers.staff_message_cache import staff_message_cache
-            staff_message_cache.add_message(
-                buyer_uid, self._summarize_content(context.content)
-            )
+
+            content_text = str(context.content)
+            if context.type == ContextType.IMAGE and content_text.startswith("http"):
+                token = staff_message_cache.add_media(buyer_uid, "image", url=content_text)
+                try:
+                    from Message.handlers.staff_media_caption import schedule
+                    schedule(buyer_uid, token, content_text)
+                except Exception as e:  # noqa: BLE001
+                    self.logger.warning(f"登记人工图片描述任务失败: {e}")
+            elif context.type == ContextType.VIDEO:
+                staff_message_cache.add_media(buyer_uid, "video", url=content_text)
+            else:
+                staff_message_cache.add_message(
+                    buyer_uid, self._summarize_content(context.content)
+                )
 
     @staticmethod
     def _summarize_content(content: str) -> str:
