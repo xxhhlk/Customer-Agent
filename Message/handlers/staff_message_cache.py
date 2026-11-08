@@ -71,7 +71,9 @@ class StaffMessageCache:
         clean_name = str(name or "").strip()
         clean_desc = str(desc or "").strip()
         token = uuid.uuid4().hex[:12]
-        if not buyer_uid or not (clean_url or clean_name or clean_desc):
+        # 即使 url/name/desc 全空也入缓存：只少告诉 AI「客服发了一张图」，
+        # 好过完全没痕迹（转发历史图片拿不到名称，就属于这种情况）
+        if not buyer_uid:
             return token
         self._append(buyer_uid, {
             "kind": kind_value,

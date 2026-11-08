@@ -52,6 +52,25 @@ class _ConversationLoader(QThread):
         self.result.emit(convs)
 
 
+def _cache_forwarded_content(
+    buyer_uid: str, ctx_type: str, media_name: str = "", content: str = ""
+) -> None:
+    """把人工转发的内容写进人工上下文，供 AI 下一轮参考。
+
+    视频/图片记成媒体条目（``[视频] 素材名``），纯文本直接记原文，
+    结构化卡片（JSON）跳过，避免原始 JSON 进 prompt。
+    """
+    try:
+        from Message.handlers.staff_message_cache import staff_message_cache
+
+        if ctx_type in ("image", "video"):
+            staff_message_cache.add_media(buyer_uid, ctx_type, name=media_name)
+        elif content and not str(content).strip().startswith("{"):
+            staff_message_cache.add_message(buyer_uid, str(content))
+    except Exception:
+        pass
+
+
 class _MaterialSendWorker(QThread):
     """后台发送素材空间中的图片/视频，并持久化到消息库。
 
@@ -524,6 +543,7 @@ class ChatUI(QFrame):
 
             def run(self):
                 registered = False
+                media_name = ""
                 try:
                     from Channel.pinduoduo.utils.API.send_message import SendMessage
                     sender = SendMessage(str(self._sid), str(self._uid))
@@ -557,6 +577,7 @@ class ChatUI(QFrame):
                             self.done.emit(False, "原视频素材已不存在，无法转发")
                             return
                         logger.info(f"[FORWARD] 发送视频: target={self._target_uid}, file_id={file_id}")
+                        media_name = str(item.get("name") or "")
                         from Message.handlers.self_echo_registry import self_echo_registry
                         registered = self_echo_registry.register(self._sid, self._target_uid, self._cnt)
                         result = sender.send_library_file(str(self._target_uid), item["url"])
@@ -621,6 +642,18 @@ class ChatUI(QFrame):
                                 logger.info(f"[FORWARD] 持久化成功: buyer={self._target_uid}, type={self._ctx_type}")
                         except Exception as e:
                             logger.error(f"[FORWARD] 持久化失败: {e}")
+
+                        # 转发同属人工介入：取消等待中的 AI + 60s 冷却。
+                        # 视频回显会被 self_echo 丢弃，所以必须在这里自己登记，
+                        # 否则 AI 既不知道发过什么，也不会让位。
+                        try:
+                            from Message.handlers.staff_reply_event import staff_reply_event_manager
+                            staff_reply_event_manager.notify_staff_reply(self._target_uid)
+                        except Exception as e:
+                            logger.warning(f"[FORWARD] 通知人工介入失败: {e}")
+                        _cache_forwarded_content(
+                            self._target_uid, self._ctx_type, media_name, self._cnt
+                        )
                         self.done.emit(True, "")
                     else:
                         logger.error(f"[FORWARD] 发送失败: {result}")

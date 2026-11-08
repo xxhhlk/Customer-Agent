@@ -558,6 +558,10 @@ ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下�
 - 视频只记 `[视频]`（WS 视频消息无封面，不抽帧）
 
 **冷却口径（2026-11-08 更新）**：`_STAFF_REPLY_CONTEXT_TYPES` 已加入 `ContextType.IMAGE`
-—— 人工发图同样是买家可见的回复，进入 60s 冷却，避免 AI 紧接着接话或重复发图。
-本系统自己发图走 `chat/send_message` 不回显，不会自我触发；自家素材视频的回显在
-`_is_self_sent_echo` 处已被丢弃，也到不了这里。平台提示 / 已读 / 系统消息仍不触发。
+与 `ContextType.VIDEO` —— 人工发图/发视频同样是买家可见的回复，进入 60s 冷却，
+避免 AI 紧接着接话或重复发。本系统自己发图走 `chat/send_message` 不回显；自家素材视频的
+回显在 `_is_self_sent_echo` 处已被丢弃，两者都不会自我触发；平台提示 / 已读 / 系统消息仍不触发。
+
+**转发也计入人工介入**：`_ForwardWorker` 发送成功后主动 `notify_staff_reply()`（取消等待中的
+AI + 60s 冷却）并写人工上下文（`[视频] 素材名` / `[图片]` / 转发文本）。因为视频转发的
+WS 回显会被 `self_echo_registry` 丢弃，不能指望回显来触发冷却。
