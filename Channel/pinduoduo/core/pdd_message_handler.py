@@ -31,6 +31,9 @@ class MessageHandlerMixin:
         ContextType.GOODS_CARD,
         ContextType.GOODS_SPEC,
         ContextType.ORDER_INFO,
+        # 人工发图同样是买家可见的回复：进入 60s 冷却，避免 AI 紧接着接话/重复发图。
+        # 本系统自己发图走 chat/send_message 不回显，不会自我触发冷却。
+        ContextType.IMAGE,
     })
 
     # Attributes provided by PDDChannel host class

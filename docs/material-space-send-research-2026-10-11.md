@@ -557,5 +557,7 @@ ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下�
   本系统发的视频不会二次写入人工缓存
 - 视频只记 `[视频]`（WS 视频消息无封面，不抽帧）
 
-**未改（待决策）**：人工发图**不触发** 60s 人工冷却——`_STAFF_REPLY_CONTEXT_TYPES`
-只含 MALL_CS/GOODS_CARD/GOODS_SPEC/ORDER_INFO。即人工发图后 AI 仍可能立刻接话。
+**冷却口径（2026-11-08 更新）**：`_STAFF_REPLY_CONTEXT_TYPES` 已加入 `ContextType.IMAGE`
+—— 人工发图同样是买家可见的回复，进入 60s 冷却，避免 AI 紧接着接话或重复发图。
+本系统自己发图走 `chat/send_message` 不回显，不会自我触发；自家素材视频的回显在
+`_is_self_sent_echo` 处已被丢弃，也到不了这里。平台提示 / 已读 / 系统消息仍不触发。
