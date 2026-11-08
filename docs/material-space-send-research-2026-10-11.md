@@ -534,3 +534,28 @@ ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下�
 
 **共用改造**：`_norm`/`_match_material` 从 `send_material` 迁到 `material_context`
 （`normalize_name`/`match_material`），两个工具共用，避免双实现漂移。
+
+## 10. 人工客服图片进入 AI 上下文（2026-11-08 新增，commit e9306aa）
+
+**问题**：人工发的图此前只以裸 URL 文本进 `staff_message_cache`（本客户端发素材更是只有
+`[图片]` 占位），AI 看不到画面，会重复发图或答不出「你刚发那张图是什么」。
+
+**改动**
+- `StaffMessageCache` 改结构化条目 `{ts, kind, text, url, name, desc, token}`：
+  - `add_message`（文本）/ `add_media(kind, url, name, desc)`（媒体，返回 token）
+  - `update_description(buyer_uid, token, desc)` 回填；渲染规则
+    `[图片]` → `[图片] 名称` → `[图片] 名称 —— 描述`
+  - 读写加 `RLock`（WS 线程写、后台描述线程回填、AI 线程读）
+- 新增 `Message/handlers/staff_media_caption.py`：
+  人工图片先占位入缓存，daemon 线程调 `vision.describe_image` 生成描述回填；
+  `MAX_INFLIGHT=2`、同 URL 进程内只算一次（`DESC_CACHE_LIMIT=200`）、失败静默保留占位
+- `_handle_staff_reply` 分流：`ContextType.IMAGE` + http 开头 → `add_media` + `schedule`；
+  `VIDEO` → `add_media`；其余（文本/结构化卡片）走原 `add_message(_summarize_content)`
+- `_MaterialSendWorker._notify_staff_intervention` 改写 `add_media(name, desc)`：
+  素材名 + 素材库已缓存的描述（`material_context.get_description`），失败回落 `[图片]`
+- **自回显顺序安全**：`_is_self_sent_echo` 在 `_handle_staff_reply` 之前 return，
+  本系统发的视频不会二次写入人工缓存
+- 视频只记 `[视频]`（WS 视频消息无封面，不抽帧）
+
+**未改（待决策）**：人工发图**不触发** 60s 人工冷却——`_STAFF_REPLY_CONTEXT_TYPES`
+只含 MALL_CS/GOODS_CARD/GOODS_SPEC/ORDER_INFO。即人工发图后 AI 仍可能立刻接话。
