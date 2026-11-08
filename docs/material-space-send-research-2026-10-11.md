@@ -509,3 +509,28 @@ ChatUI._shop_name_of(shop_id)          # 从已加载的 self._shops 取（下�
   - 只发审核通过的素材（目录侧已用 `is_sendable` 过滤）
 - **已知取舍**：AI 全自动选择素材，存在偶发发错图可能，靠上述限流与去重兜底；
   素材清单变长后可改为按关键词检索。
+
+## 9. 让 AI「看见」素材内容（2026-11-08 新增）
+
+清单只有文件名时，模型只能按名字猜（「电脑获取机器码」发给要安卓的买家）。补两层：
+
+**A. 清单带内容描述（主路径，零运行时开销）**
+- `Agent/CustomerAgent/vision.py`：`describe_image/describe_images`，调当前 LLM（视觉模型）
+  把一张图压成一句 ≤25 字描述。**每次新建 `AsyncOpenAI` 客户端**（不复用
+  `agent.model.client`，多账号多事件循环共用连接池会跨 loop 报错）。
+- `material_context`：描述缓存 `temp/material_captions.json`，key = `素材id:create_time`
+  （素材被替换自动失效，`temp/` 已 gitignore）。首次 `load_material_catalog` 触发
+  **后台守护线程**预热（并发 3，单次最多 16 条），不阻塞回复；下一条回复起带描述。
+- 注入格式：`图片：电脑获取机器码 —— 软件界面显示点击帮助菜单中VIP管理并复制机器码发给客服的两步操作图；…`
+  实测本店 9 图 + 5 视频全部生成，**14 秒**完成预热，注入块 **821 字符**（原 250 字符）。
+- 视频不抽帧，用 `cover_url` 封面图描述。
+
+**B. `view_material` 工具（兜底）**
+- 参数 `material_name / shop_id / user_id`；返回**文字描述**（agno 工具只能返回字符串，
+  不能把图塞回对话），**不向买家发任何消息**。
+- 先查缓存命中直接返回；未命中才调视觉模型并回写缓存；进程内最多 20 次
+  （`MAX_VIEWS_PER_PROCESS`），超限提示按名判断。
+- 工具描述里明确要求：能从名称/描述判断时**直接 send_material，不要先查看**。
+
+**共用改造**：`_norm`/`_match_material` 从 `send_material` 迁到 `material_context`
+（`normalize_name`/`match_material`），两个工具共用，避免双实现漂移。

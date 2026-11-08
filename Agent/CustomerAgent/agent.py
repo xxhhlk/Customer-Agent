@@ -23,6 +23,7 @@ from Agent.CustomerAgent.tools.move_conversation import transfer_conversation
 from Agent.CustomerAgent.tools.get_product_list import get_shop_products
 from Agent.CustomerAgent.tools.send_goods_link import send_goods_link
 from Agent.CustomerAgent.tools.send_material import send_material
+from Agent.CustomerAgent.tools.view_material import view_material
 from Agent.CustomerAgent.context_budget import (
     KEEP_VERBATIM_RATIO,
     SUMMARY_MAX_CHARS,
@@ -578,7 +579,7 @@ class CustomerAgent(Bot):
                     db=_agent_db,
                     knowledge=self.knowledge_manager.knowledge,
                     model=self._build_model(),
-                    tools=[transfer_conversation, send_goods_link, send_material],
+                    tools=[transfer_conversation, send_goods_link, send_material, view_material],
                     # search_knowledge: 给模型挂 search_knowledge_base 工具（模型自主决定是否调用）
                     # add_knowledge_to_context: 每轮无条件检索并在用户消息中注入 <references> 保底，
                     # 实测模型会漏调工具（2026-10-10 排查），双通道并存互不冲突

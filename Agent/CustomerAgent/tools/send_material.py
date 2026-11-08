@@ -15,14 +15,13 @@
 """
 
 import asyncio
-import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from agno.tools import tool
 
-from Agent.CustomerAgent.material_context import display_name, get_catalog
+from Agent.CustomerAgent.material_context import display_name, get_catalog, match_material
 from utils.logger_loguru import get_logger
 
 logger = get_logger("SendMaterialTool")
@@ -33,8 +32,6 @@ RATE_MAX = 2
 # 同一素材对同一买家的去重窗口
 DUP_WINDOW = 60.0
 
-_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|bmp|mp4|mov|avi|mkv)$", re.IGNORECASE)
-
 _lock = threading.Lock()
 # (shop_id, buyer_uid, item_id) -> monotonic ts
 _recent: Dict[Tuple[str, str, str], float] = {}
@@ -43,38 +40,6 @@ _sent_ts: Dict[Tuple[str, str], List[float]] = {}
 # (shop_id, buyer_uid) -> [wall clock ts]：供上层判断"本次 AI 处理窗口内是否已发素材"
 _sent_log: Dict[Tuple[str, str], List[float]] = {}
 _SENT_LOG_TTL = 300.0
-
-
-def _norm(name: Any) -> str:
-    """匹配用归一化：去扩展名、去空格、小写"""
-    text = _EXT_RE.sub("", str(name or "").strip())
-    return text.replace(" ", "").lower()
-
-
-def _match_material(
-    items: List[Dict[str, Any]], name: str
-) -> Tuple[Optional[Dict[str, Any]], List[str]]:
-    """按名称匹配素材。
-
-    Returns:
-        ``(命中素材 | None, 候选名列表)``
-        - 精确命中或唯一包含匹配 → 命中
-        - 多个包含匹配 → 不命中，返回候选让模型改名重试
-    """
-    query = _norm(name)
-    if not query or not items:
-        return None, []
-
-    exact = [it for it in items if _norm(display_name(it)) == query]
-    pool = exact or [
-        it for it in items
-        if query in _norm(display_name(it)) or _norm(display_name(it)) in query
-    ]
-    if len(pool) == 1:
-        return pool[0], []
-    if len(pool) > 1:
-        return None, [display_name(it) for it in pool[:8]]
-    return None, []
 
 
 def _staff_cooldown_active(buyer_uid: str) -> bool:
@@ -212,7 +177,7 @@ def _send_material_sync(
     if not items:
         return "素材库暂时不可用或为空，请直接用文字回复买家"
 
-    item, candidates = _match_material(items, material_name)
+    item, candidates = match_material(items, material_name)
     if item is None:
         if candidates:
             return (
