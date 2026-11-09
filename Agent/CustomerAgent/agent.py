@@ -36,6 +36,13 @@ from Agent.CustomerAgent.context_budget import (
     select_summarizable,
     truncate_messages_by_tokens,
 )
+from Agent.CustomerAgent.knowledge_query import (
+    build_query_from_input,
+    extract_buyer_turn,
+    get_current_query,
+    reset_current_query,
+    set_current_query,
+)
 from config import get_config
 from typing import Any, Optional, Union, cast, TYPE_CHECKING
 from utils.logger_loguru import get_logger
@@ -215,6 +222,84 @@ def _install_model_timing_hook(model: Any) -> None:
     except Exception:
         # 包装失败只是没有计时日志，绝不能影响回复主流程
         pass
+
+
+# ---------------------------------------------------------------------------
+# 知识库检索 query 净化
+#
+# 背景（2026-11-09 排查，13:56 会话）：买家问「19.9可以导多少」，AI 答了
+# 收藏上限数字却没发知识库里的会员购买链接。根因不在 prompt，而在检索 query
+# 被拼装内容污染：
+#
+# agno 的 add_knowledge_to_context 会把**整块拼装后的 input**（实测 945 字）
+# 当向量检索 query。这块 input 含客服素材库清单（9 图 + 5 视频描述，约 700 字）、
+# 人工客服历史、订单块，买家那句 9 字提问在向量里权重被彻底稀释。实测三道
+# 完全不同的会员问题（多少坐标 / 19.9 多少 / 只是图源？）召回的 7 条
+# references **完全相同**，且都落在"机器码开通授权/欢迎语/图源教程"上，
+# 含购买链接的「奥维VIP/svip/会员价格介绍」一条都没进来。
+#
+# 同一份知识库换短 query 立刻命中（见 knowledge_query.py 顶部的实测矩阵）。
+#
+# 方案：挂 knowledge_retriever 钩子接管检索。agno 在 add_knowledge_to_context
+# 自动注入路径上优先调用该钩子（agent.py:8477/8551），因此这里替换 query 即可
+# 生效；模型自主调 search_knowledge_base 工具走的是另一条路径，不受影响。
+#
+# 钩子只做两件事：
+#   1. 用本轮 contextvar 里的净化 query 替换污染 query
+#   2. 转回 knowledge.search，让 agno 拿到标准 Document 列表
+# 净化 query 为空（提取失败）时原样放行，退化成修复前的行为，绝不中断回复。
+# ---------------------------------------------------------------------------
+
+
+# 判定「这是 agno 自动注入的长拼装 query」的阈值。
+# 自动注入路径的 query 含素材清单 + 人工历史 + 订单块，实测 700~1500 字；
+# 模型自主调工具给的关键词通常几十字以内。
+_POLLUTED_QUERY_MIN_LEN = 200
+
+
+def _knowledge_retriever(
+    agent: Any,
+    query: str,
+    num_documents: Optional[int] = None,
+    filters: Optional[Any] = None,
+    **kwargs: Any,
+) -> list:
+    """agno 知识库检索钩子：用净化后的 query 检索。
+
+    agno 调用签名：knowledge_retriever(agent=..., query=..., num_documents=...,
+    filters=...)。这里保留 query 参数名以便 agno 识别。
+
+    ★ 两条调用路径必须区别对待：
+      1. agno 自动注入路径（add_knowledge_to_context）——query 是整块拼装 input
+         （含素材清单/人工历史/订单块），要换成净化后的买家原话。
+      2. 模型自主调 search_knowledge_base 工具——query 是模型自己提炼的关键词
+         （如 "VIP SVIP 会员功能"），必须原样放行，否则会覆盖模型的判断力。
+    判据：query 长度超过阈值即视为「自动注入的长拼装块」。模型自己给的关键词
+    通常只有几个到几十个字，远低于阈值。
+    """
+    clean = get_current_query()
+    effective = query
+    if clean and len(query) > _POLLUTED_QUERY_MIN_LEN:
+        effective = clean
+
+    try:
+        knowledge = getattr(agent, "knowledge", None)
+        if knowledge is None:
+            return []
+        docs = knowledge.search(
+            query=effective,
+            max_results=num_documents,
+            filters=filters,
+        )
+        if not docs:
+            return []
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        # 检索失败不能中断回复——返回空列表，agno 会跳过 references 注入。
+        _budget_logger.warning(
+            f"[知识库检索] 净化 query 检索失败（降级为无 references）: {type(e).__name__}: {e}"
+        )
+        return []
 
 
 def _format_arun_timing(
@@ -585,6 +670,10 @@ class CustomerAgent(Bot):
                     # 实测模型会漏调工具（2026-10-10 排查），双通道并存互不冲突
                     search_knowledge=True,
                     add_knowledge_to_context=True,
+                    # 接管知识库检索：用本轮净化后的 query（买家原话）替换
+                    # agno 默认的「整块拼装 input」作为向量检索 query，
+                    # 避免素材清单/人工历史污染召回。详见 _knowledge_retriever。
+                    knowledge_retriever=_knowledge_retriever,
                     description=description,
                     instructions=instructions,
                     additional_context=additional_context,
@@ -915,6 +1004,65 @@ class CustomerAgent(Bot):
         return "[历史聊天记录]\n" + "\n".join(lines) + "\n"
 
     @staticmethod
+    def _load_recent_buyer_turns(shop_id: str, buyer_uid: str, limit: int = 6) -> list:
+        """读取该买家最近几轮**买家原话**（不含客服话术），供知识库检索 query 构造。
+
+        只取 direction='inbound' 且 context_type='text' 的记录——这些是买家真正
+        问出来的话。商品卡/订单卡/表情等非文本消息不进 query（它们是结构化
+        数据，不是自然语言提问，混进向量只会稀释语义）。
+
+        同步 DB 访问，调用方需用 asyncio.to_thread 包装。
+        """
+        if not shop_id or not buyer_uid:
+            return []
+        try:
+            from services.message_persistence import message_persistence_service
+
+            rows = message_persistence_service.get_messages_by_uid(
+                shop_id, buyer_uid, limit=limit * 4
+            )
+        except Exception:
+            return []
+
+        turns: list = []
+        for row in reversed(rows or []):
+            if row.get("direction") != "inbound":
+                continue
+            if (row.get("context_type") or "") != "text":
+                continue
+            content = (row.get("content") or "").strip()
+            if not content:
+                continue
+            turns.append(content)
+            if len(turns) >= limit:
+                break
+        return turns
+
+    def _build_kb_query(self, final_input: str, shop_id: str, buyer_uid: str) -> str:
+        """构造本轮知识库检索 query：买家原话（当前轮 + 最近几轮）。
+
+        背景见 knowledge_query.py 顶部：agno 默认拿整块拼装 input（素材清单 +
+        人工历史 + 订单块，约 945 字）当向量检索 query，买家的短问题被彻底
+        稀释，导致「会员购买链接」这类条目召不回来。
+
+        这里只用买家原话。当前轮从 final_input 里抽（那是本轮实际输入，
+        一定含买家最新的话），历史轮从 DB 取（补全"这款/19.9"这类指代）。
+        """
+        turns: list = []
+        try:
+            history = self._load_recent_buyer_turns(shop_id, buyer_uid)
+        except Exception:
+            history = []
+        turns.extend(history)
+
+        # 当前轮：final_input 末尾的买家提问是最新的一条，优先级最高。
+        current = extract_buyer_turn(final_input)
+        if current:
+            turns.append(current)
+
+        return build_query_from_input("", turns)
+
+    @staticmethod
     def _load_order_block(shop_id: str, account_user_id: str, buyer_uid: str) -> str:
         """读取买家近期订单（状态/商品/物流）并格式化为上下文块；无订单返回空串。
 
@@ -1214,6 +1362,7 @@ class CustomerAgent(Bot):
         _stages: list = []
         _timing_rec: dict = {"llm": []}
         _timing_token = None
+        _kb_token = None
 
         def _mark(name: str) -> None:
             nonlocal _t_tick
@@ -1443,6 +1592,19 @@ class CustomerAgent(Bot):
 
             run_input = video_message if video_message is not None else final_input
             _mark("media")
+
+            # 构造本轮的知识库检索 query：只用买家原话（当前轮 + 最近几轮），
+            # 剥离素材清单/人工历史/订单块对向量检索的污染。
+            # 置位到 contextvar 供 _knowledge_retriever 钩子读取。
+            _kb_query = self._build_kb_query(
+                final_input,
+                str(context.kwargs.shop_id),
+                str(context.kwargs.from_uid),
+            )
+            _kb_token = set_current_query(_kb_query)
+            if _kb_query:
+                self.logger.info(f"[async_reply] 知识库检索 query 已净化: {_kb_query[:120]}")
+
             # 置位计时上下文：arun 内部每次 LLM 往返由 _install_model_timing_hook 记录
             _timing_token = _arun_timing.set(_timing_rec)
             try:
@@ -1486,6 +1648,9 @@ class CustomerAgent(Bot):
             self.logger.info("[async_reply] arun 调用完成")
             _mark("arun")
             _clear_timing()
+            if _kb_token is not None:
+                reset_current_query(_kb_token)
+                _kb_token = None
             self.logger.info(
                 _format_arun_timing(
                     _stages, _timing_rec, time.perf_counter() - _t_start, _reply_timeout
@@ -1519,6 +1684,9 @@ class CustomerAgent(Bot):
             # loguru 不认 exc_info 参数，要打堆栈必须走 opt(exception=True)。
             if _timing_token is not None:
                 _clear_timing()
+            if _kb_token is not None:
+                reset_current_query(_kb_token)
+                _kb_token = None
             self.logger.warning(
                 _format_arun_timing(
                     _stages, _timing_rec, time.perf_counter() - _t_start, _reply_timeout_seconds()
