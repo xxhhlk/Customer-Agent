@@ -108,6 +108,12 @@ class AIReplyHandler(BaseHandler):
                 # 重生成链路上 AI 全部失败，走兜底（理论上 _check_banned_words 已处理）
                 return await self._handle_fallback(context, metadata)
 
+            # 2.6 机器码校验：模型若把设备编号当成机器码收下并承诺授权，
+            #     授权必然失败。命中则让它重生成一次；仍违规则用固定话术替换。
+            reply = await self._check_machine_code(processed_content, reply, context, metadata)
+            if not reply:
+                return await self._handle_fallback(context, metadata)
+
             # 3. 发送前检查：任务是否已被取消（人工客服已介入）
             from_uid = metadata.get('from_uid')
             current_task = asyncio.current_task()
@@ -221,6 +227,51 @@ class AIReplyHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"发送回复失败: {e}")
             return False
+
+    async def _check_machine_code(
+        self, query: str, reply: str, context: Context, metadata: Dict[str, Any]
+    ) -> str:
+        """机器码发送前校验：回复把设备编号当机器码收下时拦截。
+
+        2026-11-11 事故：模型回「收到 机器码 113317104 已经记下 我这边安排授权」，
+        但 113317104 是设备编号，拿去授权必然失败。这里做两道处理：
+
+        1. 让模型带着约束重生成一次（可能自然地改口说"这是设备编号"）
+        2. 仍违规则用固定话术替换，绝不把承诺授权的错话发给买家
+
+        Returns:
+            可发送的回复文本；空串表示应走兜底。
+        """
+        from Message.handlers.machine_code_guide import (
+            REGENERATE_CONSTRAINT,
+            guide_for_device_id,
+            reply_mentions_accepted_code,
+        )
+
+        try:
+            hits = reply_mentions_accepted_code(reply)
+            if not hits:
+                return reply
+
+            self.logger.warning(
+                f"回复把设备编号 {hits} 当成机器码了，重新生成: {reply[:80]}"
+            )
+
+            constraint = (
+                f"{query}" + chr(10)
+                + REGENERATE_CONSTRAINT.format(codes="、".join(hits))
+            )
+            regenerated = await self._get_ai_reply(constraint, context)
+            if regenerated and not reply_mentions_accepted_code(regenerated):
+                self.logger.info("重新生成成功，设备编号误认已修正")
+                return regenerated
+
+            # 重生成仍违规：用固定话术替换，绝不把错话发给买家
+            self.logger.warning("重新生成后仍违规，改用固定话术")
+            return guide_for_device_id()
+        except Exception as e:
+            logger.warning(f"机器码校验出错: {e}")
+            return reply
 
     async def _handle_fallback(self, context: Context, metadata: Dict[str, Any]) -> bool:
         """备用回复处理"""

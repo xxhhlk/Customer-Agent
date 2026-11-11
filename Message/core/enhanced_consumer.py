@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import time
 import threading
 from typing import List, Dict, Any, Optional
@@ -185,6 +186,16 @@ class EnhancedMessageConsumer:
                         await self._record_staff_takeover(
                             [wrapper.context] + [w.context for w in dropped]
                         )
+                    return
+
+                # 1.5 确定性分流：设备编号拦截 + 新订单固定文案
+                # 放在关键词预检之前：这三条都是不该交给模型自由发挥的场景。
+                # - 设备编号：买家把纯数字编号当机器码发来（2026-11-11 事故），
+                #   让模型判断就会说「收到机器码 113317104 已记下」并承诺授权。
+                # - 新订单：固定发「获取机器码教程」原文，不再由模型每次改写。
+                if await self._handle_device_id(merged_wrapper.context):
+                    return
+                if await self._handle_new_order(merged_wrapper.context):
                     return
 
                 # 2. 关键词预处理：检查是否命中关键词
@@ -377,6 +388,156 @@ class EnhancedMessageConsumer:
             return str(context.content or "").strip()
         return str(getattr(context, "merged_text", None) or "").strip()
 
+    async def _send_direct(
+        self,
+        context: Context,
+        text: str,
+        reply_source: str,
+        media_meta: Optional[str] = None,
+    ) -> bool:
+        """直接发一条固定文案并落库，不经过模型。
+
+        返回是否发送成功。发送失败不阻断后续流程（记录日志即可）。
+        """
+        try:
+            shop_id = context.kwargs.shop_id if hasattr(context, "kwargs") else None
+            user_id = context.kwargs.user_id if hasattr(context, "kwargs") else None
+            from_uid = context.kwargs.from_uid if hasattr(context, "kwargs") else None
+            if not shop_id or not user_id or not from_uid:
+                self.logger.warning("固定文案发送缺少参数，跳过")
+                return False
+
+            from bridge.sender import get_sender
+            sender = get_sender(context.channel_type)
+            if not sender:
+                self.logger.warning("无可用的发送器")
+                return False
+
+            result = await asyncio.to_thread(
+                sender.send_text, shop_id, user_id, str(from_uid), text
+            )
+            if not (isinstance(result, dict) and result.get("success")):
+                self.logger.warning(f"固定文案发送失败: {result}")
+                return False
+
+            try:
+                from services.message_persistence import message_persistence_service
+                msg_dict = message_persistence_service.save_outbound_message(
+                    shop_id=str(shop_id),
+                    user_id=str(user_id),
+                    buyer_uid=str(from_uid),
+                    reply_content=text,
+                    reply_source=reply_source,
+                    media_meta=media_meta,
+                )
+                if msg_dict:
+                    message_persistence_service.notify_new_message(msg_dict)
+            except Exception as e:
+                self.logger.warning(f"固定文案落库失败: {e}")
+
+            self.logger.info(f"已发送固定文案({reply_source}): {text[:60]}")
+            return True
+        except Exception as e:
+            self.logger.error(f"发送固定文案出错: {e}")
+            return False
+
+    async def _handle_device_id(self, context: Context) -> bool:
+        """买家发来设备编号（纯数字）时，直接给固定话术，不进模型。
+
+        2026-11-11 事故：买家发「113317104」+「机器编号是这个」，
+        模型回「收到 机器码 113317104 已经记下 我这边安排授权」——
+        把设备编号当成机器码，授权必然失败。
+
+        只在「整条消息就是这个数字」时拦截：买家若同时说了别的事，
+        不整条拦掉，交由模型按提示词处理。
+
+        Returns:
+            True 表示已拦截并已回复，本轮不再走 AI。
+        """
+        try:
+            from Message.handlers.machine_code_guide import (
+                guide_for_device_id,
+                is_pure_device_id_message,
+            )
+
+            text = self._matchable_text(context)
+            if not text or not is_pure_device_id_message(text):
+                return False
+
+            # 人工客服刚回复过（60s 冷却期内）说明正在处理这个买家，不抢话。
+            # 与关键词路径的冷却期口径一致。
+            from_uid = context.kwargs.from_uid if hasattr(context, "kwargs") else None
+            if isinstance(from_uid, str) and self.staff_reply_manager.is_in_cooldown(from_uid):
+                self.logger.info(f"买家 {from_uid} 在人工冷却期内，设备编号交由人工处理")
+                await self._record_staff_takeover([context])
+                return True
+
+            # 买家可能同时在消息里附带订单号等其它数字，只拦纯数字那一种
+            self.logger.info(f"检测到设备编号消息，拦截不走 AI: {text[:40]}")
+            await self._send_direct(context, guide_for_device_id(), reply_source="keyword")
+            # 买家消息仍要进会话历史，否则后续 AI 不知道买家已经发过编号
+            await self._record_system_turn([context])
+            return True
+        except Exception as e:
+            self.logger.error(f"设备编号拦截出错: {e}")
+            return False
+
+    async def _handle_new_order(self, context: Context) -> bool:
+        """新订单：固定发「获取机器码教程」，不再由模型每次改写。
+
+        Returns:
+            True 表示已处理，本轮不再走 AI。
+        """
+        try:
+            from Message.handlers import order_notify
+
+            should_send, order_sn = order_notify.is_new_order(context)
+            if not should_send or not order_sn:
+                return False
+
+            shop_id = str(context.kwargs.shop_id) if hasattr(context, "kwargs") else ""
+            from_uid = str(context.kwargs.from_uid) if hasattr(context, "kwargs") else ""
+
+            # 人工客服刚回复过（60s 冷却期内）说明正在处理这个买家，不抢话
+            if from_uid and self.staff_reply_manager.is_in_cooldown(from_uid):
+                self.logger.info(f"买家 {from_uid} 在人工冷却期内，订单教程交由人工处理")
+                await self._record_staff_takeover([context])
+                return True
+
+            # 去重：同一订单号只发一次（进程内 + 落库双层）
+            if order_notify.already_sent(shop_id, order_sn):
+                self.logger.info(f"订单 {order_sn} 已发过教程，跳过")
+                return True
+
+            if shop_id and from_uid:
+                try:
+                    from services.message_persistence import message_persistence_service
+                    has_sent = await asyncio.to_thread(
+                        message_persistence_service.has_order_notice,
+                        shop_id, from_uid, order_sn,
+                    )
+                    if has_sent:
+                        order_notify.mark_sent(shop_id, order_sn)
+                        self.logger.info(f"订单 {order_sn} 此前已发过教程，跳过")
+                        return True
+                except Exception as e:
+                    self.logger.warning(f"订单教程去重查询失败: {e}")
+
+            sent = await self._send_direct(
+                context,
+                order_notify.tutorial_text(),
+                reply_source=order_notify.REPLY_SOURCE,
+                media_meta=json.dumps({"order_sn": order_sn}, ensure_ascii=False),
+            )
+            if sent:
+                order_notify.mark_sent(shop_id, order_sn)
+            # 订单消息也要进会话历史，AI 才知道买家已下单
+            await self._record_system_turn([context])
+            return True
+        except Exception as e:
+            self.logger.error(f"新订单处理出错: {e}")
+            return False
+
     async def _precheck_keyword(self, context: Context) -> Optional[dict]:
         """预处理关键词：检查消息是否命中关键词
 
@@ -566,6 +727,36 @@ class EnhancedMessageConsumer:
             self.logger.info(f"清空用户 {user_key} 队列中 {len(drained)} 条待处理消息")
         return drained
 
+    @staticmethod
+    def _history_text(context: Context) -> str:
+        """补写进会话历史的文本。
+
+        订单卡片的内容是整段 JSON，直接写进历史既脏又占 token，
+        压成一行可读摘要（订单号 + 商品 + 规格）即可。
+        """
+        content = str(context.content or "")
+        if context.type.name != "ORDER_INFO":
+            return content
+        try:
+            import json as _json
+
+            data = _json.loads(content)
+            if not isinstance(data, dict):
+                return content
+            parts = []
+            order_id = str(data.get("order_id") or "")
+            if order_id:
+                parts.append(f"订单号 {order_id}")
+            goods = str(data.get("goods_name") or "")
+            if goods:
+                parts.append(f"商品 {goods}")
+            spec = str(data.get("spec") or "")
+            if spec:
+                parts.append(f"规格 {spec}")
+            return "买家已下单：" + "，".join(parts) if parts else content
+        except Exception:
+            return content
+
     async def _record_staff_takeover(self, contexts: list) -> None:
         """人工接管导致本轮不走 AI 时，把买家消息补写进 AI 会话历史。
 
@@ -596,7 +787,7 @@ class EnhancedMessageConsumer:
             if context is None:
                 continue
             try:
-                text = str(context.content or "")
+                text = self._history_text(context)
                 # 合并后的媒体消息：content 是媒体地址，同批文本在 merged_text 里，
                 # 补写历史时必须一并带上，否则买家说过的内容对 AI 永久不可见
                 extra = str(getattr(context, "merged_text", None) or "").strip()

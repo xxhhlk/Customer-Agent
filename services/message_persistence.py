@@ -624,6 +624,40 @@ class MessagePersistenceService:
         finally:
             session.close()
 
+    def has_order_notice(self, shop_id: str, buyer_uid: str, order_sn: str) -> bool:
+        """该订单号是否已发过下单教程。
+
+        订单号存在出站记录的 ``media_meta.order_sn`` 里（普通消息该字段为空），
+        用 JSON1 精确匹配，避免同文本不同订单互相误判。
+        进程内去重（order_notify._sent_orders）只覆盖当次运行，
+        重启后靠这个查询兜底。
+        """
+        if not shop_id or not buyer_uid or not order_sn:
+            return False
+        db_manager = get_db_manager()
+        session: Session = db_manager.Session()
+        try:
+            from sqlalchemy import text
+
+            sql = text("""
+                SELECT COUNT(*) FROM chat_message_records
+                WHERE shop_id = :shop_id AND buyer_uid = :buyer_uid
+                  AND direction = 'outbound'
+                  AND reply_source = 'order_notify'
+                  AND json_extract(media_meta, '$.order_sn') = :order_sn
+            """)
+            count = session.execute(sql, {
+                "shop_id": str(shop_id),
+                "buyer_uid": str(buyer_uid),
+                "order_sn": str(order_sn),
+            }).scalar()
+            return bool(count)
+        except Exception as e:
+            logger.warning(f"has_order_notice 查询失败: {e}")
+            return False
+        finally:
+            session.close()
+
     # ==================== 工具方法 ====================
 
     def notify_new_message(self, msg_dict: Dict[str, Any]):

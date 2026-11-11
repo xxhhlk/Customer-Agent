@@ -43,6 +43,7 @@ class MessageBubble(QFrame):
         "staff": "人工",
         "fallback": "兜底",
         "manual": "手动",
+        "order_notify": "订单通知",
     }
     # 深色模式下使用更亮的标签颜色，避免与深色气泡背景融为一体
     REPLY_SOURCE_COLORS = {
@@ -51,6 +52,7 @@ class MessageBubble(QFrame):
         "staff": "#007bff",
         "fallback": "#dc3545",
         "manual": "#fd7e14",
+        "order_notify": "#20c997",
     }
     REPLY_SOURCE_COLORS_DARK = {
         "ai": "#3dd16a",       # 亮绿
@@ -58,6 +60,7 @@ class MessageBubble(QFrame):
         "staff": "#3d9bff",     # 亮蓝
         "fallback": "#f56565",  # 亮红
         "manual": "#ffa040",    # 亮橙
+        "order_notify": "#4dd4ac",  # 亮青
     }
 
     def __init__(self, msg_data: dict, parent=None):
