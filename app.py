@@ -43,6 +43,13 @@ os.environ.setdefault("QT_OPENGL", "software")      # 软件渲染（8-1 实测 
 os.environ.setdefault("QT_QUICK_BACKEND", "software") # QML 用软件后端
 os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")   # Mesa 软件渲染
 
+# 关闭 agno 遥测上报（主开关是 Agent(telemetry=False)，此处必须用强制赋值）：
+# agno 的 Agent._set_telemetry() 每次上报前都会读 AGNO_TELEMETRY 环境变量覆盖
+# self.telemetry，所以 setdefault 在此无效，必须直接写死。
+# 每次 arun 结束前都会 POST https://os-api.agno.com/telemetry/runs，国内网络下
+# TLS 握手可挂满 60s，把回复拖过超时上限改成兜底话术。
+os.environ["AGNO_TELEMETRY"] = "false"
+
 # —— 预加载 D3D/D2D 关键 DLL 并永久持有引用 ——
 # 根因：Qt6 ModernWindows 风格 → d2d1 → d3d11 → d3d10warp（WARP）。
 # d3d10warp.dll 被某个组件用完即 FreeLibrary，引用计数归零后被卸载，

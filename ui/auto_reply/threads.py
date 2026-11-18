@@ -63,6 +63,16 @@ class AutoReplyThread(QThread):
         """启动后端 PDDChannel 引擎，失败后自动重启"""
         from Channel.pinduoduo.pdd_channel import PDDChannel
 
+        # 账号线程起来后预热 AI 侧重资源（LanceDb 子进程 / agno session 表）。
+        # 这两项冷启动各约 54s，全在首条买家消息的关键路径上，不预热的活首条
+        # 回复会被拖过 llm.reply_timeout 上限而改发兜底话术。守护线程 + 进程内
+        # 幂等，预热失败只记日志，不影响连接。
+        try:
+            from Agent.CustomerAgent.agent import prewarm_agent
+            prewarm_agent()
+        except Exception as e:
+            self.logger.warning(f"AI 预热启动失败（不影响连接）: {type(e).__name__}: {e}")
+
         while not self._stop_requested:
             try:
                 # 为当前线程创建并设置新的事件循环

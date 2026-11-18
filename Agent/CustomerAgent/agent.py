@@ -694,6 +694,13 @@ class CustomerAgent(Bot):
                     timezone_identifier="Asia/Shanghai",
                     # 知识库工具调用总次数封顶，防止模型反复检索把单次回复拖到超时
                     tool_call_limit=_AGENT_TOOL_CALL_LIMIT,
+                    # 关闭 agno 遥测上报。_alog_agent_telemetry 在 arun 返回前
+                    # await POST https://os-api.agno.com/telemetry/runs（timeout=60，
+                    # 每次新建 httpx client、http2 建连不复用）。国内网络下该请求的
+                    # TLS 握手可挂满 60s，把整个 arun 拖过 llm.reply_timeout 上限，
+                    # 导致 LLM 已生成的回复被判 TimeoutError、改发兜底话术
+                    # （2026-11-18 23:54 事故）。telemetry=False 时该方法直接 return。
+                    telemetry=False,
                 )
 
                 # LLM 逐轮计时（排查超时用），幂等且不影响调用行为
@@ -708,6 +715,26 @@ class CustomerAgent(Bot):
             except Exception as e:
                 self.logger.error(f"CustomerAgent初始化失败: {e}")
                 return False
+
+    async def _prewarm(self) -> None:
+        """预热重资源：LanceDb 子进程 + agno SqliteDb/session 表。
+
+        首条买家消息会走 initialize_async，其中 LanceDb 子进程冷启动在本机实测
+        耗时 54s（且是同步阻塞，会堵住账号线程的事件循环，WS 心跳发不出去被服务端
+        踢线重连），首次 session 读取再耗 54s。两者叠加把首条回复拖到 200s 以上，
+        直接撞 90s 超时兜底（2026-11-18 23:54）。账号连接建立后先热一遍，
+        首条消息即走正常耗时。
+        """
+        if not await self.initialize_async():
+            return
+        try:
+            if self._agent is not None and self._agent.db is not None:
+                # 仅触发建表 + 元数据载入，不写入也不缓存结果（session_id 不存在）
+                await asyncio.to_thread(
+                    self._agent._read_session, session_id="__prewarm__"
+                )
+        except Exception as e:
+            self.logger.warning(f"[prewarm] 预热 session 读取失败（不影响回复）: {e}")
 
     @staticmethod
     def _llm_model_options() -> Dict[str, Any]:
@@ -1736,3 +1763,45 @@ class CustomerAgent(Bot):
         except Exception as e:
             self.logger.warning(f"[async_reply] 媒体下载失败: {e}")
             return None
+
+
+# ---------------------------------------------------------------------------
+# 冷启动预热
+# ---------------------------------------------------------------------------
+_prewarm_lock = threading.Lock()
+_prewarm_started = False
+
+
+def prewarm_agent(delay_seconds: float = 5.0) -> None:
+    """在守护线程里预热 CustomerAgent（进程内幂等）。
+
+    LanceDb 子进程冷启动（本机实测 54s，同步阻塞）与首次 session 读取（54s）
+    都在首条买家消息的关键路径上，叠起来能把首条回复拖过 llm.reply_timeout
+    上限、改发兜底话术。账号连接稳定后先热一遍，首条消息即走正常耗时。
+    预热失败只记日志，不影响正常回复流程。
+    """
+    global _prewarm_started
+    with _prewarm_lock:
+        if _prewarm_started:
+            return
+        _prewarm_started = True
+
+    _logger = get_logger("CustomerAgent")
+
+    def _worker() -> None:
+        try:
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+            from core.di_container import container
+            agent = container.get(CustomerAgent)
+            _t0 = time.perf_counter()
+            asyncio.run(agent._prewarm())
+            _logger.info(
+                f"[prewarm] CustomerAgent 预热完成，耗时 {time.perf_counter() - _t0:.1f}s"
+            )
+        except Exception as e:
+            _logger.warning(
+                f"[prewarm] CustomerAgent 预热失败（不影响正常回复）: {type(e).__name__}: {e}"
+            )
+
+    threading.Thread(target=_worker, name="CustomerAgentPrewarm", daemon=True).start()
