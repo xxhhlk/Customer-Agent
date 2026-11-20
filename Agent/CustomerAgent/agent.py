@@ -3,6 +3,7 @@ import contextvars
 import random
 import threading
 import time
+from datetime import datetime, timedelta
 
 from agno import tools
 from Agent.bot import Bot
@@ -255,6 +256,30 @@ def _install_model_timing_hook(model: Any) -> None:
 # 自动注入路径的 query 含素材清单 + 人工历史 + 订单块，实测 700~1500 字；
 # 模型自主调工具给的关键词通常几十字以内。
 _POLLUTED_QUERY_MIN_LEN = 200
+
+# 参与检索 query 的买家历史轮次时效窗（分钟）。
+# 跨窗的旧问题不再拼进向量检索（详见 _load_recent_buyer_turns 注释），
+# 30 分钟按实测取：同一话题内的追问（发坐标 → 27 分钟后问"清晰吗"）保留，
+# 几小时前的旧问题排除。
+_RECENT_TURN_MAX_AGE_MINUTES = 30
+
+
+def _is_after(timestamp: Optional[str], cutoff: datetime) -> bool:
+    """判断消息时间戳是否晚于 cutoff。
+
+    时间戳来自 message_persistence 的 isoformat 字符串（本地时间、无时区）。
+    解析失败时按「在窗内」处理：宁可多拼一轮历史，也不要因为格式问题把
+    当前话题的上下文丢掉。
+    """
+    if not timestamp:
+        return True
+    try:
+        ts = datetime.fromisoformat(str(timestamp))
+    except Exception:
+        return True
+    if ts.tzinfo is not None:
+        ts = ts.replace(tzinfo=None)
+    return ts >= cutoff
 
 
 def _knowledge_retriever(
@@ -1031,12 +1056,25 @@ class CustomerAgent(Bot):
         return "[历史聊天记录]\n" + "\n".join(lines) + "\n"
 
     @staticmethod
-    def _load_recent_buyer_turns(shop_id: str, buyer_uid: str, limit: int = 6) -> list:
+    def _load_recent_buyer_turns(
+        shop_id: str,
+        buyer_uid: str,
+        limit: int = 6,
+        max_age_minutes: float = _RECENT_TURN_MAX_AGE_MINUTES,
+    ) -> list:
         """读取该买家最近几轮**买家原话**（不含客服话术），供知识库检索 query 构造。
 
         只取 direction='inbound' 且 context_type='text' 的记录——这些是买家真正
         问出来的话。商品卡/订单卡/表情等非文本消息不进 query（它们是结构化
         数据，不是自然语言提问，混进向量只会稀释语义）。
+
+        时效窗（max_age_minutes）：只取窗内的买家原话。买家隔几小时再发一句
+        短问（"清晰吗"）时，旧问题同样满足"最近 3 条"，会被拼进 query 并支配
+        向量语义，把当前问题的召回带偏（2026-11-20 20:21 实例：query 变成
+        "清晰吗 能查到16年之前的吗 g109.45…"，召回了「历史影像介绍」，回复
+        答成"有历史影像的可以看1984到现在"，而正确条目「地图清晰度说明」本来
+        在 top1）。窗外的历史仍留在 agno session 里供模型理解上下文，只是不再
+        参与向量检索。
 
         同步 DB 访问，调用方需用 asyncio.to_thread 包装。
         """
@@ -1051,6 +1089,7 @@ class CustomerAgent(Bot):
         except Exception:
             return []
 
+        cutoff = datetime.now() - timedelta(minutes=max_age_minutes)
         turns: list = []
         for row in reversed(rows or []):
             if row.get("direction") != "inbound":
@@ -1059,6 +1098,8 @@ class CustomerAgent(Bot):
                 continue
             content = (row.get("content") or "").strip()
             if not content:
+                continue
+            if not _is_after(row.get("timestamp"), cutoff):
                 continue
             turns.append(content)
             if len(turns) >= limit:
