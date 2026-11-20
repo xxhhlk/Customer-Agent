@@ -16,6 +16,7 @@ from qfluentwidgets import (SubtitleLabel, CaptionLabel, BodyLabel,
                             InfoBar, InfoBarPosition, MessageBox)
 from database.db_manager import db_manager
 from Message.handlers.keyword_handler import KeywordDetectionHandler
+from ui.menu_theme import style_context_menu
 
 
 class KeywordTestDialog(QDialog):
@@ -552,6 +553,7 @@ class GroupListWidget(QListWidget):
             return
 
         menu = QMenu(self)
+        style_context_menu(menu)
         edit_action = QAction("编辑分组", self)
 
         group_id = item.data(self.ROLE_ID)

@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QTextOption, QAction, QCursor
 from qfluentwidgets import isDarkTheme, CaptionLabel
+from ui.menu_theme import style_context_menu
 
 
 def _set_clipboard_text(text: str, attempt: int = 0) -> None:
@@ -200,6 +201,7 @@ class MessageBubble(QFrame):
     def _show_context_menu(self, pos):
         """显示右键菜单 — 复制所选（有选中文字时置顶）/ 复制消息 / 转发消息"""
         menu = QMenu(self)
+        style_context_menu(menu)
 
         content = self.msg_data.get("content", "")
         context_type = self.msg_data.get("context_type", "text") or "text"
