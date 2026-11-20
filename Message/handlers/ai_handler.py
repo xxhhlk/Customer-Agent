@@ -222,6 +222,14 @@ class AIReplyHandler(BaseHandler):
                 except Exception as e:
                     logger.warning(f"持久化回复失败: {e}")
                 return True
+
+            # 网络层失败（result is None）交给重发队列，否则这条 AI 回复静默丢失
+            if result is None:
+                from Message.core.reply_retry import reply_retry_queue
+                reply_retry_queue.enqueue(
+                    shop_id, user_id, str(from_uid), reply,
+                    reply_source=reply_source, channel_type=context.channel_type,
+                )
             return False
 
         except Exception as e:

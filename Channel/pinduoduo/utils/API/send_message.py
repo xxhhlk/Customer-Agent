@@ -43,12 +43,24 @@ class SendMessage(BaseRequest):
             if result.get("result", {}).get("error_code") == 10002:
                 error_msg = result.get('result', {}).get('error')
                 self.logger.error(f"发送文本消息失败: {error_msg}")
-                return error_msg
+                return {"success": False, "retryable": False, "error_msg": error_msg}
             else:
                 return result
-        else:
-            self.logger.error(f"发送文本消息失败: {result}")
+
+        # 返回值语义（调用方据此决定要不要重发）：
+        # - None：网络层失败（代理失联/读超时/HTTP 非 200），消息大概率没送达，可重发
+        # - dict 且 success=False：服务端明确拒绝（风控/参数错误），重发只会加剧风控
+        if result is None:
+            self.logger.error("发送文本消息失败: 网络请求未完成（可重发）")
             return None
+
+        error_msg = (
+            result.get("error_msg")
+            or (result.get("result") or {}).get("error")
+            or "未知错误"
+        )
+        self.logger.error(f"发送文本消息失败: {error_msg}")
+        return {"success": False, "retryable": False, "error_msg": error_msg}
 
  
         

@@ -140,9 +140,23 @@ class KeywordDetectionHandler(BaseHandler):
                 reply_content = reply_content.replace('\\n', '\n')
                 self.logger.info(f"发送关键词回复（从{len(reply_list)}条中随机选择）: {reply_content}")
                 sender = get_sender(context.channel_type)
+                keyword_sent = False
                 if sender:
-                    await asyncio.to_thread(sender.send_text, shop_id, user_id, from_uid, reply_content)
-                self.logger.info(f"已发送关键词回复: {reply_content}")
+                    result = await asyncio.to_thread(
+                        sender.send_text, shop_id, user_id, from_uid, reply_content
+                    )
+                    keyword_sent = isinstance(result, dict) and bool(result.get("success"))
+                    if not keyword_sent and result is None:
+                        # 网络层失败：交给重发队列，避免回复静默丢失
+                        from Message.core.reply_retry import reply_retry_queue
+                        reply_retry_queue.enqueue(
+                            shop_id, user_id, from_uid, reply_content,
+                            reply_source="keyword", channel_type=context.channel_type,
+                        )
+                if keyword_sent:
+                    self.logger.info(f"已发送关键词回复: {reply_content}")
+                else:
+                    self.logger.warning(f"关键词回复未送达: {reply_content}")
                 
                 # 如果 pass_to_ai 为 True，发送回复后继续传递给AI
                 if matched.get('pass_to_ai', False):

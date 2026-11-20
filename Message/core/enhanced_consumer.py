@@ -207,8 +207,13 @@ class EnhancedMessageConsumer:
                         # pass_to_ai 关键词：发送回复后等待人工，再决定是否转AI
                         self.logger.info(f"命中 pass_to_ai 关键词，发送回复后等待人工客服")
 
-                        # 发送关键词回复
-                        await self._send_keyword_reply(merged_wrapper.context, keyword_result)
+                        # 发送关键词回复（网络失败时内部已入重发队列）
+                        sent = await self._send_keyword_reply(merged_wrapper.context, keyword_result)
+                        if not sent:
+                            self.logger.warning(
+                                f"pass_to_ai 关键词回复未送达买家 {from_uid}，"
+                                f"已入重发队列，后续由人工/AI 兜底"
+                            )
 
                         # 等待人工回复
                         if event_id and isinstance(from_uid, str):
@@ -268,7 +273,14 @@ class EnhancedMessageConsumer:
                             # 找不到关键词处理器，保守处理：传给AI
                             self.logger.warning("未找到关键词处理器，保守处理：传递给AI")
                             should_pass_to_ai = True
-                        
+
+                        # 固定回复没送达时不能让本轮静默结束：买家连一句提示都收不到。
+                        # 2026-11-19 02:52「人工在吗」事故：关键词回复发送失败，且移除
+                        # 关键词后无有意义内容 → 跳过 AI，整条消息零回复。
+                        if not sent and not should_pass_to_ai:
+                            self.logger.warning("关键词回复未送达，改走 AI 兜底")
+                            should_pass_to_ai = True
+
                         if should_pass_to_ai:
                             # 有内容，继续转AI（标记需要跳过关键词处理）
                             metadata = merged_wrapper.to_metadata()
@@ -418,6 +430,13 @@ class EnhancedMessageConsumer:
             )
             if not (isinstance(result, dict) and result.get("success")):
                 self.logger.warning(f"固定文案发送失败: {result}")
+                # 网络层失败交给重发队列，避免固定文案（新订单教程等）静默丢失
+                if result is None:
+                    from Message.core.reply_retry import reply_retry_queue
+                    reply_retry_queue.enqueue(
+                        shop_id, user_id, str(from_uid), text,
+                        reply_source=reply_source, channel_type=context.channel_type,
+                    )
                 return False
 
             try:
@@ -608,7 +627,7 @@ class EnhancedMessageConsumer:
                 return False
             result = await asyncio.to_thread(sender.send_text, shop_id, user_id, str(from_uid), reply_text)
 
-            if result is not None and hasattr(result, 'get') and result.get('success'):
+            if isinstance(result, dict) and result.get('success'):
                 self.logger.info(f"已发送关键词回复: {reply_text}")
                 # === 持久化关键词回复（接入点C） ===
                 try:
@@ -622,9 +641,19 @@ class EnhancedMessageConsumer:
                 except Exception as e:
                     self.logger.warning(f"持久化关键词回复失败: {e}")
                 return True
-            else:
-                self.logger.warning(f"发送关键词回复失败: {result}")
-                return False
+
+            # 网络层失败（result is None：代理失联/超时/HTTP 非 200）交给重发队列，
+            # 否则这条回复就此静默丢失（2026-11-19 02:52 事故）。
+            # 业务拒绝（HTTP 200 但 success=false、风控 error_code）返回 dict，不入队，
+            # 重发只会重复触发风控。
+            if result is None:
+                from Message.core.reply_retry import reply_retry_queue
+                reply_retry_queue.enqueue(
+                    shop_id, user_id, str(from_uid), reply_text,
+                    reply_source="keyword", channel_type=context.channel_type,
+                )
+            self.logger.warning(f"发送关键词回复失败: {result}")
+            return False
 
         except Exception as e:
             self.logger.error(f"发送关键词回复失败: {e}")
@@ -1235,6 +1264,12 @@ class EnhancedMessageConsumer:
                     self.logger.warning(f"持久化兜底回复失败: {e}")
             else:
                 self.logger.warning(f"发送兜底回复失败: {result}")
+                if result is None:
+                    from Message.core.reply_retry import reply_retry_queue
+                    reply_retry_queue.enqueue(
+                        shop_id, user_id, str(from_uid), reply_text,
+                        reply_source='fallback', channel_type=context.channel_type,
+                    )
         except Exception as e:
             self.logger.error(f"发送兜底回复时出错: {e}")
 
