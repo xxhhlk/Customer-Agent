@@ -830,7 +830,7 @@ class DatabaseManager:
     # ========== 关键词分组相关操作 ==========
     def add_keyword_group(self, group_name: str, reply: Optional[str] = None,
                           is_transfer: bool = False, pass_to_ai: bool = False,
-                          priority: int = 0) -> Optional[int]:
+                          priority: int = 0, is_enabled: bool = True) -> Optional[int]:
         """添加关键词分组
         
         Args:
@@ -839,6 +839,7 @@ class DatabaseManager:
             is_transfer: 是否转人工
             pass_to_ai: 是否传递给AI
             priority: 优先级
+            is_enabled: 是否启用（禁用后组内关键词不参与匹配）
             
         Returns:
             Optional[int]: 分组ID或None
@@ -855,7 +856,8 @@ class DatabaseManager:
                 reply=reply,
                 is_transfer=1 if is_transfer else 0,
                 pass_to_ai=1 if pass_to_ai else 0,
-                priority=priority
+                priority=priority,
+                is_enabled=1 if is_enabled else 0
             )
             session.add(group)
             session.commit()
@@ -882,7 +884,8 @@ class DatabaseManager:
                 'reply': group.reply,
                 'is_transfer': bool(group.is_transfer),
                 'pass_to_ai': bool(group.pass_to_ai),
-                'priority': group.priority
+                'priority': group.priority,
+                'is_enabled': bool(getattr(group, 'is_enabled', 1))
             }
         except SQLAlchemyError as e:
             self.logger.error(f"获取分组失败: {str(e)}")
@@ -907,6 +910,7 @@ class DatabaseManager:
                     'is_transfer': bool(g.is_transfer),
                     'pass_to_ai': bool(g.pass_to_ai),
                     'priority': g.priority,
+                    'is_enabled': bool(getattr(g, 'is_enabled', 1)),
                     'keyword_count': len(g.keywords)
                 }
                 for g in groups
@@ -919,7 +923,8 @@ class DatabaseManager:
 
     def update_keyword_group(self, group_id: int, group_name: Optional[str] = None,
                              reply: Optional[str] = None, is_transfer: Optional[bool] = None,
-                             pass_to_ai: Optional[bool] = None, priority: Optional[int] = None) -> bool:
+                             pass_to_ai: Optional[bool] = None, priority: Optional[int] = None,
+                             is_enabled: Optional[bool] = None) -> bool:
         """更新分组信息"""
         session = self.get_session()
         try:
@@ -938,6 +943,8 @@ class DatabaseManager:
                 group.pass_to_ai = 1 if pass_to_ai else 0
             if priority is not None:
                 group.priority = priority
+            if is_enabled is not None:
+                group.is_enabled = 1 if is_enabled else 0
             
             session.commit()
             self.logger.info(f"成功更新分组: {group_id}")
@@ -1066,8 +1073,12 @@ class DatabaseManager:
         finally:
             session.close()
     
-    def get_all_keywords(self) -> List[Dict[str, Any]]:
+    def get_all_keywords(self, include_disabled: bool = False) -> List[Dict[str, Any]]:
         """获取所有关键词，关联分组表获取回复内容
+        
+        Args:
+            include_disabled: 是否包含「已禁用分组」中的关键词。默认 False，
+                保证匹配链路（can_handle / match_keyword / 测试工具）只吃启用的分组
         
         Returns:
             List[Dict]: 关键词列表，包含分组的回复内容
@@ -1076,9 +1087,12 @@ class DatabaseManager:
         try:
             from sqlalchemy.orm import joinedload
             
-            keywords = session.query(Keyword).options(
+            query = session.query(Keyword).options(
                 joinedload(Keyword.group)
-            ).join(KeywordGroup).order_by(KeywordGroup.priority.desc(), Keyword.id).all()
+            ).join(KeywordGroup)
+            if not include_disabled:
+                query = query.filter(KeywordGroup.is_enabled == 1)
+            keywords = query.order_by(KeywordGroup.priority.desc(), Keyword.id).all()
             
             result = []
             for kw in keywords:

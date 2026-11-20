@@ -179,15 +179,49 @@ def migrate(db_path: str = './temp/channel_shop.db'):
         logger.info(f"迁移后: {group_count} 个分组, {keyword_count} 个关键词")
 
 
+def ensure_group_enabled_column(db_path: str = './temp/channel_shop.db') -> bool:
+    """确保 keyword_groups 有 is_enabled 列（幂等，供老库升级）
+
+    SQLite 支持直接 ADD COLUMN，不需要重建表；老数据默认启用（1）。
+    """
+    engine = create_engine(f'sqlite:///{db_path}')
+    try:
+        inspector = inspect(engine)
+        if not inspector.has_table('keyword_groups'):
+            return False
+        columns = [c['name'] for c in inspector.get_columns('keyword_groups')]
+        if 'is_enabled' in columns:
+            return False
+
+        with engine.connect() as conn:
+            conn.execute(text(
+                "ALTER TABLE keyword_groups "
+                "ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1"
+            ))
+            conn.commit()
+        logger.info("已为 keyword_groups 添加 is_enabled 列（历史分组默认启用）")
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"添加 is_enabled 列失败: {e}")
+        return False
+    finally:
+        engine.dispose()
+
+
 def auto_migrate(db_path: str = './temp/channel_shop.db'):
     """自动检测并执行迁移"""
+    changed = False
     if check_need_migration(db_path):
         logger.info("检测到旧版数据库结构，开始自动迁移...")
         migrate(db_path)
-        return True
+        changed = True
     else:
         logger.info("数据库结构已是最新，无需迁移")
-        return False
+
+    # 增量列：老库补 is_enabled（分包管理开关）
+    if ensure_group_enabled_column(db_path):
+        changed = True
+    return changed
 
 
 if __name__ == "__main__":

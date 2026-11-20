@@ -262,6 +262,11 @@ class GroupDialog(QDialog):
         self.priority_spin.setValue(self.group_data.get('priority', 0))
         layout.addRow('优先级:', self.priority_spin)
 
+        # 是否启用
+        self.enabled_check = QCheckBox('启用该分组（关闭后组内关键词不参与匹配）')
+        self.enabled_check.setChecked(bool(self.group_data.get('is_enabled', True)))
+        layout.addRow('', self.enabled_check)
+
         # 按钮
         button_layout = QHBoxLayout()
         self.ok_btn = PrimaryPushButton('确定')
@@ -300,7 +305,8 @@ class GroupDialog(QDialog):
             'reply': reply_serialized,
             'is_transfer': self.transfer_check.isChecked(),
             'pass_to_ai': self.pass_to_ai_check.isChecked(),
-            'priority': self.priority_spin.value()
+            'priority': self.priority_spin.value(),
+            'is_enabled': self.enabled_check.isChecked()
         }
 
 
@@ -410,6 +416,11 @@ class GroupListWidget(QListWidget):
 
     group_selected = pyqtSignal(int, str)  # 分组ID, 分组名称
 
+    # 条目数据角色：名称与启用状态分开存，避免禁用后缀污染名称
+    ROLE_ID = Qt.ItemDataRole.UserRole
+    ROLE_NAME = Qt.ItemDataRole.UserRole + 1
+    ROLE_ENABLED = Qt.ItemDataRole.UserRole + 2
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._updating_style = False  # 防止递归的标志
@@ -498,11 +509,22 @@ class GroupListWidget(QListWidget):
             self._updating_style = False
 
     def addGroup(self, group_data: dict):
-        """添加分组到列表"""
+        """添加分组到列表（禁用分组灰显并加后缀）"""
+        name = group_data['group_name']
+        enabled = bool(group_data.get('is_enabled', True))
+
         item = QListWidgetItem()
-        item.setText(group_data['group_name'])
-        item.setData(Qt.ItemDataRole.UserRole, group_data['id'])
-        item.setToolTip(f"优先级: {group_data.get('priority', 0)}\n关键词数: {group_data.get('keyword_count', 0)}")
+        item.setText(name if enabled else f"{name}（已禁用）")
+        item.setData(self.ROLE_ID, group_data['id'])
+        item.setData(self.ROLE_NAME, name)
+        item.setData(self.ROLE_ENABLED, enabled)
+
+        tip = (f"优先级: {group_data.get('priority', 0)}\n"
+               f"关键词数: {group_data.get('keyword_count', 0)}\n"
+               f"状态: {'已启用' if enabled else '已禁用（不参与匹配）'}")
+        item.setToolTip(tip)
+        if not enabled:
+            item.setForeground(QColor('#9e9e9e'))
         self.addItem(item)
 
     def clearList(self):
@@ -511,13 +533,13 @@ class GroupListWidget(QListWidget):
 
     def onItemClicked(self, item: QListWidgetItem):
         """点击分组"""
-        group_id = item.data(Qt.ItemDataRole.UserRole)
-        group_name = item.text()
+        group_id = item.data(self.ROLE_ID)
+        group_name = item.data(self.ROLE_NAME) or item.text()
         self.group_selected.emit(group_id, group_name)
 
     def onItemDoubleClicked(self, item: QListWidgetItem):
         """双击编辑分组"""
-        group_id = item.data(Qt.ItemDataRole.UserRole)
+        group_id = item.data(self.ROLE_ID)
         # 通过父组件处理编辑
         parent = self.parent()
         if parent and hasattr(parent, 'onEditGroup'):
@@ -531,13 +553,19 @@ class GroupListWidget(QListWidget):
 
         menu = QMenu(self)
         edit_action = QAction("编辑分组", self)
+
+        group_id = item.data(self.ROLE_ID)
+        enabled = bool(item.data(self.ROLE_ENABLED))
+        toggle_action = QAction("禁用分组" if enabled else "启用分组", self)
         delete_action = QAction("删除分组", self)
 
-        group_id = item.data(Qt.ItemDataRole.UserRole)
         edit_action.triggered.connect(lambda: self.onEditGroup(group_id))
+        toggle_action.triggered.connect(lambda: self.onToggleGroupEnabled(group_id, not enabled))
         delete_action.triggered.connect(lambda: self.onDeleteGroup(group_id))
 
         menu.addAction(edit_action)
+        menu.addAction(toggle_action)
+        menu.addSeparator()
         menu.addAction(delete_action)
         menu.exec(self.mapToGlobal(position))
 
@@ -546,6 +574,12 @@ class GroupListWidget(QListWidget):
         parent = self.parent()
         if parent and hasattr(parent, 'onEditGroup'):
             parent.onEditGroup(group_id)  # pyright: ignore[reportAttributeAccessIssue]
+
+    def onToggleGroupEnabled(self, group_id: int, enabled: bool):
+        """启用/禁用分组"""
+        parent = self.parent()
+        if parent and hasattr(parent, 'onToggleGroupEnabled'):
+            parent.onToggleGroupEnabled(group_id, enabled)  # pyright: ignore[reportAttributeAccessIssue]
 
     def onDeleteGroup(self, group_id: int):
         """删除分组"""
@@ -967,7 +1001,6 @@ class KeywordManagerWidget(QFrame):
     def onGroupSelected(self, group_id: int, group_name: str):
         """选择分组"""
         self.current_group_id = group_id
-        self.current_group_label.setText(group_name)
         self.edit_group_btn.setEnabled(True)
         self.add_keyword_btn.setEnabled(True)
 
@@ -978,8 +1011,15 @@ class KeywordManagerWidget(QFrame):
                 group_data = g
                 break
 
+        # 名称取库里的原始名（列表条目可能带「（已禁用）」后缀）
+        self.current_group_label.setText(
+            group_data['group_name'] if group_data else group_name
+        )
+
         if group_data:
             info_parts = []
+            if not group_data.get('is_enabled', True):
+                info_parts.append("已禁用")
             if group_data.get('is_transfer'):
                 info_parts.append("转人工")
             if group_data.get('pass_to_ai'):
@@ -1044,6 +1084,33 @@ class KeywordManagerWidget(QFrame):
                 self._show_info('成功', f'分组 "{data["group_name"]}" 添加成功！', 'success')
             else:
                 self._show_info('失败', '分组添加失败，可能已存在！', 'warning')
+
+    def onToggleGroupEnabled(self, group_id: int, enabled: bool):
+        """启用/禁用分组（禁用后组内关键词不参与匹配，立即热生效）"""
+        if not db_manager.update_keyword_group(group_id, is_enabled=enabled):
+            self._show_info('失败', '切换分组状态失败！', 'error')
+            return
+
+        self.loadGroupsFromDB()
+        self._reselect_group(group_id)
+
+        try:
+            self.keyword_handler.reload_keywords()
+        except Exception as e:
+            print(f"关键词热加载失败: {e}")
+
+        self._show_info('成功', f'分组已{"启用" if enabled else "禁用"}', 'success')
+
+    def _reselect_group(self, group_id: int):
+        """刷新列表后恢复选中状态"""
+        for i in range(self.group_list.count()):
+            item = self.group_list.item(i)
+            if item and item.data(GroupListWidget.ROLE_ID) == group_id:
+                self.group_list.setCurrentItem(item)
+                self.onGroupSelected(
+                    group_id, item.data(GroupListWidget.ROLE_NAME) or item.text()
+                )
+                break
 
     def onEditGroup(self, group_id: int):
         """编辑分组"""

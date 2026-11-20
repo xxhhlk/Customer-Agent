@@ -75,6 +75,7 @@ class KeywordGroup(Base):
     is_transfer: Mapped[Optional[int]] = mapped_column(Integer, default=0, comment='是否转人工: 0-否, 1-是')
     pass_to_ai: Mapped[Optional[int]] = mapped_column(Integer, default=0, comment='是否传递给AI: 0-否, 1-是')
     priority: Mapped[int] = mapped_column(Integer, default=0, comment='优先级，数值越大优先级越高')
+    is_enabled: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment='分组是否启用: 0-禁用(不参与匹配), 1-启用')
 
     # 关联关系 - 一个分组可以有多个关键词
     keywords: Mapped[List['Keyword']] = relationship('Keyword', back_populates='group', cascade='all, delete-orphan')
