@@ -1106,15 +1106,19 @@ class CustomerAgent(Bot):
                 break
         return turns
 
-    def _build_kb_query(self, final_input: str, shop_id: str, buyer_uid: str) -> str:
+    def _build_kb_query(self, buyer_text: str, shop_id: str, buyer_uid: str) -> str:
         """构造本轮知识库检索 query：买家原话（当前轮 + 最近几轮）。
 
         背景见 knowledge_query.py 顶部：agno 默认拿整块拼装 input（素材清单 +
         人工历史 + 订单块，约 945 字）当向量检索 query，买家的短问题被彻底
         稀释，导致「会员购买链接」这类条目召不回来。
 
-        这里只用买家原话。当前轮从 final_input 里抽（那是本轮实际输入，
-        一定含买家最新的话），历史轮从 DB 取（补全"这款/19.9"这类指代）。
+        ★ buyer_text 必须是**买家本轮自己的文本**，不能传 final_input：后者以
+        素材清单/订单块开头，图片消息（content 是裸 URL）过不了 JSON 文本正则，
+        extract_buyer_turn 会原样返回整块，截断后 query 变成
+        "[客服素材库]（买家需要看图…"。实测这种 query 召回的是「引导看教程/
+        教程已发/使用教程链接」，「获取机器码开通授权」一条都进不来，模型只能
+        讲教程、不会要机器码（2026-11-20 22:14 实例）。
         """
         turns: list = []
         try:
@@ -1123,8 +1127,9 @@ class CustomerAgent(Bot):
             history = []
         turns.extend(history)
 
-        # 当前轮：final_input 末尾的买家提问是最新的一条，优先级最高。
-        current = extract_buyer_turn(final_input)
+        # 当前轮优先级最高。图片/视频/纯 URL 会被 extract_buyer_turn 滤成空串，
+        # 此时只用历史轮（媒体消息本身没有可检索的文本语义）。
+        current = extract_buyer_turn(buyer_text)
         if current:
             turns.append(current)
 
@@ -1664,8 +1669,11 @@ class CustomerAgent(Bot):
             # 构造本轮的知识库检索 query：只用买家原话（当前轮 + 最近几轮），
             # 剥离素材清单/人工历史/订单块对向量检索的污染。
             # 置位到 contextvar 供 _knowledge_retriever 钩子读取。
+            # ★ 传买家本轮文本而不是 final_input：final_input 以素材清单开头，
+            #   图片轮会把它整块当成 query（详见 _build_kb_query 注释）。
+            _buyer_text = _merged_text or str(context.content or "")
             _kb_query = self._build_kb_query(
-                final_input,
+                _buyer_text,
                 str(context.kwargs.shop_id),
                 str(context.kwargs.from_uid),
             )

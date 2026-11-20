@@ -79,6 +79,18 @@ _NOISE_PREFIXES = (
 _JSON_TEXT_RE = re.compile(r'\{"type"\s*:\s*"text"\s*,\s*"text"\s*:\s*"(.*?)"\}', re.S)
 _CONTENT_PREFIX_RE = re.compile(r"^内容[:：]\s*")
 
+# 拼装上下文块的起始标记（agent.py 组装 final_input 时加的）。
+# 出现在开头说明这是整块上下文，不是买家原话。
+_CONTEXT_BLOCK_PREFIXES = (
+    "[客服素材库",
+    "[买家订单信息",
+    "[人工客服已回复",
+    "[历史聊天记录",
+)
+
+# 媒体消息的 content / 素材条目的渲染前缀，无检索语义。
+_MEDIA_PREFIXES = ("http://", "https://", "data:", "[图片]", "[视频]")
+
 
 def extract_buyer_turn(text: str) -> str:
     """从单条消息里提取买家原话。
@@ -86,6 +98,9 @@ def extract_buyer_turn(text: str) -> str:
     处理两种形态：
       1. 原始文本 —— 直接用
       2. JSON 文本消息 —— 取 text 字段并剥掉"内容："前缀
+
+    拿不到买家原话（拼装块标记 / 媒体地址）时返回空串，让调用方退回只用语料
+    历史，而不是把整块上下文当 query。
     """
     if not text:
         return ""
@@ -98,11 +113,29 @@ def extract_buyer_turn(text: str) -> str:
         raw = match.group(1)
         # JSON 字符串转义还原
         raw = raw.replace('\\"', '"').replace("\\n", "\n").replace("\\\\", "\\")
-        raw = _CONTENT_PREFIX_RE.sub("", raw.strip())
-        return raw.strip()
+        raw = _CONTENT_PREFIX_RE.sub("", raw.strip()).strip()
+        return "" if _is_non_buyer_text(raw) else raw
 
     # 已经是纯文本，但可能带"内容："前缀
-    return _CONTENT_PREFIX_RE.sub("", raw).strip()
+    raw = _CONTENT_PREFIX_RE.sub("", raw).strip()
+    return "" if _is_non_buyer_text(raw) else raw
+
+
+def _is_non_buyer_text(text: str) -> bool:
+    """判断这是否不是买家写出来的话。
+
+    两类要滤掉：
+      1. 拼装块标记 —— final_input 以素材清单/订单块开头，图片消息没有 JSON
+         text 段，正则匹配不到就会把整块原样返回，被截断后变成
+         "[客服素材库]（买家需要看图…"，实测只能召回教程类条目。
+      2. 媒体地址/渲染标签 —— 图片、视频、素材条目的 content 对向量检索没有
+         文本语义。
+    """
+    if not text:
+        return True
+    if text.startswith(_CONTEXT_BLOCK_PREFIXES):
+        return True
+    return text.startswith(_MEDIA_PREFIXES)
 
 
 def _is_noise_turn(text: str) -> bool:
