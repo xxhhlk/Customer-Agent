@@ -152,6 +152,51 @@ def _is_censor_placeholder(text: str) -> bool:
 _AGENT_TOOL_CALL_LIMIT = 4
 
 
+# 禁用词清单里属于「条目名」的元词：注入给模型只会诱导它照抄
+# （如「禁用词（这条不要发给客户）」），过滤掉再拼进提示词。
+_BANNED_META_MARKERS = ("禁用词", "这条不要发给客户")
+
+
+def _banned_words_block() -> str:
+    """把 config 的禁用词表渲染成 system prompt 片段。
+
+    单一事实源仍是 ``banned_words``：设置页改词表、重新加载配置后自动同步，
+    不需要在提示词里再维护一份副本。
+
+    模型看不到词表时只能靠发送前拦截重写（``ai_handler._check_banned_words``），
+    每次命中要重生成 1-2 次才收敛，还多耗 LLM 调用与延迟；提前告知能大幅
+    降低重写率。返回空串表示没有可注入的词。
+    """
+    try:
+        words = get_config("banned_words", []) or []
+    except Exception:
+        return ""
+
+    shown: list[str] = []
+    for raw in words:
+        word = str(raw or "").strip()
+        if not word or any(marker in word for marker in _BANNED_META_MARKERS):
+            continue
+        if word not in shown:
+            shown.append(word)
+    if not shown:
+        return ""
+
+    return (
+        "## 禁用词（拼多多平台违规，回复中绝对不能出现）\n"
+        "下面的词出现在回复里会被发送前拦截、要求重写。生成时就避开，也不要用同音字、"
+        "拆字、加空格加符号的方式绕过去；拿不准的词就换个说法：\n"
+        + "、".join(shown)
+    )
+
+
+def _build_additional_context(base: str) -> str:
+    """在 additional_context 最前拼上禁用词块（硬约束前置）。"""
+    block = _banned_words_block()
+    base = base or ""
+    return f"{block}\n\n{base}" if block else base
+
+
 def _reply_timeout_seconds() -> float:
     """单次 AI 回复超时（秒）：读 llm.reply_timeout 并夹取到 [20, 300]。
 
@@ -674,7 +719,9 @@ class CustomerAgent(Bot):
                 db_path = get_config("db_path", "./temp/agent.db")
                 description = get_config("prompt.description", "")
                 instructions = get_config("prompt.instructions", [])
-                additional_context = get_config("prompt.additional_context", "")
+                additional_context = _build_additional_context(
+                    get_config("prompt.additional_context", "")
+                )
 
                 # 创建Agent实例；给 agno 的 SQLite 引擎补 WAL + busy_timeout，
                 # 缓解多账号并发写同一 db 时的 SQLITE_BUSY 争用
@@ -842,7 +889,8 @@ class CustomerAgent(Bot):
         self.logger.info(f"[模型热更新] 已切换到 {fp[0]} @ {fp[1]}")
 
     # 提示词指纹字段顺序，与 _prompt_fingerprint() 的元组一一对应
-    _PROMPT_FP_FIELDS = ("description", "additional_context", "instructions")
+    # banned_words 也在其中：词表变了要重新拼注入块，否则禁用词块一直是旧的
+    _PROMPT_FP_FIELDS = ("description", "additional_context", "instructions", "banned_words")
 
     @staticmethod
     def _prompt_fingerprint() -> tuple:
@@ -851,6 +899,7 @@ class CustomerAgent(Bot):
             repr(get_config("prompt.description", "")),
             repr(get_config("prompt.additional_context", "")),
             repr(get_config("prompt.instructions", [])),
+            repr(get_config("banned_words", [])),
         )
 
     def _refresh_prompt_if_changed(self) -> None:
@@ -874,7 +923,9 @@ class CustomerAgent(Bot):
         ]
         self._agent.description = get_config("prompt.description", "")
         self._agent.instructions = get_config("prompt.instructions", [])
-        self._agent.additional_context = get_config("prompt.additional_context", "")
+        self._agent.additional_context = _build_additional_context(
+            get_config("prompt.additional_context", "")
+        )
         self._prompt_fp = fp
         self.logger.info(f"[提示词热更新] 已应用最新配置，变更项: {', '.join(changed) or 'unknown'}")
 
