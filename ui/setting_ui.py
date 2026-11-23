@@ -1499,6 +1499,7 @@ class SettingUI(QFrame):
         # 连接按钮信号
         self.save_btn.clicked.connect(self.onSaveConfig)
         self.reset_btn.clicked.connect(self.onResetConfig)
+        self.reload_btn.clicked.connect(self.onReloadConfig)
         
         # 添加到主布局
         main_layout.addWidget(header_widget)
@@ -1543,6 +1544,12 @@ class SettingUI(QFrame):
         self.reset_btn = PushButton("重置")
         self.reset_btn.setIcon(FIF.UPDATE)
         self.reset_btn.setFixedSize(80, 40)
+
+        # 重新加载配置：从 config.json 重读（手改文件后不用重启）
+        self.reload_btn = PushButton("重新加载配置")
+        self.reload_btn.setIcon(FIF.SYNC)
+        self.reload_btn.setFixedSize(130, 40)
+        self.reload_btn.setToolTip("从 config.json 重新读取配置，界面未保存的修改会丢失")
         
         # 保存按钮
         self.save_btn = PrimaryPushButton("保存")
@@ -1550,6 +1557,7 @@ class SettingUI(QFrame):
         self.save_btn.setFixedSize(100, 40)
         
         buttons_layout.addWidget(self.reset_btn)
+        buttons_layout.addWidget(self.reload_btn)
         buttons_layout.addWidget(self.save_btn)
         
         # 添加到头部布局
@@ -1994,6 +2002,68 @@ class SettingUI(QFrame):
             self.logger.error(f"保存配置失败: {e}")
             self._show_info("保存失败", f"保存配置时发生错误：{str(e)}", "error")
     
+    def onReloadConfig(self):
+        """从 config.json 重新读取配置（只读不写，手改文件后免重启）"""
+        if not self._ask_confirm(
+            "重新加载配置",
+            "将从 config.json 重新读取配置。\n界面上未保存的修改会丢失，确定继续吗？",
+        ):
+            return
+
+        config_path = getattr(config, "config_path", None)
+        if not config_path:
+            self._show_info("加载失败", "未找到配置文件路径", "error")
+            return
+
+        # 先用与 config.reload() 相同的流程校验文件：reload() 内部校验失败会静默
+        # 回退成默认配置，如果直接 reload 再报错，内存里的原配置已经被覆盖了。
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            from utils.runtime_path import adjust_config_for_runtime
+            from config import ConfigModel
+            ConfigModel(**adjust_config_for_runtime(raw))
+        except Exception as e:
+            self.logger.error(f"重新加载配置失败（文件校验未通过）: {e}")
+            self._show_info("加载失败", f"config.json 校验未通过，已保留当前配置：{e}", "error")
+            return
+
+        try:
+            config.reload()
+            self.loadConfig()
+
+            # 限流器热更新（与保存后的行为保持一致）
+            try:
+                rc = config.get_rate_limit_config()
+                from Message.handlers.rate_limiter import coze_rate_limiter
+                coze_rate_limiter.configure(
+                    window_size=rc['window_hours'] * 3600,
+                    max_requests=rc['max_requests']
+                )
+                self.logger.info(f"限流器已热更新: {rc}")
+            except Exception as e:
+                self.logger.warning(f"限流器热更新失败: {e}，重启后生效")
+
+            # 网络代理环境变量热更新
+            try:
+                from utils.proxy_config import apply_proxy_env, start_proxy_health_monitor
+                apply_proxy_env()
+                _proxy_cfg = config.get("proxy", {}) or {}
+                _proxy_interval = _proxy_cfg.get("check_interval", 60) if _proxy_cfg.get("enabled", False) else 0
+                start_proxy_health_monitor(_proxy_interval)
+            except Exception as e:
+                self.logger.warning(f"网络代理热更新失败: {e}，重启后生效")
+
+            self.logger.info("配置已从 config.json 重新加载")
+            self._show_info(
+                "已重新加载",
+                "配置已从 config.json 读取，提示词与模型下一轮回复生效；嵌入模型、知识库路径需重启",
+                "success",
+            )
+        except Exception as e:
+            self.logger.error(f"重新加载配置失败: {e}")
+            self._show_info("加载失败", f"重新加载配置失败：{str(e)}", "error")
+
     def onResetConfig(self):
         """重置配置"""
         if not self._ask_confirm("确认重置", "确定要重置所有配置吗？\n这将重新加载配置文件中的原始设置。"):
