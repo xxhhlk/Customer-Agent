@@ -327,6 +327,180 @@ def _is_after(timestamp: Optional[str], cutoff: datetime) -> bool:
     return ts >= cutoff
 
 
+# ---------------------------------------------------------------------------
+# 字面兜底：极短问句的向量召回不可信
+#
+# 「有没有最新的」这种 6 字问句，向量检索实测 top-8 全是无关话术
+# （正确答案「图源什么时候更新的」一条都进不来），模型只能照着噪音答成
+# 「有的呢，部分地区更新到今年」，实际人工纠正为「没有所谓的"最新"图源」
+# （2026-11-25 19:48 线上实例）。这类问句的共同点：字面里有一个高区分度实词
+# （最新/退款/机器码），但在 embedding 空间里被极短的上下文稀释。
+#
+# 兜底做法：取 query 里「在知识库中出现次数最少」的中文 2-gram（越稀有越有区分度），
+# 去知识库正文做包含匹配。仅当向量结果与 query 完全没有字面交集时启用，
+# 正常召回不受影响；任何异常都静默降级为空。
+# ---------------------------------------------------------------------------
+
+_KB_LITERAL_TTL = 300.0
+_KB_LITERAL_CACHE: dict[str, Any] = {"docs": [], "df": {}, "ts": 0.0}
+_KB_LITERAL_LOCK = threading.Lock()
+
+
+def _cjk_bigrams(text: str) -> list[str]:
+    """按连续中文串切 2-gram：「有没有最新的」→ 有没/没有/有最/最新/新的。"""
+    out: list[str] = []
+    run: list[str] = []
+    for ch in text or "":
+        if "\u4e00" <= ch <= "\u9fff":
+            run.append(ch)
+            continue
+        if len(run) >= 2:
+            out.extend("".join(run[i:i + 2]) for i in range(len(run) - 1))
+        run = []
+    if len(run) >= 2:
+        out.extend("".join(run[i:i + 2]) for i in range(len(run) - 1))
+    return out
+
+
+def _kb_gram_df() -> dict[str, int]:
+    """读已就绪的 2-gram 频次缓存（不阻塞）。未就绪返回空 dict。
+
+    首次加载要跨 IPC 读 lancedb 全表（子进程未启动时约 20s），绝不能放在
+    检索钩子里同步做——agno 在事件循环里调 retriever，卡住就等于卡死这个
+    账号的消息处理。加载由 _warm_kb_gram_cache() 在后台线程完成。
+    """
+    now = time.time()
+    with _KB_LITERAL_LOCK:
+        cache = _KB_LITERAL_CACHE
+        if now - float(cache["ts"] or 0.0) <= _KB_LITERAL_TTL and cache["docs"]:
+            return dict(cache["df"])
+    return {}
+
+
+def _load_kb_gram_df_blocking() -> dict[str, int]:
+    """加载全量知识库并算 2-gram 频次（耗时数秒到数十秒，只允许后台线程调用）。"""
+    now = time.time()
+    with _KB_LITERAL_LOCK:
+        cache = _KB_LITERAL_CACHE
+        if now - float(cache["ts"] or 0.0) <= _KB_LITERAL_TTL and cache["docs"]:
+            return cache["df"]
+        try:
+            from Agent.CustomerAgent.lancedb_proxy import get_knowledge_manager_proxy
+
+            # 注意：get_all_contents() 只拿得到元数据（正文在 LanceDB 里，不在
+            # contents_db），必须用导出接口才能拿到全文。
+            raw = get_knowledge_manager_proxy().get_all_documents_for_export() or []
+        except Exception as exc:
+            _budget_logger.warning(
+                f"[知识库检索] 字面兜底取全量内容失败: {type(exc).__name__}: {exc}"
+            )
+            return {}
+
+        docs: list[dict] = []
+        for item in raw:
+            if isinstance(item, dict):
+                meta = item.get("metadata") or {}
+                name = str(item.get("name") or meta.get("title") or "")
+                content = str(item.get("content") or "")
+            else:
+                name = str(getattr(item, "name", "") or "")
+                meta = getattr(item, "metadata", None)
+                if not name and isinstance(meta, dict):
+                    name = str(meta.get("title") or "")
+                content = str(getattr(item, "content", "") or "")
+            if content.strip():
+                docs.append({
+                    "name": name,
+                    "content": content,
+                    "meta_data": {"title": name, "source": "literal_fallback"},
+                })
+        if not docs:
+            return {}
+        df: dict[str, int] = {}
+        for doc in docs:
+            for gram in set(_cjk_bigrams(doc["content"])):
+                df[gram] = df.get(gram, 0) + 1
+        cache["docs"] = docs
+        cache["df"] = df
+        cache["ts"] = now
+        return df
+
+
+def _kb_rare_grams(query: str) -> list[str]:
+    """取 query 里最有区分度的 2-gram：出现次数最少的那几个。
+
+    「有没有最新的」的 2-gram 里，`没有` 在知识库里到处都是（无区分度），
+    `最新` 只有 4 条命中（正是要找的那批）。这里按 df 升序 + 相对阈值筛选，
+    把虚词组合自动剔除，不需要维护停用词表。
+    """
+    grams = {g for g in _cjk_bigrams(query) if len(g) == 2}
+    if not grams:
+        return []
+    df = _kb_gram_df()
+    if not df:
+        return []
+    ranked = sorted((g for g in grams if df.get(g)), key=lambda g: df[g])
+    if not ranked:
+        return []
+    floor = df[ranked[0]]
+    ceiling = max(floor * 3, 2)
+    return [g for g in ranked if df[g] <= ceiling][:3]
+
+
+def _vector_untrusted(query: str, docs: list) -> bool:
+    """向量结果是否明显不可信：空结果，或前两条与 query 的稀有词毫无字面交集。"""
+    if not docs:
+        return True
+    rare = _kb_rare_grams(query)
+    if not rare:
+        return False
+    for doc in docs[:2]:
+        text = str(getattr(doc, "content", "") or "")
+        if any(g in text for g in rare):
+            return False
+    return True
+
+
+def _kb_literal_fallback(query: str, limit: int = 3) -> list[dict]:
+    """用稀有 2-gram 做全文包含匹配，返回 agno 可用的 dict 列表。"""
+    rare = _kb_rare_grams(query)
+    if not rare:
+        return []
+    cache_docs = _KB_LITERAL_CACHE["docs"]
+    if not cache_docs:
+        return []
+    scored: list[tuple[int, int, dict]] = []
+    for doc in cache_docs:
+        hit = sum(1 for g in rare if g in doc["content"])
+        if hit:
+            # 同命中数时按词频排（「最新」在正确话术里出现两次，比只提一次的
+            # 边缘条目更贴题），再按正文长度短优先（口语话术比长文档更直接）
+            freq = sum(doc["content"].count(g) for g in rare)
+            scored.append((hit, freq, doc))
+    scored.sort(key=lambda x: (-x[0], -x[1], len(x[2]["content"])))
+    return [doc for _, _, doc in scored[:limit]]
+
+
+_KB_GRAM_WARMING = threading.Event()
+
+
+def _warm_kb_gram_cache() -> None:
+    """后台预热字面兜底所需的 2-gram 频次缓存（幂等、守护线程、失败静默）。"""
+    if _KB_GRAM_WARMING.is_set():
+        return
+
+    def _worker() -> None:
+        try:
+            _load_kb_gram_df_blocking()
+        except Exception as exc:
+            _budget_logger.warning(
+                f"[知识库检索] 字面兜底缓存预热失败: {type(exc).__name__}: {exc}"
+            )
+
+    _KB_GRAM_WARMING.set()
+    threading.Thread(target=_worker, name="kb-gram-warm", daemon=True).start()
+
+
 def _knowledge_retriever(
     agent: Any,
     query: str,
@@ -361,9 +535,21 @@ def _knowledge_retriever(
             max_results=num_documents,
             filters=filters,
         )
-        if not docs:
-            return []
-        return [doc.to_dict() for doc in docs]
+        results = [doc.to_dict() for doc in docs] if docs else []
+
+        # 极短问句的向量召回不可信时（详见上方注释），补一层字面匹配结果。
+        if _vector_untrusted(effective, docs):
+            literal = _kb_literal_fallback(effective)
+            if literal:
+                seen = {str(d.get("name") or "") for d in literal}
+                merged = literal + [d for d in results if str(d.get("name") or "") not in seen]
+                limit = num_documents or getattr(knowledge, "max_results", 3) or 3
+                _budget_logger.info(
+                    f"[知识库检索] 向量召回与 query 无字面交集，字面兜底补 "
+                    f"{len(literal)} 条: {[d.get('name') for d in literal]}"
+                )
+                return merged[: max(int(limit), len(literal))]
+        return results
     except Exception as e:
         # 检索失败不能中断回复——返回空列表，agno 会跳过 references 注入。
         _budget_logger.warning(
@@ -781,6 +967,8 @@ class CustomerAgent(Bot):
                 self._is_initialized = True
                 self._model_fp = self._config_fingerprint()
                 self._prompt_fp = self._prompt_fingerprint()
+                # 后台预热检索兜底缓存（不阻塞初始化；未就绪时兜底自动跳过）
+                _warm_kb_gram_cache()
                 self.logger.info("CustomerAgent初始化成功")
                 return True
 
