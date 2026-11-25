@@ -173,7 +173,16 @@ def main() -> int:
     ap.add_argument("--models", default="", help="逗号分隔；空=raw 下全部")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--raw-dir", default="", help="默认 temp/eval/raw；B 口径传 temp/eval/raw_agent")
+    ap.add_argument("--judged-dir", default="", help="默认与 raw 目录同级的 judged")
+    ap.add_argument("--out", default="", help="默认 temp/eval/judged_all.jsonl")
     args = ap.parse_args()
+
+    raw_root = Path(args.raw_dir) if args.raw_dir else OUT_DIR / "raw"
+    judged_root = Path(args.judged_dir) if args.judged_dir else raw_root.parent / (
+        "judged_agent" if raw_root.name == "raw_agent" else "judged")
+    out_path = Path(args.out) if args.out else OUT_DIR / (
+        "judged_agent_all.jsonl" if raw_root.name == "raw_agent" else "judged_all.jsonl")
 
     cfg = load_config()
     kb = load_kb()
@@ -182,7 +191,6 @@ def main() -> int:
         allowed |= extract_facts(kb_fact_texts(kb))[kind]
 
     samples = {s["sample_id"]: s for s in read_jsonl(OUT_DIR / "dataset.jsonl")}
-    raw_root = OUT_DIR / "raw"
     models = [m.strip() for m in args.models.split(",") if m.strip()] or \
              sorted(p.name for p in raw_root.iterdir() if p.is_dir())
 
@@ -207,7 +215,7 @@ def main() -> int:
     print(f"[info] 待判 {len(jobs)} 条 | 裁判 {JUDGES} | 白名单事实 {len(allowed)} 条")
     done = 0
     t0 = time.perf_counter()
-    out_root = OUT_DIR / "judged"
+    out_root = judged_root
 
     def work(item: tuple[str, dict]) -> dict:
         model, rec = item
@@ -231,7 +239,7 @@ def main() -> int:
                 el = time.perf_counter() - t0
                 print(f"[{done}/{len(jobs)}] {el:.0f}s 剩余≈{el / done * (len(jobs) - done):.0f}s")
 
-    all_path = OUT_DIR / "judged_all.jsonl"
+    all_path = out_path
     with all_path.open("w", encoding="utf-8") as fh:
         for r in sorted(results, key=lambda x: (x["model"], x["sample_id"])):
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")

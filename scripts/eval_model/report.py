@@ -62,9 +62,11 @@ def rate(xs: list[bool]) -> float:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", default="workbuddy/deepseek-v4.1-flash")
+    ap.add_argument("--judged", default=str(OUT_DIR / "judged_all.jsonl"))
+    ap.add_argument("--out-prefix", default="report")
     args = ap.parse_args()
 
-    rows = read_jsonl(OUT_DIR / "judged_all.jsonl")
+    rows = read_jsonl(Path(args.judged))
     if not rows:
         print("[err] 没有 judged_all.jsonl，先跑 judge.py")
         return 1
@@ -183,7 +185,7 @@ def main() -> int:
                       "p": round(mcnemar_exact(win, loss), 3) if (win + loss) else 1.0}
 
     # CSV
-    csv_path = OUT_DIR / "report.csv"
+    csv_path = OUT_DIR / f"{args.out_prefix}.csv"
     with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["model", "n", "scored", "strict_acc", "usable_acc", "zero_rate",
@@ -203,7 +205,7 @@ def main() -> int:
             r["sample_id"],
         ))
         review.extend(pri[:8])
-    review_path = OUT_DIR / "review.csv"
+    review_path = OUT_DIR / f"{args.out_prefix}_review.csv"
     with review_path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["model", "sample_id", "score", "fatal", "flags", "question",
@@ -302,7 +304,7 @@ def main() -> int:
     lines.append("4. 参考话术已过滤与金标准相似度 ≥0.6 的条目，避免答案泄漏；检索无显著命中时不注入。")
     lines.append("5. 裁判为第三方模型，与参评模型不同族；人工抽检见 `review.csv`。")
 
-    md_path = OUT_DIR / "report.md"
+    md_path = OUT_DIR / f"{args.out_prefix}.md"
     md_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"[ok] {md_path}")
     print(f"[ok] {csv_path}")

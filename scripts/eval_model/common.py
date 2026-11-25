@@ -44,6 +44,16 @@ def load_config() -> dict:
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def set_config_in_memory(key: str, value: Any) -> Any:
+    """只改内存里的配置（save=False），不写 config.json。
+
+    评测需要临时切 db_path / model_name，绝不能落到用户的配置文件里。
+    """
+    from config import set_config  # 延迟导入：仅 Agent 口径需要
+
+    return set_config(key, value, save=False)
+
+
 def ro_conn(path: Path = DB_PATH) -> sqlite3.Connection:
     """只读打开，避免任何写入副作用（含 WAL）。"""
     return sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
