@@ -20,12 +20,15 @@ from Agent.CustomerAgent.machine_code import (  # noqa: E402
 
 class TestMachineCodeFormat(unittest.TestCase):
     def test_valid_machine_code(self):
-        """真实机器码：8位HEX - 8位HEX，可带空格 / 三段。"""
+        """真实机器码：8位HEX - 8位HEX 两段，可带空格。"""
         self.assertTrue(is_machine_code("50378B2F - D563EA05"))
         self.assertTrue(is_machine_code("4296292C-5258A423"))
-        self.assertTrue(is_machine_code("808ACA82 - DE714A55 - 6E9FE0FD"))
         self.assertTrue(is_machine_code("62576BA7 - 4AE09378"))
         self.assertTrue(is_machine_code("4296292C-5258A423".lower()))
+
+    def test_three_segment_is_not_machine_code(self):
+        """三段 8-8-8 不是机器码（2026-11-26 确认奥维机器码只有两段）。"""
+        self.assertFalse(is_machine_code("808ACA82 - DE714A55 - 6E9FE0FD"))
 
     def test_device_id_is_not_machine_code(self):
         """纯数字是设备编号，不是机器码。"""
@@ -63,9 +66,20 @@ class TestViolationDetection(unittest.TestCase):
         for reply in (
             "收到 机器码 50378B2F - D563EA05 已经记下 我这边安排授权",
             "收到 机器码 4296292C-5258A423 已经记下",
-            "收到 机器码 808ACA82 - DE714A55 - 6E9FE0FD 已经记下",
         ):
             self.assertEqual(detect_machine_code_violation(reply), [], reply)
+
+    def test_three_segment_not_flagged_as_device_id(self):
+        """三段码（8-8-8）整体受保护，不会被误判成「设备编号」。
+
+        三段不算合法机器码，但出站兜底只负责拦「把设备编号当机器码」，
+        这里替换成设备编号话术反而更离谱；是否算机器码由提示词把关
+        （提示词要求「拿不准的格式就让买家重新复制一次」）。
+        """
+        self.assertEqual(
+            detect_machine_code_violation("收到 机器码 808ACA82 - DE714A55 - 6E9FE0FD 已经记下"),
+            [],
+        )
 
     def test_all_digit_machine_code_not_flagged(self):
         """全数字但构成合法机器码形态的不该被误判。"""
