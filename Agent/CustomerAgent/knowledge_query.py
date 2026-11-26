@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import contextvars
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.logger_loguru import get_logger
 
@@ -58,6 +58,28 @@ _MAX_TURN_CHARS = 120
 
 # 检索 query 总长度上限
 _MAX_QUERY_CHARS = 400
+
+# ---------------------------------------------------------------------------
+# 话题 → 检索词补充
+#
+# 2026-11-26 实测：买家说「历史图层，没有咋」，纯向量检索（search_type=vector，
+# 标题不参与嵌入）top-15 都不含《历史影像账号》—— 该语录正文写的是
+# 「历史影像账号，推荐复制粘贴过去…用户名：wdrdzy」，与买家用词（历史图层 /
+# 没有咋）词面重合太低。补上「历史影像账号 用户名 密码」后，这条语录直接
+# 排到召回第 1。
+#
+# 同一份库里 "历史影像，没有咋" / "看不到历史影像" 两条 query 也靠这一步才
+# 召回账号语录（实测补词前首条是「询问是否需要历史影像」，补词后是
+# 「历史影像账号」）。
+#
+# 只作用于**保底检索**（add_knowledge_to_context 注入 references）那条路径：
+# 模型自主调 search_knowledge_base 时用自己的检索词，不受影响。
+# ---------------------------------------------------------------------------
+
+_QUERY_KEYWORD_HINTS: Tuple[Tuple[Tuple[str, ...], str], ...] = (
+    (("历史影像", "历史图层", "gee"), "历史影像账号 用户名 密码"),
+)
+
 
 # 买家原话里常见的「指代词」，本身不含检索语义，但与上下文拼接后能补全指代
 _NOISE_PREFIXES = (
@@ -146,6 +168,24 @@ def _is_noise_turn(text: str) -> bool:
     return compact in _NOISE_PREFIXES
 
 
+def _expand_query_keywords(query: str) -> str:
+    """按买家话题补检索关键词。
+
+    语录正文与买家用词词面不重合时，纯向量检索召不回关键语录（如历史影像
+    账号），这里按话题补一组检索词把语义对齐。补充词追加在末尾（最近的
+    轮次权重更高）。
+    """
+    if not query:
+        return query
+    lowered = query.lower()
+    for triggers, hint in _QUERY_KEYWORD_HINTS:
+        if hint in query:
+            continue
+        if any(trigger in lowered for trigger in triggers):
+            return f"{query} {hint}"
+    return query
+
+
 def build_query(turns: List[str]) -> str:
     """把若干轮买家原话拼成检索 query。
 
@@ -167,7 +207,7 @@ def build_query(turns: List[str]) -> str:
     query = " ".join(reversed(picked))
     if len(query) > _MAX_QUERY_CHARS:
         query = query[-_MAX_QUERY_CHARS:]
-    return query
+    return _expand_query_keywords(query)
 
 
 def build_query_from_input(final_input: str, extra_turns: Optional[List[str]] = None) -> str:

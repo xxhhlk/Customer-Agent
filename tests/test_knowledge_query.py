@@ -118,6 +118,39 @@ class TestBuildQuery(unittest.TestCase):
         self.assertEqual(q, "19.9可以导多少 这款可以导进去多少个坐标？")
 
 
+class TestQueryKeywordHints(unittest.TestCase):
+    """话题关键词补充：历史影像类问题必须能召回《历史影像账号》。
+
+    2026-11-26 实测：买家说「历史图层，没有咋」时，纯向量检索 top-15 都不含
+    《历史影像账号》，AI 手里没有账号，只能让买家去看教程；补词后该语录
+    直接排到召回第 1。
+    """
+
+    def test_history_related_gets_account_hint(self):
+        q = build_query(["历史图层，没有咋"])
+        self.assertIn("历史影像账号 用户名 密码", q)
+        self.assertTrue(q.startswith("历史图层，没有咋"))
+
+    def test_history_related_multi_turn(self):
+        q = build_query(["我是安装手机", "历史图层，没有咋"])
+        self.assertIn("历史影像账号 用户名 密码", q)
+
+    def test_gee_lowercase_triggers(self):
+        self.assertIn("历史影像账号 用户名 密码", build_query(["gee 影像怎么加载"]))
+
+    def test_unrelated_query_untouched(self):
+        self.assertEqual(build_query(["19.9可以导多少"]), "19.9可以导多少")
+
+    def test_hint_not_duplicated(self):
+        q = build_query(["历史影像账号 用户名 密码"])
+        self.assertEqual(q.count("历史影像账号 用户名 密码"), 1)
+
+    def test_hint_survives_length_limit(self):
+        """补充词追加在末尾，长 query 截断（取尾部）不会把它切掉。"""
+        q = build_query(["历史影像" + "啊" * 500])
+        self.assertIn("历史影像账号 用户名 密码", q)
+
+
 class TestCurrentQueryContextVar(unittest.TestCase):
     """contextvar 存取与复位。"""
 
