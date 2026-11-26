@@ -141,6 +141,22 @@ class TestQueryKeywordHints(unittest.TestCase):
     def test_unrelated_query_untouched(self):
         self.assertEqual(build_query(["19.9可以导多少"]), "19.9可以导多少")
 
+    def test_login_query_gets_server_info_hint(self):
+        """登录类问法要能召回带地址/端口/密码的语录。"""
+        for turn in ("我怎么登录", "怎么登录", "怎么登录不了", "没有那个服务地址"):
+            q = build_query([turn])
+            self.assertIn("高清图源 服务地址 端口号 密码 匿名登录", q, turn)
+
+    def test_plain_login_word_does_not_trigger(self):
+        """单独的「登录」太泛，不触发补词。"""
+        self.assertEqual(build_query(["左上角头像登录"]), "左上角头像登录")
+
+    def test_history_wins_over_login_hint(self):
+        """同时命中历史影像与登录时，优先历史影像（两条补词只取一条）。"""
+        q = build_query(["历史影像账号怎么登录"])
+        self.assertIn("历史影像账号 用户名 密码", q)
+        self.assertNotIn("高清图源 服务地址", q)
+
     def test_hint_not_duplicated(self):
         q = build_query(["历史影像账号 用户名 密码"])
         self.assertEqual(q.count("历史影像账号 用户名 密码"), 1)
