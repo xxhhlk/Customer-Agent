@@ -577,6 +577,14 @@ class LifecycleMixin:
                 self._health_tasks.pop(connection_key, None)
             self.logger.debug(f"Cookie 健康检查循环已结束: {shop_id}-{username}")
 
+    def _note_disconnect(self, shop_id: str, user_id: str) -> None:
+        """登记异常断线时刻，重连后回投该窗口内被 WS 漏掉的消息"""
+        try:
+            from services.history_sync import history_sync_service
+            history_sync_service.note_disconnect(shop_id, user_id)
+        except Exception as e:
+            self.logger.warning(f"登记断线时刻失败: {shop_id}-{user_id}, {e}")
+
     async def _sync_history_on_connect(self, shop_id: str, user_id: str, username: str):
         """连接建立后补拉最近会话的历史消息"""
         try:
@@ -608,10 +616,12 @@ class LifecycleMixin:
 
         except ws_exceptions.ConnectionClosedError as cce:
             self.logger.error(f"WebSocket连接异常关闭: {shop_id}-{username}, 错误: {cce}")
+            self._note_disconnect(shop_id, user_id)
         except ws_exceptions.ConnectionClosed as cc:
             self.logger.warning(f"WebSocket连接正常关闭: {shop_id}-{username}, 代码: {cc.code}")
         except Exception as e:
             self.logger.error(f"消息循环错误: {shop_id}-{username}, 错误: {str(e)}")
+            self._note_disconnect(shop_id, user_id)
 
     async def _process_websocket_message_concurrent(self, message: str, shop_id: str, user_id: str, username: str, queue_name: str):
         """并发处理WebSocket消息"""

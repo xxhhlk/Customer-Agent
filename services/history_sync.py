@@ -46,6 +46,9 @@ CONVERSATION_INTERVAL = 0.3
 SELF_ECHO_WINDOW_SECONDS = 120
 # 由本系统发出的回复来源，用于识别服务端回显
 SELF_REPLY_SOURCES = ("ai", "manual", "keyword", "fallback")
+# 断线消息回投窗口上限（秒）：只回投断线后 10 分钟内到达的买家消息，
+# 更早的一律只落库。避免重启后补拉长历史时把旧消息全量回投、造成群发。
+REPLAY_MAX_AGE_SECONDS = 600
 
 
 class HistorySyncService:
@@ -56,9 +59,20 @@ class HistorySyncService:
         self._running: Set[str] = set()
         # 同步进行中又被触发的账号：本轮结束后补跑一轮，避免重连请求被静默丢弃
         self._pending: Set[str] = set()
+        # 各账号 WS 断线时刻（epoch 秒），由 pdd_lifecycle 在消息循环异常结束时登记。
+        # 只保留最早一次：重连期间可能多次 init 失败，窗口必须从第一次断线算起。
+        # 首次启动没有登记 → 不回投任何历史消息。
+        self._disconnect_times: Dict[str, float] = {}
+
+    def note_disconnect(self, shop_id: str, user_id: str) -> None:
+        """登记 WS 断线时刻，供重连后回投断线窗口内的消息。"""
+        key = f"{shop_id}_{user_id}"
+        if key not in self._disconnect_times:
+            self._disconnect_times[key] = time.time()
+            logger.info(f"登记断线时刻，重连后回投该窗口内消息: shop={shop_id}")
 
     async def sync_on_start(self, shop_id: str, user_id: str, username: str = "") -> int:
-        """上线后补拉历史消息
+        """上线后补拉历史消息，并把断线窗口内新到达的买家消息回投自动回复
 
         Returns:
             本次新增的消息条数；命中节流、拉取失败或已有同步在进行时返回 0。
@@ -70,6 +84,8 @@ class HistorySyncService:
         if time.monotonic() - self._last_sync.get(key, 0.0) < SYNC_INTERVAL_SECONDS:
             return 0
 
+        # 命中节流的轮次不清除断线时刻，下次连接继续补投
+        replay_since = self._disconnect_times.get(key)
         total = 0
         delay = START_DELAY_SECONDS
         while True:
@@ -80,13 +96,20 @@ class HistorySyncService:
                 if delay:
                     await asyncio.sleep(delay)
                     delay = 0
-                added = await asyncio.to_thread(self._sync, shop_id, user_id, username)
-                if added is None:
+                result = await asyncio.to_thread(
+                    self._sync, shop_id, user_id, username, replay_since
+                )
+                if result is None:
                     # 拉取失败不写冷却时间戳，下次连接可立即重试
                     logger.warning(f"历史消息同步未完成，稍后可重试: {shop_id}-{username}")
                 else:
+                    added, replays = result
                     self._last_sync[key] = time.monotonic()
                     total += added
+                    if replay_since is not None:
+                        # 真正拉完才清窗口；失败/节流时保留，下次连接继续补投
+                        self._disconnect_times.pop(key, None)
+                    await self._replay_contexts(replays, shop_id)
             except Exception as e:
                 logger.warning(f"历史消息同步失败: {shop_id}-{username}, {e}")
             finally:
@@ -95,11 +118,14 @@ class HistorySyncService:
             if key not in self._pending:
                 return total
 
-    def _sync(self, shop_id: str, user_id: str, username: str) -> Optional[int]:
+    def _sync(
+        self, shop_id: str, user_id: str, username: str, replay_since: Optional[float] = None
+    ) -> Optional[Tuple[int, List[Context]]]:
         """拉取会话列表并逐会话补拉历史（同步执行，由调用方置于工作线程）
 
         Returns:
-            新增条数；会话列表不可用时返回 None（表示失败，调用方不应写入节流时间）。
+            ``(新增条数, 待回投消息)``；会话列表不可用时返回 None（表示失败，
+            调用方不应写入节流时间）。
         """
         client = GetChatHistory(shop_id, user_id)
         conv_result = client.fetch_conversations(page=1, size=MAX_CONVERSATIONS)
@@ -109,12 +135,13 @@ class HistorySyncService:
 
         conversations = conv_result.get("conversations") or []
         if not conversations:
-            return 0
+            return 0, []
 
         logger.info(f"历史消息同步开始: {username}, 会话数={len(conversations)}")
         shop_name = self._get_shop_name(shop_id)
 
         total = 0
+        replays: List[Context] = []
         touched: Set[Tuple[str, str]] = set()
         for index, conversation in enumerate(conversations):
             buyer_uid = conversation.get("buyer_uid")
@@ -130,6 +157,8 @@ class HistorySyncService:
                     buyer_uid,
                     conversation.get("nickname") or "",
                     shop_name,
+                    replay_since,
+                    replays,
                 )
                 total += added
                 if added:
@@ -137,10 +166,12 @@ class HistorySyncService:
             except Exception as e:
                 logger.warning(f"会话历史补拉失败: {shop_id}/{buyer_uid}, {e}")
 
-        logger.info(f"历史消息同步完成: {username}, 新增 {total} 条")
+        logger.info(
+            f"历史消息同步完成: {username}, 新增 {total} 条, 待回投 {len(replays)} 条"
+        )
         if touched:
             self._notify_ui(touched)
-        return total
+        return total, replays
 
     @staticmethod
     def _notify_ui(touched: Set[Tuple[str, str]]) -> None:
@@ -160,6 +191,8 @@ class HistorySyncService:
         buyer_uid: str,
         nickname: str,
         shop_name: str,
+        replay_since: Optional[float] = None,
+        replays: Optional[List[Context]] = None,
     ) -> int:
         """逐页补拉单个会话，直到追上本地进度或触达页数上限"""
         existing = self._load_existing_msg_ids(shop_id, buyer_uid)
@@ -189,6 +222,8 @@ class HistorySyncService:
                 batch,
                 existing,
                 self_replies,
+                replay_since,
+                replays,
             )
             added_total += added
 
@@ -213,6 +248,8 @@ class HistorySyncService:
         messages: List[Dict[str, Any]],
         existing: Set[str],
         self_replies: Dict[str, List[float]],
+        replay_since: Optional[float] = None,
+        replays: Optional[List[Context]] = None,
     ) -> int:
         """将一页历史消息落库，返回新增条数"""
         added = 0
@@ -234,6 +271,10 @@ class HistorySyncService:
             # 不触发新消息通知：历史回填不应产生未读提示
             if message_persistence_service.save_inbound_message(context):
                 added += 1
+                if replays is not None and self._should_replay(
+                    context, shop_id, buyer_uid, replay_since
+                ):
+                    replays.append(context)
 
         return added
 
@@ -260,6 +301,85 @@ class HistorySyncService:
             return False
 
         return any(abs(ts_epoch - local_ts) <= SELF_ECHO_WINDOW_SECONDS for local_ts in same_content)
+
+    @staticmethod
+    def _should_replay(
+        context: Context,
+        shop_id: str,
+        buyer_uid: str,
+        replay_since: Optional[float],
+    ) -> bool:
+        """断线窗口内新到达的买家消息才回投自动回复。
+
+        三道闸缺一不可：
+        1. 时间落在 [断线时刻, now] 且不超过 REPLAY_MAX_AGE_SECONDS；
+        2. 必须是买家入站消息（from 角色为 user）；
+        3. DB 中该消息之后没有外发回复 —— 这是跨重启、跨队列重建的唯一可靠判据。
+           queue 的 msg_id 去重缓存在每次重连 recreate_queue 时都会清空，不能依赖。
+        """
+        if replay_since is None:
+            return False
+
+        kwargs = getattr(context, "kwargs", None)
+        if kwargs is None or str(getattr(kwargs, "from_user", "") or "") != "user":
+            return False
+
+        ts_epoch = HistorySyncService._to_epoch(getattr(kwargs, "timestamp", None))
+        now = time.time()
+        if ts_epoch is None or ts_epoch < replay_since or ts_epoch > now + 60:
+            return False
+        if now - ts_epoch > REPLAY_MAX_AGE_SECONDS:
+            return False
+
+        return not HistorySyncService._has_outbound_after(shop_id, buyer_uid, ts_epoch)
+
+    @staticmethod
+    def _has_outbound_after(shop_id: str, buyer_uid: str, since_epoch: float) -> bool:
+        """该消息之后是否已有外发回复（任何来源），有则不再回投。
+
+        查询失败时保守返回 True：宁可漏回一条，也不能重复回复。
+        """
+        try:
+            from datetime import datetime
+
+            db_manager = get_db_manager()
+            session = db_manager.Session()
+            try:
+                row = (
+                    session.query(ChatMessageRecord.msg_id)
+                    .filter(
+                        ChatMessageRecord.shop_id == str(shop_id),
+                        ChatMessageRecord.buyer_uid == str(buyer_uid),
+                        ChatMessageRecord.direction == "outbound",
+                        ChatMessageRecord.timestamp >= datetime.fromtimestamp(since_epoch),
+                    )
+                    .first()
+                )
+                return row is not None
+            finally:
+                session.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"回投前查询已回复记录失败，跳过回投: {type(e).__name__}: {e}")
+            return True
+
+    async def _replay_contexts(self, contexts: List[Context], shop_id: str) -> None:
+        """把断线窗口内的消息回投消息管道，沿用防抖 / 人工冷却 / 关键词判定。"""
+        if not contexts:
+            return
+        from Message import put_message
+
+        queue_name = f"pdd_{shop_id}"
+        for context in contexts:
+            try:
+                await put_message(queue_name, context)
+                kwargs = getattr(context, "kwargs", None)
+                buyer_uid = getattr(kwargs, "from_uid", "") if kwargs is not None else ""
+                preview = str(context.content or "")[:40]
+                logger.info(
+                    f"断线消息已回投自动回复: buyer={buyer_uid}, content={preview!r}"
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"断线消息回投失败: {type(e).__name__}: {e}")
 
     @staticmethod
     def _to_epoch(value: Any) -> Optional[float]:
